@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Management Test v1.0.0</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        .container {
+            text-align: center;
+            padding: 40px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            max-width: 500px;
+        }
+        .icon { font-size: 64px; margin-bottom: 20px; }
+        h1 { font-size: 2rem; margin-bottom: 10px; }
+        .version {
+            display: inline-block;
+            background: #22c55e;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .info {
+            background: rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: left;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .info-row:last-child { border-bottom: none; }
+        .label { color: #94a3b8; }
+        .value { font-family: monospace; color: #22d3ee; }
+        .success { 
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid rgba(34, 197, 94, 0.5);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">ð§</div>
+        <h1>Management Test</h1>
+        <div class="version">v1.0.0</div>
+        <p>This is a test page deployed via Command Center</p>
+        
+        <div class="info">
+            <div class="info-row">
+                <span class="label">Version</span>
+                <span class="value">1.0.0</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Deployed</span>
+                <span class="value" id="timestamp">â</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Environment</span>
+                <span class="value" id="env">â</span>
+            </div>
+        </div>
+        
+        <div class="success">
+            â If you see this, deployment worked!
+        </div>
+    </div>
+    
+    <script>
+        // Show deployment timestamp
+        document.getElementById('timestamp').textContent = new Date().toLocaleString();
+        
+        // Detect environment from URL
+        const host = window.location.hostname;
+        const env = host.includes('test') ? 'TEST' : 'PROD';
+        document.getElementById('env').textContent = env;
+    </script>
+</body>
+</html>
