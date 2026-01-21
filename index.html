@@ -4,11 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="6.0.6">
+    <meta name="version" content="6.1.5">
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; }
@@ -22,7 +25,36 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="font-size:48px;margin-bottom:20px;">ð®</div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v6.0.6 starting...');
+    console.log('Command Center v6.1.5 starting...');
+    
+    // =========================================================================
+    // FIREBASE CONFIG
+    // =========================================================================
+    
+    const FIREBASE_CONFIG = {
+        apiKey: "AIzaSyBQVwn8vOrFTzLlm2MYIPBwgZV2xR9AuhM",
+        authDomain: "word-boxing.firebaseapp.com",
+        databaseURL: "https://word-boxing-default-rtdb.firebaseio.com",
+        projectId: "word-boxing"
+    };
+    
+    // Initialize Firebase
+    let firebaseApp = null;
+    let firebaseAuth = null;
+    let firebaseDb = null;
+    
+    try {
+        if (!firebase.apps.length) {
+            firebaseApp = firebase.initializeApp(FIREBASE_CONFIG);
+        } else {
+            firebaseApp = firebase.apps[0];
+        }
+        firebaseAuth = firebase.auth();
+        firebaseDb = firebase.database();
+        console.log('Firebase initialized successfully');
+    } catch (e) {
+        console.error('Firebase init error:', e);
+    }
     
     // =========================================================================
     // VERSION UTILITIES
@@ -174,6 +206,10 @@
         Eye: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>,
         Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
         Plus: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>,
+        Database: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" /></svg>,
+        User: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>,
+        Edit: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+        Copy: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>,
     };
 
     // =========================================================================
@@ -292,7 +328,8 @@
         async getFile(repo, path) {
             try {
                 const [owner, repoName] = repo.split('/');
-                return await this.request(`/repos/${owner}/${repoName}/contents/${path}`);
+                // Add timestamp to bust GitHub API cache
+                return await this.request(`/repos/${owner}/${repoName}/contents/${path}?_=${Date.now()}`);
             } catch { return null; }
         }
         
@@ -370,20 +407,90 @@
             return { enabled: true };
         }
         
+        async getPagesDeploymentStatus(repo) {
+            const [owner, repoName] = repo.split('/');
+            try {
+                // Get latest pages build
+                const build = await this.request(`/repos/${owner}/${repoName}/pages/builds/latest`);
+                return {
+                    status: build.status, // 'queued', 'building', 'built', 'errored'
+                    createdAt: build.created_at,
+                    updatedAt: build.updated_at,
+                    commitSha: build.commit,
+                    duration: build.duration,
+                    error: build.error?.message
+                };
+            } catch (e) {
+                console.error('Failed to get pages status:', e);
+                return null;
+            }
+        }
+        
+        async triggerPagesBuild(repo) {
+            const [owner, repoName] = repo.split('/');
+            try {
+                await this.request(`/repos/${owner}/${repoName}/pages/builds`, {
+                    method: 'POST'
+                });
+                return true;
+            } catch (e) {
+                console.error('Failed to trigger pages build:', e);
+                return false;
+            }
+        }
+        
+        async waitForPagesDeployment(repo, commitSha, maxWaitMs = 120000, onStatus = null) {
+            const startTime = Date.now();
+            let lastStatus = null;
+            
+            while (Date.now() - startTime < maxWaitMs) {
+                const status = await this.getPagesDeploymentStatus(repo);
+                
+                if (status && status.status !== lastStatus) {
+                    lastStatus = status.status;
+                    if (onStatus) onStatus(status);
+                }
+                
+                if (status?.status === 'built') {
+                    // Verify it's the right commit
+                    if (!commitSha || status.commitSha === commitSha) {
+                        return { success: true, status };
+                    }
+                }
+                
+                if (status?.status === 'errored') {
+                    return { success: false, error: status.error, status };
+                }
+                
+                // Wait 3 seconds before checking again
+                await new Promise(r => setTimeout(r, 3000));
+            }
+            
+            return { success: false, error: 'Timeout waiting for deployment', status: lastStatus };
+        }
+        
         // Batch commit multiple files in one commit
         async batchCommit(repo, files, message) {
             const [owner, repoName] = repo.split('/');
             
+            console.log('=== BATCH COMMIT START ===');
+            console.log('Repo:', repo);
+            console.log('Message:', message);
+            console.log('Files to commit:', files.map(f => ({ path: f.path, contentLength: f.content?.length, encoding: f.encoding })));
+            
             // Get current commit SHA
             const ref = await this.request(`/repos/${owner}/${repoName}/git/ref/heads/main`);
             const commitSha = ref.object.sha;
+            console.log('Current commit SHA:', commitSha);
             
             // Get current tree
             const commit = await this.request(`/repos/${owner}/${repoName}/git/commits/${commitSha}`);
             const treeSha = commit.tree.sha;
+            console.log('Current tree SHA:', treeSha);
             
             // Create blobs for each file
             const treeItems = await Promise.all(files.map(async (file) => {
+                console.log('Creating blob for:', file.path);
                 const blob = await this.request(`/repos/${owner}/${repoName}/git/blobs`, {
                     method: 'POST',
                     body: JSON.stringify({
@@ -391,6 +498,7 @@
                         encoding: file.encoding || 'utf-8'
                     })
                 });
+                console.log('Blob created:', file.path, '-> SHA:', blob.sha);
                 return {
                     path: file.path,
                     mode: '100644',
@@ -398,6 +506,8 @@
                     sha: blob.sha
                 };
             }));
+            
+            console.log('Tree items:', treeItems);
             
             // Create new tree
             const newTree = await this.request(`/repos/${owner}/${repoName}/git/trees`, {
@@ -407,6 +517,7 @@
                     tree: treeItems
                 })
             });
+            console.log('New tree SHA:', newTree.sha);
             
             // Create commit
             const newCommit = await this.request(`/repos/${owner}/${repoName}/git/commits`, {
@@ -418,12 +529,15 @@
                     committer: { name: 'Command Center', email: 'deploy@gameshelf.app' }
                 })
             });
+            console.log('New commit SHA:', newCommit.sha);
             
             // Update ref
-            await this.request(`/repos/${owner}/${repoName}/git/refs/heads/main`, {
+            const updatedRef = await this.request(`/repos/${owner}/${repoName}/git/refs/heads/main`, {
                 method: 'PATCH',
                 body: JSON.stringify({ sha: newCommit.sha })
             });
+            console.log('Ref updated:', updatedRef);
+            console.log('=== BATCH COMMIT COMPLETE ===');
             
             return newCommit;
         }
@@ -453,6 +567,7 @@
         const [repoFiles, setRepoFiles] = React.useState({}); // { repoFullName: { files: [], loading: bool } }
         const [selectedRepoForBrowse, setSelectedRepoForBrowse] = React.useState(null);
         const [markedForDeletion, setMarkedForDeletion] = React.useState([]); // [{ repo, path, sha }]
+        const [deployingRepos, setDeployingRepos] = React.useState({}); // { repoFullName: { version, startTime } }
         
         // Use ref to always have latest apps state for async operations
         const appsRef = React.useRef(apps);
@@ -464,6 +579,73 @@
         React.useEffect(() => { try { if (githubToken) localStorage.setItem('cc_token', githubToken); } catch {} }, [githubToken]);
         React.useEffect(() => { try { localStorage.setItem('cc_apps_v6', JSON.stringify(apps)); } catch {} }, [apps]);
         React.useEffect(() => { try { localStorage.setItem('cc_history_v2', JSON.stringify(deployments.slice(0, 100))); } catch {} }, [deployments]);
+        
+        // Monitor live site until new version appears
+        const monitorLiveDeployment = async (url, expectedVersion, repo, onUpdate) => {
+            const maxWaitMs = 180000; // 3 minutes max
+            const pollInterval = 5000; // Check every 5 seconds
+            const startTime = Date.now();
+            let attempts = 0;
+            
+            console.log(`=== MONITORING LIVE DEPLOYMENT ===`);
+            console.log(`URL: ${url}`);
+            console.log(`Repo: ${repo}`);
+            console.log(`Expected version: ${expectedVersion}`);
+            
+            // Mark repo as deploying
+            setDeployingRepos(prev => ({ ...prev, [repo]: { version: expectedVersion, startTime } }));
+            
+            while (Date.now() - startTime < maxWaitMs) {
+                attempts++;
+                const elapsed = Math.round((Date.now() - startTime) / 1000);
+                
+                try {
+                    // Fetch the live site with cache-busting
+                    const response = await fetch(`${url}?_nocache=${Date.now()}`, {
+                        cache: 'no-store',
+                        headers: { 'Cache-Control': 'no-cache' }
+                    });
+                    
+                    if (response.ok) {
+                        const html = await response.text();
+                        const liveVersion = extractVersionFromHTML(html);
+                        
+                        console.log(`[${elapsed}s] Live version: ${liveVersion || 'unknown'}, expecting: ${expectedVersion}`);
+                        
+                        if (liveVersion === expectedVersion) {
+                            console.log(`=== DEPLOYMENT COMPLETE! Version ${liveVersion} is live ===`);
+                            onUpdate('complete', `v${liveVersion} is LIVE! (${elapsed}s)`);
+                            // Clear deploying state
+                            setDeployingRepos(prev => {
+                                const next = { ...prev };
+                                delete next[repo];
+                                return next;
+                            });
+                            return { success: true, duration: elapsed };
+                        } else {
+                            onUpdate('running', `Waiting... ${elapsed}s (live: ${liveVersion || '?'})`);
+                        }
+                    } else {
+                        onUpdate('running', `Waiting... ${elapsed}s (site loading)`);
+                    }
+                } catch (e) {
+                    console.log(`[${elapsed}s] Fetch error:`, e.message);
+                    onUpdate('running', `Waiting... ${elapsed}s`);
+                }
+                
+                await new Promise(r => setTimeout(r, pollInterval));
+            }
+            
+            console.log(`=== DEPLOYMENT MONITORING TIMEOUT ===`);
+            onUpdate('warning', `Timeout - check manually`);
+            // Clear deploying state on timeout
+            setDeployingRepos(prev => {
+                const next = { ...prev };
+                delete next[repo];
+                return next;
+            });
+            return { success: false, timeout: true };
+        };
         
         // Fetch repos and auto-refresh versions on load
         React.useEffect(() => {
@@ -491,20 +673,22 @@
             
             // Always use latest apps state from ref
             const currentApps = appsRef.current;
-            console.log('Refreshing versions for apps:', Object.keys(currentApps));
+            console.log('=== REFRESHING VERSIONS FROM REPOS ===');
             
             const updates = {};
             for (const [appId, app] of Object.entries(currentApps)) {
                 if (app.testRepo) {
                     try {
+                        console.log(`[${appId}] Fetching TEST from ${app.testRepo}/${app.targetPath}...`);
                         const testFile = await github.getFile(app.testRepo, app.targetPath);
                         if (testFile) {
                             const content = atob(testFile.content);
                             const version = extractVersionFromHTML(content);
-                            console.log(`[${appId}] TEST ${app.testRepo}/${app.targetPath}: ${version || 'NO VERSION FOUND'}`);
+                            console.log(`[${appId}] TEST version from REPO: ${version || 'NO VERSION'}`);
+                            console.log(`[${appId}] TEST file SHA: ${testFile.sha}`);
                             if (version) updates[appId] = { ...updates[appId], currentTestVersion: version };
                         } else {
-                            console.log(`[${appId}] TEST ${app.testRepo}/${app.targetPath}: FILE NOT FOUND`);
+                            console.log(`[${appId}] TEST: FILE NOT FOUND`);
                         }
                     } catch (e) {
                         console.error(`[${appId}] TEST error:`, e.message);
@@ -512,14 +696,16 @@
                 }
                 if (app.prodRepo) {
                     try {
+                        console.log(`[${appId}] Fetching PROD from ${app.prodRepo}/${app.targetPath}...`);
                         const prodFile = await github.getFile(app.prodRepo, app.targetPath);
                         if (prodFile) {
                             const content = atob(prodFile.content);
                             const version = extractVersionFromHTML(content);
-                            console.log(`[${appId}] PROD ${app.prodRepo}/${app.targetPath}: ${version || 'NO VERSION FOUND'}`);
+                            console.log(`[${appId}] PROD version from REPO: ${version || 'NO VERSION'}`);
+                            console.log(`[${appId}] PROD file SHA: ${prodFile.sha}`);
                             if (version) updates[appId] = { ...updates[appId], currentProdVersion: version };
                         } else {
-                            console.log(`[${appId}] PROD ${app.prodRepo}/${app.targetPath}: FILE NOT FOUND`);
+                            console.log(`[${appId}] PROD: FILE NOT FOUND`);
                         }
                     } catch (e) {
                         console.error(`[${appId}] PROD error:`, e.message);
@@ -537,7 +723,7 @@
             });
             
             setRefreshing(false);
-            console.log('Refresh complete, updates applied:', updates);
+            console.log('=== REFRESH COMPLETE ===');
         };
         
         // Load repo files
@@ -572,6 +758,13 @@
                         version = htmlVersion || parsed.version;
                         versionSource = htmlVersion ? 'html' : (parsed.version ? 'filename' : 'none');
                     }
+                    
+                    console.log('=== FILE UPLOADED ===');
+                    console.log('Name:', file.name);
+                    console.log('Size:', file.size);
+                    console.log('Version extracted:', version);
+                    console.log('Content length:', content.length);
+                    console.log('Content preview (first 200 chars):', content.substring(0, 200));
                     
                     setStagedFiles(prev => [...prev, {
                         id: Date.now() + Math.random(),
@@ -697,6 +890,16 @@
                 updateApp(appId, { [target === 'prod' ? 'currentProdVersion' : 'currentTestVersion']: newVersion });
                 removeStaged(file.id);
                 
+                // Start monitoring live site for deployment completion
+                if (deployment.url && newVersion) {
+                    addStep('GitHub Pages', 'running', 'Waiting for deploy...');
+                    monitorLiveDeployment(deployment.url, newVersion, repo, (status, detail) => {
+                        addStep('GitHub Pages', status, detail);
+                        setActiveDeployment({ ...deployment });
+                        setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                    });
+                }
+                
             } catch (error) {
                 deployment.status = 'failed';
                 deployment.error = error.message;
@@ -791,8 +994,39 @@
                 
                 deployment.status = 'success';
                 deployment.url = getGitHubPagesUrl(repo);
+                
+                // Verify the deployment by fetching back from repo
+                console.log('=== VERIFYING DEPLOYMENT ===');
+                await new Promise(r => setTimeout(r, 1000)); // Wait a bit for GitHub to process
+                const verifyFile = await github.getFile(repo, files[0]?.targetPath || files[0]?.path || 'index.html');
+                if (verifyFile) {
+                    const verifyContent = atob(verifyFile.content);
+                    const verifyVersion = extractVersionFromHTML(verifyContent);
+                    console.log('Verification - version in repo after deploy:', verifyVersion);
+                    console.log('Verification - expected version:', newVersion);
+                    if (verifyVersion !== newVersion && newVersion !== 'batch') {
+                        console.error('VERSION MISMATCH! Deploy may have failed.');
+                        addStep('Verification', 'warning', `Expected ${newVersion}, found ${verifyVersion}`);
+                    } else {
+                        addStep('Verification', 'complete', `Confirmed ${verifyVersion} in repo`);
+                    }
+                }
+                
                 if (newVersion !== 'batch') {
                     updateApp(appId, { [target === 'prod' ? 'currentProdVersion' : 'currentTestVersion']: newVersion });
+                }
+                
+                // Refresh all versions to ensure UI is in sync with repos
+                setTimeout(() => refreshAllVersions(), 500);
+                
+                // Start monitoring live site for deployment completion
+                if (deployment.url && newVersion !== 'batch') {
+                    addStep('GitHub Pages', 'running', 'Waiting for deploy...');
+                    monitorLiveDeployment(deployment.url, newVersion, repo, (status, detail) => {
+                        addStep('GitHub Pages', status, detail);
+                        setActiveDeployment({ ...deployment });
+                        setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                    });
                 }
                 
                 // Remove deployed files from staged
@@ -927,6 +1161,16 @@
                 // Force refresh to ensure UI is in sync
                 setTimeout(() => refreshAllVersions(), 1000);
                 
+                // Start monitoring live site for deployment completion
+                if (deployment.url && testVersion) {
+                    addStep('GitHub Pages', 'running', 'Waiting for deploy...');
+                    monitorLiveDeployment(deployment.url, testVersion, app.prodRepo, (status, detail) => {
+                        addStep('GitHub Pages', status, detail);
+                        setActiveDeployment({ ...deployment });
+                        setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                    });
+                }
+                
             } catch (error) {
                 deployment.status = 'failed';
                 deployment.error = error.message;
@@ -994,12 +1238,20 @@
                 deployment.commitSha = result.commit.sha;
                 addStep('Rolling back', 'complete', result.commit.sha.substring(0, 7));
                 
-                addStep('GitHub Pages', 'complete', 'Deploying...');
-                
                 deployment.status = 'success';
                 deployment.url = getGitHubPagesUrl(repo);
                 const versionKey = deploymentToRollbackTo.target === 'prod' ? 'currentProdVersion' : 'currentTestVersion';
                 updateApp(deploymentToRollbackTo.appId, { [versionKey]: targetVersion });
+                
+                // Start monitoring live site for deployment completion
+                if (deployment.url && targetVersion) {
+                    addStep('GitHub Pages', 'running', 'Waiting for deploy...');
+                    monitorLiveDeployment(deployment.url, targetVersion, repo, (status, detail) => {
+                        addStep('GitHub Pages', status, detail);
+                        setActiveDeployment({ ...deployment });
+                        setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                    });
+                }
                 
             } catch (error) {
                 deployment.status = 'failed';
@@ -1020,7 +1272,7 @@
                             <span className="text-2xl">ð®</span>
                             <div>
                                 <h1 className="text-lg font-bold">Command Center</h1>
-                                <div className="text-xs text-slate-400">v6.0.6 â¢ Multi-File Deploy</div>
+                                <div className="text-xs text-slate-400">v6.1.5 â¢ Firebase + Multi-File</div>
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1029,10 +1281,15 @@
                                 title="Refresh versions">
                                 <Icons.Refresh />
                             </button>
-                            {['dashboard', 'files', 'apps', 'history', 'settings'].map(v => (
+                            {['dashboard', 'files', 'firebase', 'apps', 'history', 'settings'].map(v => (
                                 <button key={v} onClick={() => setView(v)}
-                                    className={`px-3 py-1.5 rounded text-sm capitalize ${view === v ? 'bg-indigo-600' : 'text-slate-400 hover:text-white'}`}>
-                                    {v === 'settings' ? <Icons.Settings /> : v === 'files' ? <Icons.Folder /> : v}
+                                    className={`px-3 py-1.5 rounded text-sm capitalize flex items-center gap-1 ${view === v ? 'bg-indigo-600' : 'text-slate-400 hover:text-white'}`}>
+                                    {v === 'settings' && <Icons.Settings />}
+                                    {v === 'files' && <><Icons.Folder /> Files</>}
+                                    {v === 'firebase' && <><Icons.Database /> Firebase</>}
+                                    {v === 'dashboard' && 'Dashboard'}
+                                    {v === 'apps' && 'Apps'}
+                                    {v === 'history' && 'History'}
                                 </button>
                             ))}
                         </div>
@@ -1056,6 +1313,7 @@
                             setActiveDeployment={setActiveDeployment}
                             refreshing={refreshing}
                             onUpdateStagedFile={updateStagedFile}
+                            deployingRepos={deployingRepos}
                         />
                     )}
                     
@@ -1067,6 +1325,10 @@
                             markedForDeletion={markedForDeletion} setMarkedForDeletion={setMarkedForDeletion}
                             onDeleteMarked={() => setModal({ type: 'confirmDelete' })}
                         />
+                    )}
+                    
+                    {view === 'firebase' && (
+                        <FirebaseView />
                     )}
                     
                     {view === 'apps' && <AppsView apps={apps} repos={availableRepos} onUpdate={updateApp} />}
@@ -1285,7 +1547,7 @@
     // DASHBOARD VIEW
     // =========================================================================
     
-    function DashboardView({ apps, stagedFiles, github, onFileDrop, onRemove, onDeploy, onBatchDeploy, onPromote, activeDeployment, setActiveDeployment, refreshing, onUpdateStagedFile }) {
+    function DashboardView({ apps, stagedFiles, github, onFileDrop, onRemove, onDeploy, onBatchDeploy, onPromote, activeDeployment, setActiveDeployment, refreshing, onUpdateStagedFile, deployingRepos }) {
         const [selectedFileIds, setSelectedFileIds] = React.useState(new Set());
         const [deployTarget, setDeployTarget] = React.useState({ appId: 'management', target: 'test' });
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
@@ -1349,52 +1611,87 @@
                                 </div>
                             </div>
                             <div className="space-y-2">
-                                {stagedFiles.map(f => (
-                                    <div key={f.id} className={`p-3 rounded-lg border cursor-pointer flex items-center gap-3 ${
+                                {stagedFiles.map(f => {
+                                    const isHtml = f.name.endsWith('.html');
+                                    const willRename = isHtml && f.targetPath === 'index.html' && f.name !== 'index.html';
+                                    
+                                    return (
+                                    <div key={f.id} className={`p-3 rounded-lg border ${
                                         selectedFileIds.has(f.id) ? 'bg-indigo-900/50 border-indigo-500' : 'bg-slate-700/50 border-slate-600'
                                     }`}>
-                                        <input type="checkbox" checked={selectedFileIds.has(f.id)}
-                                            onChange={() => toggleFileSelection(f)} className="w-4 h-4" />
-                                        <span className="text-xl">{getFileIcon(f.name)}</span>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="font-medium truncate">{f.name}</div>
-                                            <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
-                                                {formatBytes(f.size)}
-                                                {f.version && (
-                                                    <span className="px-1.5 py-0.5 bg-slate-600 rounded">
-                                                        {formatVersion(f.version)}
-                                                        {f.versionSource === 'html' && <span className="text-green-400 ml-1">â</span>}
-                                                    </span>
-                                                )}
-                                                {!f.isText && <span className="text-amber-400">binary</span>}
+                                        <div className="flex items-center gap-3">
+                                            <input type="checkbox" checked={selectedFileIds.has(f.id)}
+                                                onChange={() => toggleFileSelection(f)} className="w-4 h-4" />
+                                            <span className="text-xl">{getFileIcon(f.name)}</span>
+                                            <div className="flex-1 min-w-0">
+                                                {/* Source filename */}
+                                                <div className="font-medium truncate text-slate-300">{f.name}</div>
+                                                
+                                                {/* File info */}
+                                                <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap mt-0.5">
+                                                    {formatBytes(f.size)}
+                                                    {f.version && (
+                                                        <span className="px-1.5 py-0.5 bg-slate-600 rounded">
+                                                            {formatVersion(f.version)}
+                                                            {f.versionSource === 'html' && <span className="text-green-400 ml-1">â</span>}
+                                                        </span>
+                                                    )}
+                                                    {!f.isText && <span className="text-amber-400">binary</span>}
+                                                </div>
+                                                
+                                                {/* Target path section */}
+                                                <div className="mt-2 p-2 bg-slate-800 rounded border border-slate-600">
+                                                    <div className="text-xs text-slate-500 mb-1">Deploy as:</div>
+                                                    <div className="flex items-center gap-2">
+                                                        <input type="text" value={f.targetPath} 
+                                                            onChange={e => onUpdateStagedFile(f.id, { targetPath: e.target.value })}
+                                                            onClick={e => e.stopPropagation()}
+                                                            className="flex-1 text-sm bg-slate-900 border border-slate-500 rounded px-2 py-1 font-mono text-white"
+                                                            placeholder="index.html" />
+                                                        {isHtml && f.name !== 'index.html' && (
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    onUpdateStagedFile(f.id, { 
+                                                                        targetPath: f.targetPath === 'index.html' ? f.name : 'index.html' 
+                                                                    });
+                                                                }}
+                                                                className={`px-2 py-1 text-xs rounded whitespace-nowrap ${
+                                                                    f.targetPath === 'index.html' 
+                                                                        ? 'bg-green-700 text-green-100' 
+                                                                        : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
+                                                                }`}>
+                                                                {f.targetPath === 'index.html' ? 'â Replace index.html' : 'Use index.html'}
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {willRename && (
+                                                        <div className="mt-1.5 text-xs text-green-400 flex items-center gap-1">
+                                                            <span>ð</span> Will replace existing index.html
+                                                        </div>
+                                                    )}
+                                                    {isHtml && f.targetPath !== 'index.html' && f.name !== 'index.html' && (
+                                                        <div className="mt-1.5 text-xs text-amber-400 flex items-center gap-1">
+                                                            <span>â ï¸</span> Will create new file (won't replace index.html)
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
-                                            <div className="mt-1 flex items-center gap-2">
-                                                <span className="text-xs text-slate-500">â</span>
-                                                <input type="text" value={f.targetPath} 
-                                                    onChange={e => onUpdateStagedFile(f.id, { targetPath: e.target.value })}
-                                                    onClick={e => e.stopPropagation()}
-                                                    className={`flex-1 text-xs bg-slate-800 border rounded px-2 py-1 font-mono ${
-                                                        f.targetPath === 'index.html' ? 'border-green-600 text-green-400' : 'border-amber-600 text-amber-400'
-                                                    }`}
-                                                    placeholder="Target path (e.g., index.html)" />
-                                                {f.targetPath !== 'index.html' && f.name.endsWith('.html') && (
-                                                    <span className="text-xs text-amber-400" title="Will create new file, not update index.html">â ï¸</span>
-                                                )}
-                                            </div>
+                                            <button onClick={e => { 
+                                                e.stopPropagation(); 
+                                                setSelectedFileIds(prev => {
+                                                    const newSet = new Set(prev);
+                                                    newSet.delete(f.id);
+                                                    return newSet;
+                                                });
+                                                onRemove(f.id); 
+                                            }} className="text-slate-400 hover:text-red-400 self-start">
+                                                <Icons.X />
+                                            </button>
                                         </div>
-                                        <button onClick={e => { 
-                                            e.stopPropagation(); 
-                                            setSelectedFileIds(prev => {
-                                                const newSet = new Set(prev);
-                                                newSet.delete(f.id);
-                                                return newSet;
-                                            });
-                                            onRemove(f.id); 
-                                        }} className="text-slate-400 hover:text-red-400">
-                                            <Icons.X />
-                                        </button>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                             
                             {/* Batch Deploy Controls */}
@@ -1487,6 +1784,8 @@
                                 const canPromote = app.testRepo && app.prodRepo && app.currentTestVersion && app.currentTestVersion !== app.currentProdVersion;
                                 const testUrl = getGitHubPagesUrl(app.testRepo);
                                 const prodUrl = getGitHubPagesUrl(app.prodRepo);
+                                const testDeploying = deployingRepos && deployingRepos[app.testRepo];
+                                const prodDeploying = deployingRepos && deployingRepos[app.prodRepo];
                                 
                                 return (
                                     <div key={app.id} className="p-3 bg-slate-700/50 rounded-lg">
@@ -1510,7 +1809,9 @@
                                                     TEST: {formatVersion(app.currentTestVersion)}
                                                 </span>
                                                 {testUrl && (
-                                                    <a href={testUrl} target="_blank" className="p-1 hover:bg-slate-600 rounded" title="Open TEST">
+                                                    <a href={testUrl} target="_blank" 
+                                                        className={`p-1 rounded flex items-center ${testDeploying ? 'bg-red-900/50 text-red-400 animate-pulse' : 'hover:bg-slate-600 text-slate-400'}`} 
+                                                        title={testDeploying ? `Deploying v${testDeploying.version}...` : 'Open TEST'}>
                                                         <Icons.Play />
                                                     </a>
                                                 )}
@@ -1521,7 +1822,9 @@
                                                     PROD: {formatVersion(app.currentProdVersion)}
                                                 </span>
                                                 {prodUrl && (
-                                                    <a href={prodUrl} target="_blank" className="p-1 hover:bg-slate-600 rounded" title="Open PROD">
+                                                    <a href={prodUrl} target="_blank" 
+                                                        className={`p-1 rounded flex items-center ${prodDeploying ? 'bg-red-900/50 text-red-400 animate-pulse' : 'hover:bg-slate-600 text-slate-400'}`} 
+                                                        title={prodDeploying ? `Deploying v${prodDeploying.version}...` : 'Open PROD'}>
                                                         <Icons.Play />
                                                     </a>
                                                 )}
@@ -1657,6 +1960,468 @@
                                     <Icons.File /> <span className="text-slate-500">{item.repo.split('/')[1]}/</span>{item.path}
                                 </div>
                             ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // FIREBASE VIEW
+    // =========================================================================
+    
+    function FirebaseView() {
+        const [user, setUser] = React.useState(null);
+        const [authLoading, setAuthLoading] = React.useState(true);
+        const [dbPath, setDbPath] = React.useState('');
+        const [dbData, setDbData] = React.useState(null);
+        const [dbLoading, setDbLoading] = React.useState(false);
+        const [dbError, setDbError] = React.useState(null);
+        const [expandedPaths, setExpandedPaths] = React.useState(new Set());
+        const [editingPath, setEditingPath] = React.useState(null);
+        const [editValue, setEditValue] = React.useState('');
+        const [realtimeEnabled, setRealtimeEnabled] = React.useState(false);
+        const [realtimeUnsubscribe, setRealtimeUnsubscribe] = React.useState(null);
+        const [manualUid, setManualUid] = React.useState(() => {
+            try { return localStorage.getItem('cc_firebase_uid') || ''; } catch { return ''; }
+        });
+        const [showManualAuth, setShowManualAuth] = React.useState(false);
+        
+        // Detect if running from file:// protocol
+        const isFileProtocol = window.location.protocol === 'file:';
+        
+        // Quick paths for common data
+        const quickPaths = [
+            { label: 'Users', path: 'users' },
+            { label: 'Battles', path: 'battles' },
+            { label: 'Friends', path: 'friends' },
+            { label: 'Gameshelf Public', path: 'gameshelf-public' },
+            { label: 'Reported Issues', path: 'reported-issues' },
+            { label: 'Game Suggestions', path: 'game-suggestions' },
+            { label: 'Test Results', path: 'test-results' },
+            { label: 'Root', path: '' },
+        ];
+        
+        // Listen for auth state changes
+        React.useEffect(() => {
+            if (!firebaseAuth) {
+                setAuthLoading(false);
+                return;
+            }
+            
+            const unsubscribe = firebaseAuth.onAuthStateChanged((u) => {
+                setUser(u);
+                setAuthLoading(false);
+                if (u) {
+                    console.log('Firebase auth state:', u.email, 'UID:', u.uid);
+                    // Save UID for manual auth fallback
+                    try { localStorage.setItem('cc_firebase_uid', u.uid); } catch {}
+                    setManualUid(u.uid);
+                } else {
+                    console.log('Firebase auth state: signed out');
+                }
+            });
+            
+            return () => unsubscribe();
+        }, []);
+        
+        // Cleanup realtime listener on unmount
+        React.useEffect(() => {
+            return () => {
+                if (realtimeUnsubscribe) {
+                    realtimeUnsubscribe();
+                }
+            };
+        }, [realtimeUnsubscribe]);
+        
+        const signInWithGoogle = async () => {
+            if (isFileProtocol) {
+                alert('Google Sign-in requires HTTPS. Please open this app from GitHub Pages or a web server.\n\nOr use the "Manual UID" option below for read-only access to public data.');
+                return;
+            }
+            
+            try {
+                const provider = new firebase.auth.GoogleAuthProvider();
+                await firebaseAuth.signInWithPopup(provider);
+            } catch (e) {
+                console.error('Sign in error:', e);
+                if (e.code === 'auth/operation-not-supported-in-this-environment') {
+                    alert('Google Sign-in not supported here. Please:\n\n1. Open from GitHub Pages URL, or\n2. Use "Manual UID" for limited access');
+                } else {
+                    alert('Sign in failed: ' + e.message);
+                }
+            }
+        };
+        
+        const signOut = async () => {
+            try {
+                await firebaseAuth.signOut();
+                setDbData(null);
+            } catch (e) {
+                console.error('Sign out error:', e);
+            }
+        };
+        
+        const fetchData = async (path = dbPath) => {
+            if (!firebaseDb) return;
+            
+            // Stop any existing realtime listener
+            if (realtimeUnsubscribe) {
+                realtimeUnsubscribe();
+                setRealtimeUnsubscribe(null);
+            }
+            
+            setDbLoading(true);
+            setDbError(null);
+            
+            try {
+                const ref = firebaseDb.ref(path || '/');
+                const snapshot = await ref.once('value');
+                setDbData(snapshot.val());
+                setDbPath(path);
+                console.log('Fetched data at', path || '/', snapshot.val());
+            } catch (e) {
+                console.error('Fetch error:', e);
+                setDbError(e.message);
+            }
+            
+            setDbLoading(false);
+        };
+        
+        const enableRealtime = () => {
+            if (!firebaseDb || !dbPath) return;
+            
+            // Stop existing listener
+            if (realtimeUnsubscribe) {
+                realtimeUnsubscribe();
+            }
+            
+            const ref = firebaseDb.ref(dbPath || '/');
+            const callback = ref.on('value', (snapshot) => {
+                setDbData(snapshot.val());
+                console.log('Realtime update at', dbPath || '/');
+            }, (error) => {
+                setDbError(error.message);
+            });
+            
+            setRealtimeUnsubscribe(() => () => ref.off('value', callback));
+            setRealtimeEnabled(true);
+        };
+        
+        const disableRealtime = () => {
+            if (realtimeUnsubscribe) {
+                realtimeUnsubscribe();
+                setRealtimeUnsubscribe(null);
+            }
+            setRealtimeEnabled(false);
+        };
+        
+        const updateValue = async (path, value) => {
+            if (!firebaseDb) return;
+            
+            try {
+                // Try to parse as JSON, otherwise use as string
+                let parsedValue;
+                try {
+                    parsedValue = JSON.parse(value);
+                } catch {
+                    parsedValue = value;
+                }
+                
+                await firebaseDb.ref(path).set(parsedValue);
+                setEditingPath(null);
+                fetchData(dbPath);
+            } catch (e) {
+                alert('Update failed: ' + e.message);
+            }
+        };
+        
+        const deleteValue = async (path) => {
+            if (!firebaseDb) return;
+            if (!confirm(`Delete data at "${path}"?`)) return;
+            
+            try {
+                await firebaseDb.ref(path).remove();
+                fetchData(dbPath);
+            } catch (e) {
+                alert('Delete failed: ' + e.message);
+            }
+        };
+        
+        const copyToClipboard = (data) => {
+            navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+        };
+        
+        const toggleExpand = (path) => {
+            setExpandedPaths(prev => {
+                const newSet = new Set(prev);
+                if (newSet.has(path)) {
+                    newSet.delete(path);
+                } else {
+                    newSet.add(path);
+                }
+                return newSet;
+            });
+        };
+        
+        // Render a data node recursively
+        const renderData = (data, path = '') => {
+            if (data === null || data === undefined) {
+                return <span className="text-slate-500 italic">null</span>;
+            }
+            
+            if (typeof data !== 'object') {
+                // Primitive value
+                const isEditing = editingPath === path;
+                
+                return (
+                    <div className="flex items-center gap-2">
+                        {isEditing ? (
+                            <>
+                                <input 
+                                    type="text" 
+                                    value={editValue}
+                                    onChange={e => setEditValue(e.target.value)}
+                                    className="flex-1 bg-slate-900 border border-indigo-500 rounded px-2 py-1 text-sm font-mono"
+                                    autoFocus
+                                />
+                                <button onClick={() => updateValue(path, editValue)} className="px-2 py-1 bg-green-600 rounded text-xs">Save</button>
+                                <button onClick={() => setEditingPath(null)} className="px-2 py-1 bg-slate-600 rounded text-xs">Cancel</button>
+                            </>
+                        ) : (
+                            <>
+                                <span className={`font-mono ${
+                                    typeof data === 'string' ? 'text-green-400' :
+                                    typeof data === 'number' ? 'text-blue-400' :
+                                    typeof data === 'boolean' ? 'text-amber-400' : 'text-white'
+                                }`}>
+                                    {typeof data === 'string' ? `"${data}"` : String(data)}
+                                </span>
+                                <button onClick={() => { setEditingPath(path); setEditValue(typeof data === 'string' ? data : JSON.stringify(data)); }} 
+                                    className="p-1 hover:bg-slate-600 rounded opacity-50 hover:opacity-100">
+                                    <Icons.Edit />
+                                </button>
+                            </>
+                        )}
+                    </div>
+                );
+            }
+            
+            // Object or array
+            const entries = Object.entries(data);
+            const isArray = Array.isArray(data);
+            const isExpanded = expandedPaths.has(path) || path === '';
+            
+            return (
+                <div className="ml-4 border-l border-slate-700 pl-3">
+                    {entries.length === 0 ? (
+                        <span className="text-slate-500 italic">{isArray ? '[]' : '{}'}</span>
+                    ) : (
+                        entries.slice(0, isExpanded ? undefined : 5).map(([key, value]) => {
+                            const childPath = path ? `${path}/${key}` : key;
+                            const isObject = value && typeof value === 'object';
+                            const childCount = isObject ? Object.keys(value).length : 0;
+                            
+                            return (
+                                <div key={key} className="my-1">
+                                    <div className="flex items-center gap-2">
+                                        {isObject && (
+                                            <button onClick={() => toggleExpand(childPath)} className="text-slate-400 hover:text-white">
+                                                {expandedPaths.has(childPath) ? 'â¼' : 'â¶'}
+                                            </button>
+                                        )}
+                                        <span className={`${isArray ? 'text-slate-500' : 'text-indigo-400'} font-mono text-sm`}>
+                                            {isArray ? `[${key}]` : key}:
+                                        </span>
+                                        {isObject ? (
+                                            <span className="text-slate-500 text-xs">
+                                                {Array.isArray(value) ? `Array(${childCount})` : `Object(${childCount})`}
+                                            </span>
+                                        ) : null}
+                                        <button onClick={() => copyToClipboard(value)} className="p-1 hover:bg-slate-600 rounded opacity-50 hover:opacity-100" title="Copy">
+                                            <Icons.Copy />
+                                        </button>
+                                        <button onClick={() => deleteValue(childPath)} className="p-1 hover:bg-red-900/50 rounded opacity-50 hover:opacity-100 text-red-400" title="Delete">
+                                            <Icons.Trash />
+                                        </button>
+                                    </div>
+                                    {(!isObject || expandedPaths.has(childPath)) && (
+                                        <div className="ml-4">
+                                            {renderData(value, childPath)}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })
+                    )}
+                    {!isExpanded && entries.length > 5 && (
+                        <button onClick={() => toggleExpand(path)} className="text-indigo-400 text-sm hover:underline">
+                            ... {entries.length - 5} more items
+                        </button>
+                    )}
+                </div>
+            );
+        };
+        
+        return (
+            <div className="space-y-6">
+                {/* Protocol Warning */}
+                {isFileProtocol && (
+                    <div className="bg-amber-900/30 border border-amber-700 rounded-xl p-4">
+                        <div className="flex items-start gap-3">
+                            <span className="text-2xl">â ï¸</span>
+                            <div>
+                                <div className="font-semibold text-amber-400">Running from local file</div>
+                                <p className="text-sm text-slate-300 mt-1">
+                                    Google Sign-in requires HTTPS. For full functionality:
+                                </p>
+                                <ol className="text-sm text-slate-400 mt-2 list-decimal list-inside space-y-1">
+                                    <li>Deploy this file to your <strong>managementtest</strong> repo</li>
+                                    <li>Open from GitHub Pages URL</li>
+                                    <li>Sign in with Google there</li>
+                                </ol>
+                                <p className="text-sm text-slate-400 mt-2">
+                                    Or use <strong>Manual UID</strong> below for read-only access to public data.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Auth Section */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <Icons.Database /> Firebase Realtime Database
+                    </h2>
+                    
+                    <div className="flex items-center gap-4 mb-4">
+                        <div className="flex-1">
+                            <div className="text-xs text-slate-400 mb-1">Project</div>
+                            <div className="font-mono text-sm">{FIREBASE_CONFIG.projectId}</div>
+                        </div>
+                        
+                        {authLoading ? (
+                            <div className="text-slate-400">Loading auth...</div>
+                        ) : user ? (
+                            <div className="flex items-center gap-3">
+                                <div className="text-right">
+                                    <div className="text-sm font-medium">{user.displayName || user.email}</div>
+                                    <div className="text-xs text-slate-400">{user.email}</div>
+                                    <div className="text-xs text-slate-500 font-mono">UID: {user.uid}</div>
+                                </div>
+                                {user.photoURL && <img src={user.photoURL} className="w-8 h-8 rounded-full" />}
+                                <button onClick={signOut} className="px-3 py-1.5 bg-slate-700 rounded text-sm">Sign Out</button>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-2">
+                                <button onClick={signInWithGoogle} 
+                                    className={`px-4 py-2 rounded flex items-center gap-2 ${isFileProtocol ? 'bg-slate-600 text-slate-400' : 'bg-indigo-600'}`}>
+                                    <Icons.User /> Sign in with Google
+                                </button>
+                                <button onClick={() => setShowManualAuth(!showManualAuth)} 
+                                    className="px-3 py-2 bg-slate-700 rounded text-sm">
+                                    {showManualAuth ? 'Hide' : 'Manual UID'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {/* Manual UID Input (for file:// or debugging) */}
+                    {!user && showManualAuth && (
+                        <div className="mt-4 p-4 bg-slate-900 rounded-lg border border-slate-600">
+                            <div className="text-sm text-slate-400 mb-2">
+                                <strong>Manual UID Access</strong> - Enter a UID to access public data (read-only without auth)
+                            </div>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text"
+                                    value={manualUid}
+                                    onChange={e => setManualUid(e.target.value)}
+                                    placeholder="Firebase UID (e.g., abc123xyz...)"
+                                    className="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-2 font-mono text-sm"
+                                />
+                                <button onClick={() => {
+                                    try { localStorage.setItem('cc_firebase_uid', manualUid); } catch {}
+                                    alert('UID saved. You can now query public data paths.');
+                                }} className="px-4 py-2 bg-indigo-600 rounded">
+                                    Save
+                                </button>
+                            </div>
+                            <div className="text-xs text-slate-500 mt-2">
+                                Tip: Sign in from GitHub Pages once to get your UID, then use it here.
+                            </div>
+                        </div>
+                    )}
+                    
+                    {!user && !showManualAuth && (
+                        <div className="text-slate-400 text-sm">
+                            Sign in to access protected data, or click "Manual UID" for limited access.
+                        </div>
+                    )}
+                </div>
+                
+                {/* Query Section */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h3 className="font-semibold mb-4">Query Data</h3>
+                    
+                    <div className="flex gap-2 mb-4 flex-wrap">
+                        {quickPaths.map(qp => (
+                            <button key={qp.path} onClick={() => { setDbPath(qp.path); fetchData(qp.path); }}
+                                className={`px-3 py-1.5 rounded text-sm ${dbPath === qp.path ? 'bg-indigo-600' : 'bg-slate-700 hover:bg-slate-600'}`}>
+                                {qp.label}
+                            </button>
+                        ))}
+                    </div>
+                    
+                    <div className="flex gap-2 mb-4">
+                        <input 
+                            type="text" 
+                            value={dbPath}
+                            onChange={e => setDbPath(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && fetchData()}
+                            placeholder="Path (e.g., users/abc123)"
+                            className="flex-1 bg-slate-900 border border-slate-600 rounded px-3 py-2 font-mono text-sm"
+                        />
+                        <button onClick={() => fetchData()} disabled={dbLoading} className="px-4 py-2 bg-indigo-600 rounded">
+                            {dbLoading ? '...' : 'Fetch'}
+                        </button>
+                        <button 
+                            onClick={() => realtimeEnabled ? disableRealtime() : enableRealtime()} 
+                            className={`px-4 py-2 rounded flex items-center gap-2 ${realtimeEnabled ? 'bg-green-600' : 'bg-slate-700'}`}
+                            title={realtimeEnabled ? 'Disable realtime updates' : 'Enable realtime updates'}
+                        >
+                            {realtimeEnabled ? 'ð´ Live' : 'âª Live'}
+                        </button>
+                    </div>
+                    
+                    {dbError && (
+                        <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded text-red-400 text-sm">
+                            Error: {dbError}
+                        </div>
+                    )}
+                </div>
+                
+                {/* Data Display */}
+                {dbData !== null && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold">
+                                Data at <span className="font-mono text-indigo-400">/{dbPath || ''}</span>
+                                {realtimeEnabled && <span className="ml-2 text-green-400 text-sm">â Live</span>}
+                            </h3>
+                            <div className="flex gap-2">
+                                <button onClick={() => copyToClipboard(dbData)} className="px-3 py-1 bg-slate-700 rounded text-sm flex items-center gap-1">
+                                    <Icons.Copy /> Copy All
+                                </button>
+                                <button onClick={() => setExpandedPaths(new Set())} className="px-3 py-1 bg-slate-700 rounded text-sm">
+                                    Collapse All
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-slate-900 rounded p-4 max-h-[600px] overflow-auto">
+                            {renderData(dbData, dbPath)}
                         </div>
                     </div>
                 )}
