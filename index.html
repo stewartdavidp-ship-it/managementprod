@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="6.7.2">
+    <meta name="version" content="6.7.4">
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -25,7 +25,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="font-size:48px;margin-bottom:20px;">ð®</div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v6.7.2 starting...');
+    console.log('Command Center v6.7.4 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -369,6 +369,121 @@
         }
         const appMatch = filename.match(/^(\w+)/);
         return { app: appMatch ? appMatch[1].toLowerCase() : null, version: null };
+    }
+    
+    // Detect app from HTML content by looking for unique signatures
+    function detectAppFromContent(content) {
+        if (!content || typeof content !== 'string') return null;
+        
+        // Check first 5000 chars for performance (titles/meta are at top)
+        const sample = content.substring(0, 5000).toLowerCase();
+        const fullContent = content.toLowerCase();
+        
+        // App signatures - ordered by specificity
+        const signatures = [
+            {
+                id: 'gameshelf',
+                patterns: [
+                    /<title>game\s*shelf/i,
+                    /gameshelfdata/i,
+                    /game.shelf.pwa/i,
+                    /game-shelf-app/i,
+                    /#setup-welcome/i  // Unique to Game Shelf onboarding
+                ],
+                confidence: 'high'
+            },
+            {
+                id: 'quotle',
+                patterns: [
+                    /<title>quotle/i,
+                    /quotle.*daily.*quote/i,
+                    /quotle-container/i,
+                    /quotle_version/i,
+                    /quotes-database/i
+                ],
+                confidence: 'high'
+            },
+            {
+                id: 'slate',
+                patterns: [
+                    /<title>slate/i,
+                    /slate.*daily.*word/i,
+                    /slate_version/i,
+                    /chalkboard-bg/i,
+                    /slate-board/i
+                ],
+                confidence: 'high'
+            },
+            {
+                id: 'rungs',
+                patterns: [
+                    /<title>rungs/i,
+                    /rungs.*daily/i,
+                    /rungs_version/i,
+                    /word-ladder/i,
+                    /rung-container/i
+                ],
+                confidence: 'high'
+            },
+            {
+                id: 'wordboxing',
+                patterns: [
+                    /<title>word\s*boxing/i,
+                    /word-boxing/i,
+                    /wordboxing/i,
+                    /boxing-ring/i,
+                    /word_boxing_version/i
+                ],
+                confidence: 'high'
+            },
+            {
+                id: 'testplan',
+                patterns: [
+                    /<title>.*test\s*plan/i,
+                    /gameshelf-testplan/i,
+                    /playwright.*runner/i,
+                    /test-plan-app/i
+                ],
+                confidence: 'high'
+            },
+            {
+                id: 'management',
+                patterns: [
+                    /<title>.*command\s*center/i,
+                    /<title>.*ship\s*it/i,
+                    /command-center/i,
+                    /ship.it.console/i,
+                    /management.*console/i,
+                    /claude.*deploy.*queue/i  // Unique Command Center feature
+                ],
+                confidence: 'high'
+            }
+        ];
+        
+        // Check each app's signatures
+        for (const app of signatures) {
+            let matchCount = 0;
+            let matchedPatterns = [];
+            
+            for (const pattern of app.patterns) {
+                if (pattern.test(content)) {
+                    matchCount++;
+                    matchedPatterns.push(pattern.toString());
+                }
+            }
+            
+            // Require at least 1 match, prefer multiple
+            if (matchCount > 0) {
+                return {
+                    id: app.id,
+                    confidence: matchCount >= 2 ? 'high' : 'medium',
+                    matchCount,
+                    matchedPatterns
+                };
+            }
+        }
+        
+        return null;
     }
     
     function formatBytes(bytes) {
@@ -733,6 +848,135 @@
             });
         };
         const [refreshing, setRefreshing] = React.useState(false);
+        
+        // Rollback snapshots - stores last known good version for each app/repo/target
+        // Format: { "appId:target": { content, version, savedAt, repo } }
+        const [rollbackSnapshots, setRollbackSnapshots] = React.useState(() => {
+            try { const s = localStorage.getItem('cc_rollback_snapshots'); return s ? JSON.parse(s) : {}; } catch { return {}; }
+        });
+        
+        // Persist rollback snapshots
+        React.useEffect(() => {
+            try { localStorage.setItem('cc_rollback_snapshots', JSON.stringify(rollbackSnapshots)); } catch {}
+        }, [rollbackSnapshots]);
+        
+        // Save snapshot before deploy (call this before pushing new content)
+        const saveRollbackSnapshot = async (appId, target, repo, targetPath) => {
+            if (!github) return null;
+            
+            try {
+                const currentFile = await github.getFile(repo, targetPath);
+                if (!currentFile) return null;
+                
+                const content = atob(currentFile.content);
+                const version = extractVersionFromHTML(content);
+                
+                const key = `${appId}:${target}`;
+                const snapshot = {
+                    content,
+                    version,
+                    savedAt: new Date().toISOString(),
+                    repo,
+                    targetPath,
+                    sha: currentFile.sha
+                };
+                
+                setRollbackSnapshots(prev => ({ ...prev, [key]: snapshot }));
+                console.log(`ð¸ Saved rollback snapshot for ${appId} ${target}: v${version}`);
+                return snapshot;
+            } catch (err) {
+                console.error('Failed to save rollback snapshot:', err);
+                return null;
+            }
+        };
+        
+        // Quick rollback using saved snapshot
+        const quickRollback = async (appId, target) => {
+            const key = `${appId}:${target}`;
+            const snapshot = rollbackSnapshots[key];
+            
+            if (!snapshot) {
+                await showAlert('No rollback snapshot available for this app/environment.', 'Rollback Not Available');
+                return;
+            }
+            
+            const app = apps[appId];
+            const confirmed = await showConfirm(
+                `Roll back ${app.name} ${target.toUpperCase()} to v${snapshot.version || 'unknown'}?\n\nSaved: ${new Date(snapshot.savedAt).toLocaleString()}`,
+                'âª Quick Rollback'
+            );
+            
+            if (!confirmed) return;
+            
+            const deployment = {
+                id: Date.now(), status: 'running', steps: [],
+                appId, appName: app.name, repo: snapshot.repo, target,
+                isRollback: true, isQuickRollback: true,
+                version: snapshot.version,
+                startedAt: new Date().toISOString()
+            };
+            
+            setActiveDeployment(deployment);
+            setDeployments(prev => [deployment, ...prev]);
+            
+            const addStep = (name, status, details = null) => {
+                const idx = deployment.steps.findIndex(s => s.name === name);
+                if (idx >= 0) deployment.steps[idx] = { name, status, details };
+                else deployment.steps.push({ name, status, details });
+                setActiveDeployment({ ...deployment });
+            };
+            
+            try {
+                addStep('Preparing rollback', 'running');
+                const currentFile = await github.getFile(snapshot.repo, snapshot.targetPath);
+                const currentVersion = currentFile ? extractVersionFromHTML(atob(currentFile.content)) : null;
+                deployment.previousVersion = currentVersion;
+                addStep('Preparing rollback', 'complete', `${formatVersion(currentVersion)} â ${formatVersion(snapshot.version)}`);
+                
+                addStep('Restoring snapshot', 'running');
+                const result = await github.createOrUpdateFile(
+                    snapshot.repo, snapshot.targetPath, snapshot.content,
+                    `Quick rollback ${app.name} to v${snapshot.version} (was v${currentVersion})`,
+                    currentFile?.sha
+                );
+                deployment.commitSha = result.commit.sha;
+                addStep('Restoring snapshot', 'complete', result.commit.sha.substring(0, 7));
+                
+                deployment.status = 'success';
+                deployment.url = getGitHubPagesUrl(snapshot.repo);
+                
+                const versionKey = target === 'prod' ? 'currentProdVersion' : 'currentTestVersion';
+                updateApp(appId, { [versionKey]: snapshot.version });
+                
+                // Monitor deployment
+                if (deployment.url && snapshot.version) {
+                    addStep('GitHub Pages', 'running', 'Waiting for deploy...');
+                    monitorLiveDeployment(deployment.url, snapshot.version, snapshot.repo, (status, detail) => {
+                        addStep('GitHub Pages', status, detail);
+                        setActiveDeployment({ ...deployment });
+                        setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                    });
+                }
+                
+            } catch (err) {
+                console.error('Quick rollback failed:', err);
+                addStep('Rollback Failed', 'error', err.message);
+                deployment.status = 'error';
+            }
+            
+            setActiveDeployment({ ...deployment });
+            setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+        };
+        
+        // Clear rollback snapshot (after successful deploy verification)
+        const clearRollbackSnapshot = (appId, target) => {
+            const key = `${appId}:${target}`;
+            setRollbackSnapshots(prev => {
+                const next = { ...prev };
+                delete next[key];
+                return next;
+            });
+        };
         const [repoFiles, setRepoFiles] = React.useState({}); // { repoFullName: { files: [], loading: bool } }
         const [selectedRepoForBrowse, setSelectedRepoForBrowse] = React.useState(null);
         const [markedForDeletion, setMarkedForDeletion] = React.useState([]); // [{ repo, path, sha }]
@@ -973,6 +1217,12 @@
             e.preventDefault();
             const files = e.dataTransfer?.files || e.target.files;
             
+            // Reset file input so same file can be selected again
+            // (without this, onChange won't fire for the same file twice)
+            if (e.target && e.target.value) {
+                e.target.value = '';
+            }
+            
             Array.from(files).forEach(file => {
                 const reader = new FileReader();
                 reader.onload = (e) => {
@@ -985,7 +1235,27 @@
                     let versionSource = 'none';
                     let versionValidation = null;
                     
+                    // App detection: try content first, fall back to filename
+                    let suggestedApp = null;
+                    let appDetection = null;
+                    
                     if (file.name.endsWith('.html') && isText) {
+                        // Try content-based detection
+                        appDetection = detectAppFromContent(content);
+                        
+                        if (appDetection) {
+                            suggestedApp = appDetection.id;
+                            console.log('=== APP DETECTED FROM CONTENT ===');
+                            console.log('Detected:', appDetection.id);
+                            console.log('Confidence:', appDetection.confidence);
+                            console.log('Matches:', appDetection.matchCount);
+                        } else {
+                            // Fall back to filename
+                            suggestedApp = parsed.app;
+                            console.log('=== APP FROM FILENAME ===');
+                            console.log('Parsed:', parsed.app);
+                        }
+                        
                         const htmlVersion = extractVersionFromHTML(content);
                         version = htmlVersion || parsed.version;
                         versionSource = htmlVersion ? 'html' : (parsed.version ? 'filename' : 'none');
@@ -1005,12 +1275,15 @@
                                 missing: versionValidation.missing
                             });
                         }
+                    } else {
+                        suggestedApp = parsed.app;
                     }
                     
                     console.log('=== FILE UPLOADED ===');
                     console.log('Name:', file.name);
                     console.log('Size:', file.size);
                     console.log('Version:', version);
+                    console.log('Suggested App:', suggestedApp, appDetection ? '(from content)' : '(from filename)');
                     
                     setStagedFiles(prev => [...prev, {
                         id: Date.now() + Math.random(),
@@ -1019,7 +1292,8 @@
                         content: isText ? content : btoa(content),
                         encoding: isText ? 'utf-8' : 'base64',
                         isText,
-                        suggestedApp: parsed.app,
+                        suggestedApp,
+                        appDetection, // Store detection details
                         version,
                         versionSource,
                         versionValidation,
@@ -1065,6 +1339,9 @@
                     return;
                 }
             }
+            
+            // ð¸ Save rollback snapshot BEFORE deploying
+            await saveRollbackSnapshot(appId, target, repo, app.targetPath);
             
             const deployment = {
                 id: Date.now(), status: 'running', steps: [],
@@ -1245,6 +1522,9 @@
                 validationOk: f.versionValidation?.isValid,
                 contentLength: f.content?.length
             })));
+            
+            // ð¸ Save rollback snapshot BEFORE deploying
+            await saveRollbackSnapshot(appId, target, repo, app.targetPath);
             
             const deployment = {
                 id: Date.now(), status: 'running', steps: [],
@@ -1635,6 +1915,8 @@
                             globalIssues={globalIssues}
                             linkIssuesToVersion={linkIssuesToVersion}
                             setView={setView}
+                            rollbackSnapshots={rollbackSnapshots}
+                            onQuickRollback={quickRollback}
                         />
                     )}
                     
@@ -1981,10 +2263,25 @@
     // DASHBOARD VIEW
     // =========================================================================
     
-    function DashboardView({ apps, stagedFiles, github, onFileDrop, onRemove, onDeploy, onBatchDeploy, onPromote, activeDeployment, setActiveDeployment, refreshing, onUpdateStagedFile, deployingRepos, showConfirm, showAlert, showPrompt, globalIssues, linkIssuesToVersion, setView }) {
+    function DashboardView({ apps, stagedFiles, github, onFileDrop, onRemove, onDeploy, onBatchDeploy, onPromote, activeDeployment, setActiveDeployment, refreshing, onUpdateStagedFile, deployingRepos, showConfirm, showAlert, showPrompt, globalIssues, linkIssuesToVersion, setView, rollbackSnapshots, onQuickRollback }) {
         const [selectedFileIds, setSelectedFileIds] = React.useState(new Set());
         const [deployTarget, setDeployTarget] = React.useState({ appId: 'management', target: 'test' });
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
+        
+        // Auto-select detected app when staging new files
+        React.useEffect(() => {
+            if (stagedFiles.length === 0) return;
+            
+            // Find the most recently added file with high-confidence detection
+            const filesWithDetection = stagedFiles.filter(f => f.appDetection?.confidence === 'high');
+            if (filesWithDetection.length > 0) {
+                const detected = filesWithDetection[filesWithDetection.length - 1].suggestedApp;
+                if (detected && apps[detected]) {
+                    setDeployTarget(prev => ({ ...prev, appId: detected }));
+                    console.log('ð¯ Auto-selected app:', detected);
+                }
+            }
+        }, [stagedFiles.length]); // Only when file count changes (new file added)
         
         // Expanded app menus state
         const [expandedApps, setExpandedApps] = React.useState({});
@@ -2208,6 +2505,26 @@
                                                             {f.versionSource === 'html' && <span className="text-green-400 ml-1">â</span>}
                                                         </span>
                                                     )}
+                                                    {/* App detection badge */}
+                                                    {f.suggestedApp && apps[f.suggestedApp] && (
+                                                        <span className={`px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                                                            f.appDetection 
+                                                                ? f.appDetection.confidence === 'high' 
+                                                                    ? 'bg-green-700 text-green-100' 
+                                                                    : 'bg-yellow-700 text-yellow-100'
+                                                                : 'bg-slate-600 text-slate-300'
+                                                        }`} title={f.appDetection 
+                                                            ? `Detected from content (${f.appDetection.matchCount} matches)` 
+                                                            : 'From filename'}>
+                                                            <span>{apps[f.suggestedApp].icon}</span>
+                                                            <span>{apps[f.suggestedApp].name}</span>
+                                                            {f.appDetection && (
+                                                                <span className="text-xs opacity-75">
+                                                                    {f.appDetection.confidence === 'high' ? 'ð¯' : 'â'}
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                    )}
                                                     {!f.isText && <span className="text-amber-400">binary</span>}
                                                 </div>
                                                 
@@ -2328,12 +2645,55 @@
                             </div>
                             
                             {/* Batch Deploy Controls */}
-                            {selectedFiles.length > 0 && (
+                            {selectedFiles.length > 0 && (() => {
+                                // Check if selected files have detected apps
+                                const detectedApps = selectedFiles
+                                    .filter(f => f.appDetection)
+                                    .map(f => ({ file: f.name, app: f.suggestedApp, confidence: f.appDetection.confidence }));
+                                
+                                const uniqueDetected = [...new Set(detectedApps.map(d => d.app))];
+                                const primaryDetected = detectedApps.find(d => d.confidence === 'high')?.app || uniqueDetected[0];
+                                
+                                // Check for mismatch
+                                const hasMismatch = primaryDetected && deployTarget.appId !== primaryDetected;
+                                const hasConflict = uniqueDetected.length > 1;
+                                
+                                return (
                                 <div className="mt-4 p-4 bg-slate-900 rounded-lg border border-slate-600">
                                     <div className="text-sm font-medium mb-3">Deploy {selectedFiles.length} selected file{selectedFiles.length !== 1 ? 's' : ''}</div>
+                                    
+                                    {/* Auto-detected app suggestion */}
+                                    {primaryDetected && !hasConflict && (
+                                        <div className={`mb-3 p-2 rounded text-sm flex items-center justify-between ${
+                                            hasMismatch ? 'bg-amber-900/50 border border-amber-600' : 'bg-green-900/50 border border-green-600'
+                                        }`}>
+                                            <span>
+                                                {hasMismatch ? 'â ï¸' : 'ð¯'} Detected: <strong>{apps[primaryDetected]?.icon} {apps[primaryDetected]?.name}</strong>
+                                            </span>
+                                            {hasMismatch && (
+                                                <button 
+                                                    onClick={() => setDeployTarget(p => ({ ...p, appId: primaryDetected }))}
+                                                    className="px-2 py-1 bg-green-700 hover:bg-green-600 rounded text-xs">
+                                                    Use Detected
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Conflict warning */}
+                                    {hasConflict && (
+                                        <div className="mb-3 p-2 bg-red-900/50 border border-red-600 rounded text-sm">
+                                            â ï¸ Multiple apps detected in selection: {uniqueDetected.map(a => apps[a]?.name).join(', ')}
+                                        </div>
+                                    )}
+                                    
                                     <div className="grid grid-cols-2 gap-3 mb-3">
                                         <select value={deployTarget.appId} onChange={e => setDeployTarget(p => ({ ...p, appId: e.target.value }))}
-                                            className="p-2 bg-slate-700 border border-slate-600 rounded text-sm">
+                                            className={`p-2 border rounded text-sm ${
+                                                hasMismatch 
+                                                    ? 'bg-amber-900 border-amber-500' 
+                                                    : 'bg-slate-700 border-slate-600'
+                                            }`}>
                                             {Object.values(apps).map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
                                         </select>
                                         <select value={deployTarget.target} onChange={e => setDeployTarget(p => ({ ...p, target: e.target.value }))}
@@ -2342,16 +2702,43 @@
                                             <option value="prod">ð PROD</option>
                                         </select>
                                     </div>
+                                    
+                                    {/* Mismatch warning on deploy button */}
+                                    {hasMismatch && (
+                                        <div className="mb-2 text-xs text-amber-400">
+                                            â ï¸ You're deploying to {apps[deployTarget.appId]?.name} but file appears to be {apps[primaryDetected]?.name}
+                                        </div>
+                                    )}
+                                    
                                     <button onClick={() => {
-                                        console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
-                                        onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
+                                        // Show confirmation if mismatch detected
+                                        if (hasMismatch) {
+                                            showConfirm(
+                                                `File detected as ${apps[primaryDetected]?.name} but deploying to ${apps[deployTarget.appId]?.name}. Continue anyway?`,
+                                                () => {
+                                                    console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
+                                                    onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
+                                                },
+                                                'Deploy Mismatch Warning'
+                                            );
+                                        } else {
+                                            console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
+                                            onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
+                                        }
                                     }}
                                         disabled={!github}
-                                        className={`w-full p-2 rounded font-medium ${deployTarget.target === 'prod' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                                        {selectedFiles.length === 1 ? 'Deploy File' : `Batch Deploy ${selectedFiles.length} Files`}
+                                        className={`w-full p-2 rounded font-medium ${
+                                            hasMismatch 
+                                                ? 'bg-amber-600 hover:bg-amber-700' 
+                                                : deployTarget.target === 'prod' 
+                                                    ? 'bg-green-600 hover:bg-green-700' 
+                                                    : 'bg-blue-600 hover:bg-blue-700'
+                                        }`}>
+                                        {hasMismatch && 'â ï¸ '}{selectedFiles.length === 1 ? 'Deploy File' : `Batch Deploy ${selectedFiles.length} Files`}
                                     </button>
                                 </div>
-                            )}
+                                );
+                            })()}
                         </div>
                     )}
                     
@@ -2580,6 +2967,26 @@
                                                         
                                                         {/* Quick Actions */}
                                                         <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-600">
+                                                            {/* Quick Rollback TEST */}
+                                                            {rollbackSnapshots[`${app.id}:test`] && (
+                                                                <button 
+                                                                    onClick={() => onQuickRollback(app.id, 'test')}
+                                                                    className="px-2 py-1 bg-red-700 hover:bg-red-600 text-xs rounded flex items-center gap-1"
+                                                                    title={`Rollback to v${rollbackSnapshots[`${app.id}:test`].version} (saved ${new Date(rollbackSnapshots[`${app.id}:test`].savedAt).toLocaleTimeString()})`}>
+                                                                    âª Rollback TEST to v{rollbackSnapshots[`${app.id}:test`].version}
+                                                                </button>
+                                                            )}
+                                                            
+                                                            {/* Quick Rollback PROD */}
+                                                            {rollbackSnapshots[`${app.id}:prod`] && (
+                                                                <button 
+                                                                    onClick={() => onQuickRollback(app.id, 'prod')}
+                                                                    className="px-2 py-1 bg-red-700 hover:bg-red-600 text-xs rounded flex items-center gap-1"
+                                                                    title={`Rollback to v${rollbackSnapshots[`${app.id}:prod`].version} (saved ${new Date(rollbackSnapshots[`${app.id}:prod`].savedAt).toLocaleTimeString()})`}>
+                                                                    âª Rollback PROD to v{rollbackSnapshots[`${app.id}:prod`].version}
+                                                                </button>
+                                                            )}
+                                                            
                                                             {/* Force Propagate TEST â PROD */}
                                                             {app.testRepo && app.prodRepo && (
                                                                 <button 
@@ -3668,6 +4075,12 @@
         const handleProjectFileDrop = (e) => {
             e.preventDefault();
             const file = e.dataTransfer?.files[0] || e.target.files?.[0];
+            
+            // Reset file input so same file can be selected again
+            if (e.target && e.target.value) {
+                e.target.value = '';
+            }
+            
             if (file && (file.name.endsWith('.zip') || file.name === 'gs-active.zip')) {
                 uploadProjectFile(file);
             } else {
