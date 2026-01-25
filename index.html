@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="7.1.3">
+    <meta name="version" content="7.1.9">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,7 +27,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v7.1.3 starting...');
+    console.log('Command Center v7.1.9 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -1682,7 +1682,7 @@
                     console.log('Name:', file.name);
                     
                     if (typeof JSZip === 'undefined') {
-                        alert('ZIP support not available');
+                        await showAlert('ZIP support not available', 'Error');
                         return;
                     }
                     
@@ -1775,7 +1775,7 @@
                         
                     } catch (err) {
                         console.error('ZIP extraction failed:', err);
-                        alert('Failed to extract ZIP: ' + err.message);
+                        showAlert('Failed to extract ZIP: ' + err.message, 'ZIP Error');
                     }
                     return;
                 }
@@ -1882,11 +1882,11 @@
         
         // Deploy single file (legacy support)
         const handleDeploy = async (file, appId, target, forceDeploy = false) => {
-            if (!github) return alert('Configure GitHub token');
+            if (!github) { await showAlert('Configure GitHub token', 'Configuration Required'); return; }
             
             const app = apps[appId];
             const repo = target === 'prod' ? app.prodRepo : app.testRepo;
-            if (!repo) return alert(`Configure ${target} repo`);
+            if (!repo) { await showAlert(`Configure ${target} repo`, 'Configuration Required'); return; }
             
             const currentVersion = await fetchCurrentVersion(repo, app.targetPath);
             const newVersion = file.version;
@@ -2239,7 +2239,7 @@
             
             // Show result
             if (failCount > 0) {
-                alert(`Deleted ${successCount} file(s), ${failCount} failed`);
+                await showAlert(`Deleted ${successCount} file(s), ${failCount} failed`, 'Delete Results');
             }
         };
         
@@ -2514,7 +2514,7 @@
                             <Icons.GameShelfLogo size={32} />
                             <div>
                                 <h1 className="text-lg font-bold">Command Center</h1>
-                                <div className="text-xs text-slate-400">v7.1.3 • Fix batch deploy verification URI error</div>
+                                <div className="text-xs text-slate-400">v7.1.9 • Repo cleanup for stale files</div>
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -2577,11 +2577,12 @@
                             selectedRepo={selectedRepoForBrowse} onSelectRepo={setSelectedRepoForBrowse}
                             markedForDeletion={markedForDeletion} setMarkedForDeletion={setMarkedForDeletion}
                             onDeleteMarked={() => setModal({ type: 'confirmDelete' })}
+                            showAlert={showAlert}
                         />
                     )}
                     
                     {view === 'firebase' && (
-                        <FirebaseView />
+                        <FirebaseView showAlert={showAlert} showConfirm={showConfirm} showPrompt={showPrompt} />
                     )}
                     
                     {view === 'apps' && <AppsView apps={apps} repos={availableRepos} onUpdate={updateApp} />}
@@ -2601,11 +2602,12 @@
                             deployments={deployments}
                             github={github}
                             onFileDrop={handleFileDrop}
+                            showAlert={showAlert}
                         />
                     )}
                     
                     {view === 'issues' && (
-                        <IssuesView apps={apps} deployments={deployments} />
+                        <IssuesView apps={apps} deployments={deployments} showAlert={showAlert} showConfirm={showConfirm} showPrompt={showPrompt} />
                     )}
                     
                     {view === 'config' && (
@@ -2929,6 +2931,7 @@
         const [selectedFileIds, setSelectedFileIds] = React.useState(new Set());
         const [deployTarget, setDeployTarget] = React.useState({ appId: 'management', target: 'test' });
         const [isDeploying, setIsDeploying] = React.useState(false);
+        const [deployCompleted, setDeployCompleted] = React.useState(false);
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
         
         // Auto-select detected app when staging new files
@@ -2946,12 +2949,26 @@
             }
         }, [stagedFiles.length]); // Only when file count changes (new file added)
         
-        // Reset deploying state when activeDeployment starts (button feedback complete)
+        // Reset deploying state when activeDeployment completes, track completion
         React.useEffect(() => {
             if (activeDeployment) {
-                setIsDeploying(false);
+                // Only reset isDeploying when deployment actually finishes (success or error)
+                if (activeDeployment.status === 'success' || activeDeployment.status === 'error') {
+                    setIsDeploying(false);
+                    // Mark as completed when deploy succeeds
+                    if (activeDeployment.status === 'success') {
+                        setDeployCompleted(true);
+                    }
+                }
             }
-        }, [activeDeployment]);
+        }, [activeDeployment, activeDeployment?.status]);
+        
+        // Reset deployCompleted when staging new files
+        React.useEffect(() => {
+            if (stagedFiles.length > 0) {
+                setDeployCompleted(false);
+            }
+        }, [stagedFiles.length]);
         
         // Expanded app menus state
         const [expandedApps, setExpandedApps] = React.useState({});
@@ -3147,8 +3164,140 @@
                                 <div className="flex gap-2 text-xs">
                                     <button onClick={selectAll} className="px-2 py-1 bg-slate-700 rounded hover:bg-slate-600">Select All</button>
                                     <button onClick={selectNone} className="px-2 py-1 bg-slate-700 rounded hover:bg-slate-600">Select None</button>
+                                    <button onClick={() => {
+                                        setSelectedFileIds(new Set());
+                                        stagedFiles.forEach(f => onRemove(f.id));
+                                    }} className="px-2 py-1 bg-red-700 hover:bg-red-600 rounded flex items-center gap-1">
+                                        <Icons.Trash /> Clear All
+                                    </button>
                                 </div>
                             </div>
+                            
+                            {/* Batch Deploy Controls - At top for easy access */}
+                            {selectedFiles.length > 0 && (() => {
+                                // Check if selected files have detected apps
+                                const detectedApps = selectedFiles
+                                    .filter(f => f.appDetection)
+                                    .map(f => ({ file: f.name, app: f.suggestedApp, confidence: f.appDetection.confidence }));
+                                
+                                const uniqueDetected = [...new Set(detectedApps.map(d => d.app))];
+                                const primaryDetected = detectedApps.find(d => d.confidence === 'high')?.app || uniqueDetected[0];
+                                
+                                // Check for mismatch
+                                const hasMismatch = primaryDetected && deployTarget.appId !== primaryDetected;
+                                const hasConflict = uniqueDetected.length > 1;
+                                
+                                return (
+                                <div className="mb-4 p-4 bg-slate-900 rounded-lg border border-indigo-500">
+                                    <div className="text-sm font-medium mb-3 flex items-center gap-2">
+                                        <Icons.Upload /> Deploy {selectedFiles.length} selected file{selectedFiles.length !== 1 ? 's' : ''}
+                                    </div>
+                                    
+                                    {/* Auto-detected app suggestion */}
+                                    {primaryDetected && !hasConflict && (
+                                        <div className={`mb-3 p-2 rounded text-sm flex items-center justify-between ${
+                                            hasMismatch ? 'bg-amber-900/50 border border-amber-600' : 'bg-green-900/50 border border-green-600'
+                                        }`}>
+                                            <span className="flex items-center gap-2">
+                                                {hasMismatch ? '⚠️' : '🎯'} Detected: <strong className="flex items-center gap-1"><AppIcon icon={apps[primaryDetected]?.icon} size={18} /> {apps[primaryDetected]?.name}</strong>
+                                            </span>
+                                            {hasMismatch && (
+                                                <button 
+                                                    onClick={() => setDeployTarget(p => ({ ...p, appId: primaryDetected }))}
+                                                    className="px-2 py-1 bg-green-700 hover:bg-green-600 rounded text-xs">
+                                                    Use Detected
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Conflict warning */}
+                                    {hasConflict && (
+                                        <div className="mb-3 p-2 bg-red-900/50 border border-red-600 rounded text-sm">
+                                            ⚠️ Multiple apps detected in selection: {uniqueDetected.map(a => apps[a]?.name).join(', ')}
+                                        </div>
+                                    )}
+                                    
+                                    <div className="grid grid-cols-2 gap-3 mb-3">
+                                        <select value={deployTarget.appId} onChange={e => setDeployTarget(p => ({ ...p, appId: e.target.value }))}
+                                            className={`p-2 border rounded text-sm ${
+                                                hasMismatch 
+                                                    ? 'bg-amber-900 border-amber-500' 
+                                                    : 'bg-slate-700 border-slate-600'
+                                            }`}>
+                                            {Object.values(apps).map(a => <option key={a.id} value={a.id}>{getAppEmoji(a.icon)} {a.name}</option>)}
+                                        </select>
+                                        <select value={deployTarget.target} onChange={e => setDeployTarget(p => ({ ...p, target: e.target.value }))}
+                                            className="p-2 bg-slate-700 border border-slate-600 rounded text-sm">
+                                            <option value="test">🧪 TEST</option>
+                                            <option value="prod">🚀 PROD</option>
+                                        </select>
+                                    </div>
+                                    
+                                    {/* Mismatch warning on deploy button */}
+                                    {hasMismatch && (
+                                        <div className="mb-2 text-xs text-amber-400">
+                                            ⚠️ You're deploying to {apps[deployTarget.appId]?.name} but file appears to be {apps[primaryDetected]?.name}
+                                        </div>
+                                    )}
+                                    
+                                    <button onClick={async () => {
+                                        // Reset completed state when starting new deploy
+                                        setDeployCompleted(false);
+                                        
+                                        // Show confirmation if mismatch detected
+                                        if (hasMismatch) {
+                                            const confirmed = await showConfirm(
+                                                `File detected as ${apps[primaryDetected]?.name} but deploying to ${apps[deployTarget.appId]?.name}. Continue anyway?`,
+                                                'Deploy Mismatch Warning'
+                                            );
+                                            if (confirmed) {
+                                                setIsDeploying(true);
+                                                console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
+                                                onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
+                                                // Always reset to TEST after initiating deploy (safety default)
+                                                setDeployTarget(prev => ({ ...prev, target: 'test' }));
+                                            }
+                                        } else {
+                                            setIsDeploying(true);
+                                            console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
+                                            onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
+                                            // Always reset to TEST after initiating deploy (safety default)
+                                            setDeployTarget(prev => ({ ...prev, target: 'test' }));
+                                        }
+                                    }}
+                                        disabled={!github || isDeploying}
+                                        className={`w-full p-3 rounded font-medium flex items-center justify-center gap-2 transition-all ${
+                                            isDeploying
+                                                ? 'bg-cyan-500 cursor-wait'
+                                                : deployCompleted
+                                                    ? 'bg-orange-500 hover:bg-orange-600'
+                                                    : hasMismatch 
+                                                        ? 'bg-amber-600 hover:bg-amber-700' 
+                                                        : deployTarget.target === 'prod' 
+                                                            ? 'bg-green-600 hover:bg-green-700' 
+                                                            : 'bg-blue-600 hover:bg-blue-700'
+                                        }`}>
+                                        {isDeploying ? (
+                                            <>
+                                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                Deploying...
+                                            </>
+                                        ) : deployCompleted ? (
+                                            <>
+                                                ✓ Deployed! Click to deploy again
+                                            </>
+                                        ) : (
+                                            <>
+                                                {hasMismatch && '⚠️ '}{selectedFiles.length === 1 ? 'Deploy File' : `Batch Deploy ${selectedFiles.length} Files`}
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                                );
+                            })()}
+                            
+                            {/* File List */}
                             <div className="space-y-2">
                                 {stagedFiles.map(f => {
                                     const isHtml = f.name.endsWith('.html');
@@ -3309,127 +3458,14 @@
                                                     return newSet;
                                                 });
                                                 onRemove(f.id); 
-                                            }} className="text-slate-400 hover:text-red-400 self-start">
-                                                <Icons.X />
+                                            }} className="px-2 py-1 text-slate-400 hover:text-white hover:bg-red-600 rounded self-start flex items-center gap-1 transition-colors" title="Remove file">
+                                                <Icons.X /> <span className="text-xs">Remove</span>
                                             </button>
                                         </div>
                                     </div>
                                     );
                                 })}
                             </div>
-                            
-                            {/* Batch Deploy Controls */}
-                            {selectedFiles.length > 0 && (() => {
-                                // Check if selected files have detected apps
-                                const detectedApps = selectedFiles
-                                    .filter(f => f.appDetection)
-                                    .map(f => ({ file: f.name, app: f.suggestedApp, confidence: f.appDetection.confidence }));
-                                
-                                const uniqueDetected = [...new Set(detectedApps.map(d => d.app))];
-                                const primaryDetected = detectedApps.find(d => d.confidence === 'high')?.app || uniqueDetected[0];
-                                
-                                // Check for mismatch
-                                const hasMismatch = primaryDetected && deployTarget.appId !== primaryDetected;
-                                const hasConflict = uniqueDetected.length > 1;
-                                
-                                return (
-                                <div className="mt-4 p-4 bg-slate-900 rounded-lg border border-slate-600">
-                                    <div className="text-sm font-medium mb-3">Deploy {selectedFiles.length} selected file{selectedFiles.length !== 1 ? 's' : ''}</div>
-                                    
-                                    {/* Auto-detected app suggestion */}
-                                    {primaryDetected && !hasConflict && (
-                                        <div className={`mb-3 p-2 rounded text-sm flex items-center justify-between ${
-                                            hasMismatch ? 'bg-amber-900/50 border border-amber-600' : 'bg-green-900/50 border border-green-600'
-                                        }`}>
-                                            <span className="flex items-center gap-2">
-                                                {hasMismatch ? '⚠️' : '🎯'} Detected: <strong className="flex items-center gap-1"><AppIcon icon={apps[primaryDetected]?.icon} size={18} /> {apps[primaryDetected]?.name}</strong>
-                                            </span>
-                                            {hasMismatch && (
-                                                <button 
-                                                    onClick={() => setDeployTarget(p => ({ ...p, appId: primaryDetected }))}
-                                                    className="px-2 py-1 bg-green-700 hover:bg-green-600 rounded text-xs">
-                                                    Use Detected
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-                                    
-                                    {/* Conflict warning */}
-                                    {hasConflict && (
-                                        <div className="mb-3 p-2 bg-red-900/50 border border-red-600 rounded text-sm">
-                                            ⚠️ Multiple apps detected in selection: {uniqueDetected.map(a => apps[a]?.name).join(', ')}
-                                        </div>
-                                    )}
-                                    
-                                    <div className="grid grid-cols-2 gap-3 mb-3">
-                                        <select value={deployTarget.appId} onChange={e => setDeployTarget(p => ({ ...p, appId: e.target.value }))}
-                                            className={`p-2 border rounded text-sm ${
-                                                hasMismatch 
-                                                    ? 'bg-amber-900 border-amber-500' 
-                                                    : 'bg-slate-700 border-slate-600'
-                                            }`}>
-                                            {Object.values(apps).map(a => <option key={a.id} value={a.id}>{getAppEmoji(a.icon)} {a.name}</option>)}
-                                        </select>
-                                        <select value={deployTarget.target} onChange={e => setDeployTarget(p => ({ ...p, target: e.target.value }))}
-                                            className="p-2 bg-slate-700 border border-slate-600 rounded text-sm">
-                                            <option value="test">🧪 TEST</option>
-                                            <option value="prod">🚀 PROD</option>
-                                        </select>
-                                    </div>
-                                    
-                                    {/* Mismatch warning on deploy button */}
-                                    {hasMismatch && (
-                                        <div className="mb-2 text-xs text-amber-400">
-                                            ⚠️ You're deploying to {apps[deployTarget.appId]?.name} but file appears to be {apps[primaryDetected]?.name}
-                                        </div>
-                                    )}
-                                    
-                                    <button onClick={async () => {
-                                        // Show confirmation if mismatch detected
-                                        if (hasMismatch) {
-                                            const confirmed = await showConfirm(
-                                                `File detected as ${apps[primaryDetected]?.name} but deploying to ${apps[deployTarget.appId]?.name}. Continue anyway?`,
-                                                'Deploy Mismatch Warning'
-                                            );
-                                            if (confirmed) {
-                                                setIsDeploying(true);
-                                                console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
-                                                onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
-                                                // Always reset to TEST after initiating deploy (safety default)
-                                                setDeployTarget(prev => ({ ...prev, target: 'test' }));
-                                            }
-                                        } else {
-                                            setIsDeploying(true);
-                                            console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
-                                            onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
-                                            // Always reset to TEST after initiating deploy (safety default)
-                                            setDeployTarget(prev => ({ ...prev, target: 'test' }));
-                                        }
-                                    }}
-                                        disabled={!github || isDeploying}
-                                        className={`w-full p-3 rounded font-medium flex items-center justify-center gap-2 transition-all ${
-                                            isDeploying
-                                                ? 'bg-cyan-500 cursor-wait'
-                                                : hasMismatch 
-                                                    ? 'bg-amber-600 hover:bg-amber-700' 
-                                                    : deployTarget.target === 'prod' 
-                                                        ? 'bg-green-600 hover:bg-green-700' 
-                                                        : 'bg-blue-600 hover:bg-blue-700'
-                                        }`}>
-                                        {isDeploying ? (
-                                            <>
-                                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                Deploying...
-                                            </>
-                                        ) : (
-                                            <>
-                                                {hasMismatch && '⚠️ '}{selectedFiles.length === 1 ? 'Deploy File' : `Batch Deploy ${selectedFiles.length} Files`}
-                                            </>
-                                        )}
-                                    </button>
-                                </div>
-                                );
-                            })()}
                         </div>
                     )}
                     
@@ -3813,7 +3849,7 @@
     // REPO FILES VIEW
     // =========================================================================
     
-    function RepoFilesView({ apps, github, repoFiles, onLoadRepo, selectedRepo, onSelectRepo, markedForDeletion, setMarkedForDeletion, onDeleteMarked }) {
+    function RepoFilesView({ apps, github, repoFiles, onLoadRepo, selectedRepo, onSelectRepo, markedForDeletion, setMarkedForDeletion, onDeleteMarked, showAlert }) {
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
         const allRepos = [...new Set(configuredApps.flatMap(a => [a.testRepo, a.prodRepo].filter(Boolean)))];
         
@@ -3832,6 +3868,259 @@
         };
         
         const isMarked = (file) => markedForDeletion.some(m => m.repo === selectedRepo && m.path === file.path);
+        
+        // Download file to user's Downloads folder
+        const downloadFile = async (file) => {
+            try {
+                // Fetch the raw file content
+                const response = await fetch(file.download_url);
+                const blob = await response.blob();
+                
+                // Create download link
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = file.name; // Forces download with filename
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                console.error('Download failed:', err);
+                showAlert('Download failed: ' + err.message, 'Download Error');
+            }
+        };
+        
+        // Download entire repo as deploy package zip
+        const [downloadingPackage, setDownloadingPackage] = React.useState(false);
+        
+        const downloadDeployPackage = async () => {
+            if (!selectedRepo || !github) return;
+            
+            setDownloadingPackage(true);
+            try {
+                // Get app info for naming
+                const app = configuredApps.find(a => a.testRepo === selectedRepo || a.prodRepo === selectedRepo);
+                const isTest = app?.testRepo === selectedRepo;
+                
+                // Files/patterns to EXCLUDE from deploy packages (backup/rollback files)
+                const excludePatterns = [
+                    /^old\d*\.html$/i,           // old1.html, old2.html, etc.
+                    /^old\d*\.index\.html$/i,    // old1.index.html, etc.
+                    /^backup/i,                   // backup* files
+                    /^\.git/,                     // .git files
+                    /^\.DS_Store$/,               // macOS files
+                    /^Thumbs\.db$/,               // Windows files
+                ];
+                
+                const shouldExclude = (filename) => {
+                    return excludePatterns.some(pattern => pattern.test(filename));
+                };
+                
+                // Recursively fetch all files from repo
+                const fetchAllFiles = async (path = '') => {
+                    const contents = await github.listRepoContents(selectedRepo, path);
+                    let files = [];
+                    
+                    for (const item of contents) {
+                        if (item.type === 'file') {
+                            // Filter out backup/old files
+                            if (!shouldExclude(item.name)) {
+                                files.push(item);
+                            }
+                        } else if (item.type === 'dir') {
+                            const subFiles = await fetchAllFiles(item.path);
+                            files = files.concat(subFiles);
+                        }
+                    }
+                    return files;
+                };
+                
+                const allFiles = await fetchAllFiles();
+                
+                // Get version from index.html if present
+                let version = 'unknown';
+                const indexFile = allFiles.find(f => f.name === 'index.html');
+                if (indexFile) {
+                    try {
+                        const indexContent = await github.getFile(selectedRepo, 'index.html');
+                        if (indexContent) {
+                            const content = decodeURIComponent(escape(atob(indexContent.content)));
+                            version = extractVersionFromHTML(content) || 'unknown';
+                        }
+                    } catch (e) {
+                        console.warn('Could not extract version:', e);
+                    }
+                }
+                
+                // Create zip
+                const zip = new JSZip();
+                
+                for (const file of allFiles) {
+                    try {
+                        const response = await fetch(file.download_url);
+                        const blob = await response.blob();
+                        zip.file(file.path, blob);
+                    } catch (e) {
+                        console.warn(`Failed to fetch ${file.path}:`, e);
+                    }
+                }
+                
+                // Generate zip and download
+                const repoName = selectedRepo.split('/')[1];
+                const versionStr = version.replace(/\./g, '_');
+                const filename = `${repoName}-deploy-v${versionStr}.zip`;
+                
+                const content = await zip.generateAsync({ type: 'blob' });
+                const url = URL.createObjectURL(content);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                setDownloadingPackage(false);
+            } catch (err) {
+                console.error('Deploy package download failed:', err);
+                showAlert('Deploy package download failed: ' + err.message, 'Download Error');
+                setDownloadingPackage(false);
+            }
+        };
+        
+        // ============ REPO CLEANUP ============
+        // Identifies and removes files not part of the deployment package
+        const [cleanupModal, setCleanupModal] = React.useState(null);
+        const [cleanupDeleting, setCleanupDeleting] = React.useState(false);
+        
+        // Files that SHOULD be in a deployment
+        const DEPLOYMENT_FILES = [
+            'index.html',
+            'sw.js',
+            'manifest.json',
+            'manifest-test.json',   // Game Shelf test builds
+            'RELEASE_NOTES.txt',
+        ];
+        
+        // Folders that SHOULD be in a deployment
+        const DEPLOYMENT_FOLDERS = [
+            'icons',
+            'icons-test',           // Game Shelf test builds
+        ];
+        
+        // Patterns that are definitely stale/cleanup candidates
+        const STALE_PATTERNS = [
+            /^old\d*\.html$/i,           // old1.html, old2.html
+            /^old\d*\.index\.html$/i,    // old6.index.html
+            /^backup.*$/i,               // backup* files
+            /\.bak$/i,                   // .bak files
+            /^test.*\.html$/i,           // test*.html files (not in a test folder)
+            /^copy.*\.html$/i,           // copy*.html files
+            /^\._/,                      // macOS resource forks
+            /\.orig$/i,                  // .orig backup files
+        ];
+        
+        const isDeploymentFile = (path) => {
+            // Check if it's a known deployment file
+            if (DEPLOYMENT_FILES.includes(path)) return true;
+            
+            // Check if it's in a deployment folder
+            for (const folder of DEPLOYMENT_FOLDERS) {
+                if (path.startsWith(folder + '/')) return true;
+            }
+            
+            // Hidden files like .git are handled separately
+            if (path.startsWith('.')) return false;
+            
+            return false;
+        };
+        
+        const isDefinitelyStale = (filename) => {
+            return STALE_PATTERNS.some(pattern => pattern.test(filename));
+        };
+        
+        const scanForCleanup = async () => {
+            if (!selectedRepo || !github || !currentFiles.length) {
+                showAlert('Please select a repo and load its files first', 'No Files');
+                return;
+            }
+            
+            // Categorize files
+            const staleFiles = [];
+            const unknownFiles = [];
+            const deployFiles = [];
+            
+            for (const file of currentFiles) {
+                const path = file.path;
+                const filename = file.name;
+                
+                if (isDeploymentFile(path)) {
+                    deployFiles.push(file);
+                } else if (isDefinitelyStale(filename)) {
+                    staleFiles.push({ ...file, autoChecked: true });
+                } else if (!path.startsWith('.git')) {
+                    // Unknown file - not deployment, not obviously stale
+                    unknownFiles.push({ ...file, autoChecked: false });
+                }
+            }
+            
+            const candidates = [...staleFiles, ...unknownFiles];
+            
+            if (candidates.length === 0) {
+                showAlert('✓ Repository is clean! No stale files found.', 'All Clean');
+                return;
+            }
+            
+            setCleanupModal({
+                candidates,
+                selected: new Set(staleFiles.map(f => f.path)),
+                deployCount: deployFiles.length
+            });
+        };
+        
+        const toggleCleanupFile = (path) => {
+            setCleanupModal(prev => {
+                const newSelected = new Set(prev.selected);
+                if (newSelected.has(path)) {
+                    newSelected.delete(path);
+                } else {
+                    newSelected.add(path);
+                }
+                return { ...prev, selected: newSelected };
+            });
+        };
+        
+        const executeCleanup = async () => {
+            if (!cleanupModal?.selected?.size) return;
+            
+            setCleanupDeleting(true);
+            
+            const toDelete = cleanupModal.candidates.filter(f => cleanupModal.selected.has(f.path));
+            let deleted = 0;
+            let errors = [];
+            
+            for (const file of toDelete) {
+                try {
+                    await github.deleteFile(selectedRepo, file.path, file.sha, `Cleanup: Remove ${file.name}`);
+                    deleted++;
+                } catch (err) {
+                    errors.push(`${file.name}: ${err.message}`);
+                }
+            }
+            
+            setCleanupDeleting(false);
+            setCleanupModal(null);
+            
+            // Refresh file list
+            onLoadRepo(selectedRepo);
+            
+            if (errors.length > 0) {
+                showAlert(`Deleted ${deleted} files.\n\nErrors:\n${errors.join('\n')}`, 'Cleanup Partial');
+            } else {
+                showAlert(`✓ Successfully deleted ${deleted} files from ${selectedRepo}`, 'Cleanup Complete');
+            }
+        };
         
         const handleVersionAudit = async () => {
             if (!github || !selectedRepo) return;
@@ -3884,7 +4173,7 @@
                     </div>
                     
                     {selectedRepo && (
-                        <div className="flex gap-2 mb-4">
+                        <div className="flex gap-2 mb-4 flex-wrap">
                             <a href={getGitHubPagesUrl(selectedRepo)} target="_blank" 
                                 className="px-3 py-1.5 bg-indigo-600 rounded text-sm flex items-center gap-1">
                                 <Icons.Play /> Open Site
@@ -3896,6 +4185,18 @@
                             <button onClick={handleVersionAudit}
                                 className="px-3 py-1.5 bg-amber-700 rounded text-sm flex items-center gap-1">
                                 🔍 Version Audit
+                            </button>
+                            <button onClick={downloadDeployPackage} disabled={downloadingPackage}
+                                className="px-3 py-1.5 bg-green-700 hover:bg-green-600 disabled:bg-green-900 disabled:cursor-wait rounded text-sm flex items-center gap-1">
+                                {downloadingPackage ? (
+                                    <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> Creating...</>
+                                ) : (
+                                    <><Icons.Download /> Download Package</>
+                                )}
+                            </button>
+                            <button onClick={scanForCleanup}
+                                className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 rounded text-sm flex items-center gap-1">
+                                🧹 Cleanup
                             </button>
                         </div>
                     )}
@@ -3975,9 +4276,9 @@
                                         <a href={file.download_url} target="_blank" className="p-1 hover:bg-slate-600 rounded" title="View">
                                             <Icons.Eye />
                                         </a>
-                                        <a href={file.download_url} download className="p-1 hover:bg-slate-600 rounded" title="Download">
+                                        <button onClick={() => downloadFile(file)} className="p-1 hover:bg-slate-600 rounded" title="Download">
                                             <Icons.Download />
-                                        </a>
+                                        </button>
                                         <button onClick={() => toggleMarkForDeletion(file)} 
                                             className={`p-1 rounded ${isMarked(file) ? 'bg-red-600 text-white' : 'hover:bg-red-900/50 text-slate-400 hover:text-red-400'}`}
                                             title={isMarked(file) ? 'Unmark' : 'Mark for deletion'}>
@@ -4019,6 +4320,73 @@
                         </div>
                     </div>
                 )}
+                
+                {/* Cleanup Modal */}
+                {cleanupModal && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                        <div className="bg-slate-800 rounded-xl border border-slate-600 max-w-lg w-full max-h-[80vh] flex flex-col">
+                            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+                                <h2 className="text-lg font-semibold flex items-center gap-2">
+                                    🧹 Cleanup {selectedRepo?.split('/')[1]}
+                                </h2>
+                                <button onClick={() => setCleanupModal(null)} className="text-slate-400 hover:text-white">
+                                    <Icons.X />
+                                </button>
+                            </div>
+                            
+                            <div className="p-4 overflow-y-auto flex-1">
+                                <p className="text-sm text-slate-400 mb-3">
+                                    Found {cleanupModal.candidates.length} files not in deployment package. 
+                                    <span className="text-green-400 ml-1">({cleanupModal.deployCount} deployment files OK)</span>
+                                </p>
+                                
+                                <div className="space-y-1">
+                                    {cleanupModal.candidates.map((file, i) => (
+                                        <label key={i} className={`flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-slate-700/50 ${file.autoChecked ? 'bg-red-900/20' : ''}`}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={cleanupModal.selected.has(file.path)}
+                                                onChange={() => toggleCleanupFile(file.path)}
+                                                className="w-4 h-4 rounded"
+                                            />
+                                            <span className={`flex-1 text-sm ${file.autoChecked ? 'text-red-300' : 'text-slate-300'}`}>
+                                                {file.path}
+                                            </span>
+                                            <span className="text-xs text-slate-500">
+                                                {(file.size / 1024).toFixed(1)}KB
+                                            </span>
+                                            {file.autoChecked && (
+                                                <span className="text-xs bg-red-900 text-red-300 px-1.5 py-0.5 rounded">stale</span>
+                                            )}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div className="p-4 border-t border-slate-700 flex items-center justify-between">
+                                <div className="text-sm text-slate-400">
+                                    {cleanupModal.selected.size} of {cleanupModal.candidates.length} selected
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setCleanupModal(null)} className="px-4 py-2 bg-slate-700 rounded">
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        onClick={executeCleanup} 
+                                        disabled={cleanupModal.selected.size === 0 || cleanupDeleting}
+                                        className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed rounded flex items-center gap-2"
+                                    >
+                                        {cleanupDeleting ? (
+                                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Deleting...</>
+                                        ) : (
+                                            <><Icons.Trash /> Delete {cleanupModal.selected.size} Files</>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
@@ -4027,7 +4395,7 @@
     // FIREBASE VIEW
     // =========================================================================
     
-    function FirebaseView() {
+    function FirebaseView({ showAlert, showConfirm, showPrompt }) {
         const [user, setUser] = React.useState(null);
         const [authLoading, setAuthLoading] = React.useState(true);
         const [dbPath, setDbPath] = React.useState('');
@@ -4093,7 +4461,7 @@
         
         const signInWithGoogle = async () => {
             if (isFileProtocol) {
-                alert('Google Sign-in requires HTTPS. Please open this app from GitHub Pages or a web server.\n\nOr use the "Manual UID" option below for read-only access to public data.');
+                showAlert('Google Sign-in requires HTTPS. Please open this app from GitHub Pages or a web server.\n\nOr use the "Manual UID" option below for read-only access to public data.', 'HTTPS Required');
                 return;
             }
             
@@ -4103,9 +4471,9 @@
             } catch (e) {
                 console.error('Sign in error:', e);
                 if (e.code === 'auth/operation-not-supported-in-this-environment') {
-                    alert('Google Sign-in not supported here. Please:\n\n1. Open from GitHub Pages URL, or\n2. Use "Manual UID" for limited access');
+                    showAlert('Google Sign-in not supported here. Please:\n\n1. Open from GitHub Pages URL, or\n2. Use "Manual UID" for limited access', 'Sign-in Not Supported');
                 } else {
-                    alert('Sign in failed: ' + e.message);
+                    showAlert('Sign in failed: ' + e.message, 'Sign-in Error');
                 }
             }
         };
@@ -4189,19 +4557,20 @@
                 setEditingPath(null);
                 fetchData(dbPath);
             } catch (e) {
-                alert('Update failed: ' + e.message);
+                showAlert('Update failed: ' + e.message, 'Update Error');
             }
         };
         
         const deleteValue = async (path) => {
             if (!firebaseDb) return;
-            if (!confirm(`Delete data at "${path}"?`)) return;
+            const confirmed = await showConfirm(`Delete data at "${path}"?`, 'Confirm Delete');
+            if (!confirmed) return;
             
             try {
                 await firebaseDb.ref(path).remove();
                 fetchData(dbPath);
             } catch (e) {
-                alert('Delete failed: ' + e.message);
+                showAlert('Delete failed: ' + e.message, 'Delete Error');
             }
         };
         
@@ -4399,7 +4768,7 @@
                                 />
                                 <button onClick={() => {
                                     try { localStorage.setItem('cc_firebase_uid', manualUid); } catch {}
-                                    alert('UID saved. You can now query public data paths.');
+                                    showAlert('UID saved. You can now query public data paths.', 'UID Saved');
                                 }} className="px-4 py-2 bg-indigo-600 rounded">
                                     Save
                                 </button>
@@ -4587,7 +4956,7 @@
     // SESSION LOG VIEW
     // =========================================================================
     
-    function SessionLogView({ apps, sessionLog, setSessionLog, deployments, github, onFileDrop }) {
+    function SessionLogView({ apps, sessionLog, setSessionLog, deployments, github, onFileDrop, showAlert }) {
         const [newEntry, setNewEntry] = React.useState('');
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         const [syncStatus, setSyncStatus] = React.useState('local');
@@ -4637,7 +5006,7 @@
         // Accept pending deploy
         const acceptPendingDeploy = async (deploy) => {
             if (!github) {
-                alert('Configure GitHub token first');
+                showAlert('Configure GitHub token first', 'Configuration Required');
                 return;
             }
             
@@ -4693,7 +5062,7 @@
         // Upload gs-active.zip to Firebase
         const uploadProjectFile = async (file) => {
             if (!firebaseDb || !firebaseUser) {
-                alert('Please sign in via the Firebase tab first');
+                showAlert('Please sign in via the Firebase tab first', 'Sign-in Required');
                 return;
             }
             
@@ -4724,7 +5093,7 @@
                 reader.readAsDataURL(file);
             } catch (e) {
                 console.error('Upload error:', e);
-                alert('Upload failed: ' + e.message);
+                showAlert('Upload failed: ' + e.message, 'Upload Error');
                 setUploading(false);
             }
         };
@@ -4732,7 +5101,7 @@
         // Download gs-active.zip from Firebase
         const downloadProjectFile = async () => {
             if (!firebaseDb || !firebaseUser) {
-                alert('Please sign in via the Firebase tab first');
+                showAlert('Please sign in via the Firebase tab first', 'Sign-in Required');
                 return;
             }
             
@@ -4742,7 +5111,7 @@
                 const data = snapshot.val();
                 
                 if (!data || !data.data) {
-                    alert('No project file found. Upload one first!');
+                    showAlert('No project file found. Upload one first!', 'File Not Found');
                     setDownloading(false);
                     return;
                 }
@@ -4768,7 +5137,7 @@
                 setDownloading(false);
             } catch (e) {
                 console.error('Download error:', e);
-                alert('Download failed: ' + e.message);
+                showAlert('Download failed: ' + e.message, 'Download Error');
                 setDownloading(false);
             }
         };
@@ -4788,7 +5157,7 @@
             if (file && (file.name.endsWith('.zip') || file.name === 'gs-active.zip')) {
                 uploadProjectFile(file);
             } else if (file) {
-                alert('Please upload a .zip file (gs-active.zip)');
+                showAlert('Please upload a .zip file (gs-active.zip)', 'Invalid File');
             }
         };
         
@@ -5212,7 +5581,7 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
     // ISSUES VIEW - Full Issue Tracking & Release Management
     // =========================================================================
     
-    function IssuesView({ apps, deployments }) {
+    function IssuesView({ apps, deployments, showAlert, showConfirm, showPrompt }) {
         const [issues, setIssues] = React.useState([]);
         const [releases, setReleases] = React.useState([]);
         const [userReports, setUserReports] = React.useState([]);
@@ -5446,7 +5815,7 @@ Released: ${new Date().toLocaleDateString()}
             
             // Copy release notes
             navigator.clipboard.writeText(generateReleaseNotes(app));
-            alert('Release notes copied to clipboard!');
+            showAlert('Release notes copied to clipboard!', 'Copied');
         };
         
         // Convert user report to tracked issue
@@ -5501,7 +5870,8 @@ Released: ${new Date().toLocaleDateString()}
         // Delete user report permanently
         const deleteUserReport = async (report) => {
             if (!firebaseDb) return;
-            if (!confirm('Permanently delete this report?')) return;
+            const confirmed = await showConfirm('Permanently delete this report?', 'Confirm Delete');
+            if (!confirmed) return;
             
             await firebaseDb.ref(`reported-issues/${report.firebaseKey}`).remove();
         };
@@ -5888,8 +6258,8 @@ Released: ${new Date().toLocaleDateString()}
                                     )}
                                     {(issue.status === 'open' || issue.status === 'in-progress') && (
                                         <button
-                                            onClick={() => {
-                                                const version = prompt('Fixed in version:');
+                                            onClick={async () => {
+                                                const version = await showPrompt('Fixed in version:', '', 'Enter Version');
                                                 if (version) linkIssueToVersion(issue.id, version, issue.app);
                                             }}
                                             className="px-2 py-1 bg-blue-700 hover:bg-blue-600 rounded text-xs">
