@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.2.12">
+    <meta name="version" content="8.3.2">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,7 +27,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.2.12 starting...');
+    console.log('Command Center v8.3.2 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -298,7 +298,7 @@
         icons: { dev: '🛠️', test: '🧪', prod: '🚀', beta: '🔬' }
     };
     
-    // App type categories (v8.2.12)
+    // App type categories (v8.3.2)
     const APP_TYPES = {
         public: { label: 'Public Apps', description: 'User-facing apps with Test → Prod workflow', collapsed: false },
         internal: { label: 'Internal Tools', description: 'Prod only - no test environment', collapsed: false },
@@ -629,14 +629,14 @@
                     id: app.id,
                     name: app.name,
                     icon: app.icon,
-                    appType: app.appType || 'public',  // v8.2.12: App category
+                    appType: app.appType || 'public',  // v8.3.2: App category
                     targetPath: app.targetPath,
                     subPath: app.subPath || '',
                     swPath: app.swPath,
                     hasServiceWorker: app.hasServiceWorker,
                     repoPatterns: app.repoPatterns,
                     detectionPatterns: app.detectionPatterns,
-                    deployType: app.deployType || null,  // v8.2.12: For GitHub Actions deploys
+                    deployType: app.deployType || null,  // v8.3.2: For GitHub Actions deploys
                     // Legacy format fields
                     testRepo: app.repos?.test || '',
                     prodRepo: app.repos?.prod || '',
@@ -1477,16 +1477,27 @@
     
     function App() {
         const [view, setView] = React.useState('dashboard');
+        const [pendingGsActiveFile, setPendingGsActiveFile] = React.useState(null); // For passing gs-active zip to Smart Deploy
         const [githubToken, setGithubToken] = React.useState(() => {
             try { return localStorage.getItem('cc_token') || ''; } catch { return ''; }
         });
         
-        // Token expiration tracking (v8.2.12)
+        // Token expiration tracking (v8.3.2)
         const tokenExpires = React.useMemo(() => {
             try { return localStorage.getItem('cc_token_expires') || ''; } catch { return ''; }
         }, [githubToken]);
         const daysUntilExpiry = tokenExpires ? Math.ceil((new Date(tokenExpires) - new Date()) / (1000 * 60 * 60 * 24)) : null;
         const tokenExpiryWarning = githubToken && daysUntilExpiry !== null && daysUntilExpiry <= 14;
+        
+        // v8.3.2: File protocol detection for local file warning
+        const isFileProtocol = window.location.protocol === 'file:';
+        const [fileProtocolBannerDismissed, setFileProtocolBannerDismissed] = React.useState(() => {
+            try { return sessionStorage.getItem('cc_file_banner_dismissed') === 'true'; } catch { return false; }
+        });
+        const dismissFileProtocolBanner = () => {
+            setFileProtocolBannerDismissed(true);
+            try { sessionStorage.setItem('cc_file_banner_dismissed', 'true'); } catch {}
+        };
         
         // Dynamic configuration (v7.0.0)
         const [config, setConfig] = React.useState(() => {
@@ -1514,8 +1525,67 @@
         const [deployments, setDeployments] = React.useState(() => {
             try { const s = localStorage.getItem('cc_history_v2'); return s ? JSON.parse(s) : []; } catch { return []; }
         });
-        const [activeDeployment, setActiveDeployment] = React.useState(null);
+        const [activeDeployments, setActiveDeployments] = React.useState([]);
         const [availableRepos, setAvailableRepos] = React.useState([]);
+        
+        // Helper functions for managing multiple deployments
+        const addActiveDeployment = (deployment) => {
+            setActiveDeployments(prev => [deployment, ...prev]);
+        };
+        
+        const updateActiveDeployment = (deploymentId, updates) => {
+            setActiveDeployments(prev => prev.map(d => 
+                d.id === deploymentId ? { ...d, ...updates } : d
+            ));
+        };
+        
+        const removeActiveDeployment = (deploymentId) => {
+            setActiveDeployments(prev => prev.filter(d => d.id !== deploymentId));
+        };
+        
+        // Auto-close successful deployments after delay
+        const scheduleAutoClose = (deploymentId, delayMs = 4000) => {
+            setTimeout(() => {
+                setActiveDeployments(prev => {
+                    const deployment = prev.find(d => d.id === deploymentId);
+                    // Only auto-close if still success (not changed to error)
+                    if (deployment && deployment.status === 'success') {
+                        return prev.filter(d => d.id !== deploymentId);
+                    }
+                    return prev;
+                });
+            }, delayMs);
+        };
+        
+        // Compatibility: Create setActiveDeployment that updates/adds to array
+        // This allows existing code to work while supporting multiple deployments
+        const setActiveDeployment = (deploymentOrNull) => {
+            if (deploymentOrNull === null) {
+                // Clear all (legacy behavior - now we auto-close instead)
+                return;
+            }
+            
+            setActiveDeployments(prev => {
+                const existing = prev.find(d => d.id === deploymentOrNull.id);
+                if (existing) {
+                    // Update existing
+                    const updated = prev.map(d => d.id === deploymentOrNull.id ? deploymentOrNull : d);
+                    
+                    // Schedule auto-close if just became success
+                    if (deploymentOrNull.status === 'success' && existing.status !== 'success') {
+                        scheduleAutoClose(deploymentOrNull.id);
+                    }
+                    
+                    return updated;
+                } else {
+                    // Add new
+                    return [deploymentOrNull, ...prev];
+                }
+            });
+        };
+        
+        // Get most recent active deployment (for legacy code that expects single)
+        const activeDeployment = activeDeployments[0] || null;
         const [modal, setModal] = React.useState(null);
         const [dialog, setDialog] = React.useState(null); // { type: 'alert'|'confirm'|'prompt', title, message, defaultValue, onConfirm, onCancel }
         const [settings, setSettings] = React.useState({ createTag: true, updateServiceWorker: true });
@@ -1812,7 +1882,7 @@
                             console.log(`=== DEPLOYMENT COMPLETE! Version ${liveVersion} is live ===`);
                             onUpdate('complete', `v${liveVersion} is LIVE! (${elapsed}s)`);
                             
-                            // v8.2.12: Ensure indicator shows for at least 2 seconds
+                            // v8.3.2: Ensure indicator shows for at least 2 seconds
                             const minDisplayMs = 2000;
                             const elapsedMs = Date.now() - startTime;
                             const remainingMs = Math.max(0, minDisplayMs - elapsedMs);
@@ -2005,14 +2075,38 @@
                     
                     try {
                         const zip = await JSZip.loadAsync(file);
+                        
+                        // Check if this is a gs-active archive
+                        const allPaths = [];
+                        zip.forEach((path) => { allPaths.push(path); });
+                        
+                        // Detect gs-active structure: has gs-active/ folder with known app folders inside
+                        const gsActiveApps = ['gameshelf', 'quotle', 'slate', 'rungs', 'wordboxing', 'beta', 'command-center'];
+                        const isGsActive = allPaths.some(p => p.startsWith('gs-active/')) && 
+                            gsActiveApps.some(app => allPaths.some(p => p.includes(`gs-active/${app}/`) || p.includes(`/${app}/index.html`)));
+                        
+                        if (isGsActive) {
+                            const useSmartDeploy = await showConfirm(
+                                'This looks like a gs-active archive with multiple apps.\n\nWould you like to open Smart Deploy for version comparison and selective deployment?',
+                                '📦 gs-active Archive Detected'
+                            );
+                            
+                            if (useSmartDeploy) {
+                                // Store the file for Smart Deploy to pick up
+                                setPendingGsActiveFile(file);
+                                setView('smartdeploy');
+                                return;
+                            }
+                            // If user says no, continue with normal extraction below
+                        }
+                        
                         let primaryApp = null;
                         let primaryVersion = null;
                         
                         // Detect if ZIP has a root folder (common in downloads)
-                        const allPaths = [];
-                        zip.forEach((path) => { if (!path.endsWith('/')) allPaths.push(path); });
-                        const hasRootFolder = allPaths.length > 0 && allPaths.every(p => p.includes('/'));
-                        const rootFolder = hasRootFolder ? allPaths[0].split('/')[0] + '/' : '';
+                        const hasRootFolder = allPaths.filter(p => !p.endsWith('/')).length > 0 && 
+                            allPaths.filter(p => !p.endsWith('/')).every(p => p.includes('/'));
+                        const rootFolder = hasRootFolder ? allPaths.find(p => !p.endsWith('/'))?.split('/')[0] + '/' : '';
                         
                         const extractPromises = [];
                         zip.forEach((relativePath, zipEntry) => {
@@ -2463,7 +2557,7 @@
             setActiveDeployment(deployment);
             setDeployments(prev => [deployment, ...prev]);
             
-            // v8.2.12: Set deploying indicator immediately when deploy starts
+            // v8.3.2: Set deploying indicator immediately when deploy starts
             setDeployingRepos(prev => ({ ...prev, [repo]: { version: newVersion, startTime: Date.now() } }));
             
             const addStep = (name, status, details = null) => {
@@ -2612,7 +2706,7 @@
                 addStep('Error', 'error', error.message);
                 console.error('Batch deployment failed:', error);
                 
-                // v8.2.12: Clear deploying indicator on failure
+                // v8.3.2: Clear deploying indicator on failure
                 setDeployingRepos(prev => {
                     const next = { ...prev };
                     delete next[repo];
@@ -3014,7 +3108,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.2.12 • App categories with full features</div>
+                                    <div className="text-xs text-slate-400">v8.3.2 • Local file warning banner</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -3025,7 +3119,7 @@
                                 </button>
                                 {/* Consolidated Navigation - 4 main sections */}
                                 {[
-                                    { id: 'deploy', icon: '🚀', label: 'Deploy', views: ['dashboard', 'history'] },
+                                    { id: 'deploy', icon: '🚀', label: 'Deploy', views: ['dashboard', 'smartdeploy', 'history'] },
                                     { id: 'monitor', icon: '📊', label: 'Monitor', views: ['firebase', 'integrations', 'issues'] },
                                     { id: 'maintain', icon: '🔧', label: 'Maintain', views: ['cleanup', 'files', 'archive', 'session'] },
                                     { id: 'configure', icon: '⚙️', label: 'Configure', views: ['config', 'apps', 'settings'] }
@@ -3050,6 +3144,7 @@
                                                     }`}
                                                 >
                                                     {v === 'dashboard' && '📋 Dashboard'}
+                                                    {v === 'smartdeploy' && '📦 Smart Deploy'}
                                                     {v === 'history' && '📜 Deploy History'}
                                                     {v === 'firebase' && '🔥 Firebase'}
                                                     {v === 'integrations' && '⚡ Integrations'}
@@ -3106,6 +3201,12 @@
                             
                             {/* Status indicators */}
                             <div className="ml-auto flex items-center gap-3 text-xs">
+                                {isFileProtocol && (
+                                    <span className="flex items-center gap-1 text-blue-400" title="Running from local file - some features limited">
+                                        <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                                        Local
+                                    </span>
+                                )}
                                 <span className={`flex items-center gap-1 ${github ? 'text-green-400' : 'text-red-400'}`}>
                                     <span className={`w-2 h-2 rounded-full ${github ? 'bg-green-400' : 'bg-red-400'}`}></span>
                                     GitHub
@@ -3147,6 +3248,34 @@
                         </div>
                     )}
                     
+                    {/* v8.3.2: Local file protocol warning */}
+                    {isFileProtocol && !fileProtocolBannerDismissed && (
+                        <div className="mb-6 p-4 rounded-lg border bg-blue-900/30 border-blue-700 text-blue-200">
+                            <div className="flex items-start justify-between gap-4">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className="text-lg">🌐</span>
+                                        <strong>Running Locally</strong>
+                                    </div>
+                                    <p className="text-sm text-blue-300">
+                                        Some features require HTTPS (Google Auth, Firebase sync). 
+                                        For full functionality, use the deployed version at{' '}
+                                        <a href="https://stewartdavidp-ship-it.github.io/managementprod/" 
+                                            target="_blank" 
+                                            className="underline text-blue-200 hover:text-white">
+                                            Command Center on GitHub Pages
+                                        </a>
+                                    </p>
+                                </div>
+                                <button 
+                                    onClick={dismissFileProtocolBanner}
+                                    className="px-2 py-1 bg-slate-700 rounded text-xs hover:bg-slate-600 text-slate-300">
+                                    Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    
                     {view === 'dashboard' && (
                         <DashboardView
                             apps={apps} stagedFiles={stagedFiles} github={github}
@@ -3159,8 +3288,8 @@
                                 console.log('[Promote Modal] prodRepo:', apps[id]?.prodRepo);
                                 setModal({ type: 'promote', data: { appId: id } });
                             }}
-                            activeDeployment={activeDeployment}
-                            setActiveDeployment={setActiveDeployment}
+                            activeDeployments={activeDeployments}
+                            removeActiveDeployment={removeActiveDeployment}
                             refreshing={refreshing}
                             onUpdateStagedFile={updateStagedFile}
                             deployingRepos={deployingRepos}
@@ -3225,6 +3354,21 @@
                         <HistoryView 
                             deployments={deployments} apps={apps}
                             onRollback={(d) => setModal({ type: 'rollback', data: d })}
+                        />
+                    )}
+                    
+                    {view === 'smartdeploy' && (
+                        <SmartDeployView
+                            apps={apps}
+                            github={github}
+                            onDeploy={handleDeploy}
+                            onBatchDeploy={handleBatchDeploy}
+                            showAlert={showAlert}
+                            showConfirm={showConfirm}
+                            activeDeployments={activeDeployments}
+                            removeActiveDeployment={removeActiveDeployment}
+                            pendingFile={pendingGsActiveFile}
+                            clearPendingFile={() => setPendingGsActiveFile(null)}
                         />
                     )}
                     
@@ -3919,15 +4063,18 @@
     // DASHBOARD VIEW
     // =========================================================================
     
-    function DashboardView({ apps, stagedFiles, github, onFileDrop, onRemove, onDeploy, onBatchDeploy, onPromote, activeDeployment, setActiveDeployment, refreshing, onUpdateStagedFile, deployingRepos, showConfirm, showAlert, showPrompt, globalIssues, linkIssuesToVersion, setView, rollbackSnapshots, onQuickRollback }) {
+    function DashboardView({ apps, stagedFiles, github, onFileDrop, onRemove, onDeploy, onBatchDeploy, onPromote, activeDeployments, removeActiveDeployment, refreshing, onUpdateStagedFile, deployingRepos, showConfirm, showAlert, showPrompt, globalIssues, linkIssuesToVersion, setView, rollbackSnapshots, onQuickRollback }) {
         const [selectedFileIds, setSelectedFileIds] = React.useState(new Set());
         const [deployTarget, setDeployTarget] = React.useState({ appId: 'management', target: 'test' });
         const [isDeploying, setIsDeploying] = React.useState(false);
         const [deployCompleted, setDeployCompleted] = React.useState(false);
         const [lastCompletedDeployId, setLastCompletedDeployId] = React.useState(null);
-        const [otherCollapsed, setOtherCollapsed] = React.useState(true); // v8.2.12: Collapse "Other" by default
+        const [otherCollapsed, setOtherCollapsed] = React.useState(true); // v8.3.2: Collapse "Other" by default
         
-        // v8.2.12: Group apps by type
+        // Compatibility: get first deployment for legacy code
+        const activeDeployment = activeDeployments?.[0] || null;
+        
+        // v8.3.2: Group apps by type
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
         const publicApps = configuredApps.filter(a => a.appType === 'public' || !a.appType);
         const internalApps = configuredApps.filter(a => a.appType === 'internal');
@@ -3983,7 +4130,7 @@
                 } else if (activeDeployment.status === 'success' || activeDeployment.status === 'failed' || activeDeployment.status === 'error') {
                     // Only stop spinner when deployment finishes (success or failure)
                     setIsDeploying(false);
-                    // v8.2.12: Only set deployCompleted if this is a NEW completed deployment
+                    // v8.3.2: Only set deployCompleted if this is a NEW completed deployment
                     if (activeDeployment.status === 'success' && activeDeployment.id !== lastCompletedDeployId) {
                         setDeployCompleted(true);
                         setLastCompletedDeployId(activeDeployment.id);
@@ -4498,52 +4645,65 @@
                         </div>
                     )}
                     
-                    {/* Active Deployment */}
-                    {activeDeployment && (
-                        <div className={`bg-slate-800 rounded-xl border p-6 ${
-                            activeDeployment.status === 'running' ? 'border-indigo-500' :
-                            activeDeployment.status === 'success' ? 'border-green-500' : 'border-red-500'
-                        }`}>
-                            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                                {activeDeployment.status === 'running' ? (
-                                    <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                                ) : activeDeployment.status === 'success' ? (
-                                    <span className="text-green-400">✓</span>
-                                ) : (
-                                    <span className="text-red-400">✗</span>
-                                )}
-                                {activeDeployment.status === 'running' 
-                                    ? (activeDeployment.isRollback ? 'Rolling back' : activeDeployment.isPromotion ? 'Promoting' : 'Deploying') + '...'
-                                    : activeDeployment.status === 'success' ? 'Complete!' : 'Failed'
-                                }
-                                {activeDeployment.fileCount && <span className="text-sm text-slate-400">({activeDeployment.fileCount} files)</span>}
-                                <span className="flex-1" />
-                                {activeDeployment.status !== 'running' && (
-                                    <button onClick={() => setActiveDeployment(null)} className="text-slate-400 hover:text-white">
-                                        <Icons.X />
-                                    </button>
-                                )}
-                            </h2>
-                            <div className="space-y-2">
-                                {activeDeployment.steps.map((s, i) => (
-                                    <div key={i} className="flex items-center gap-2">
-                                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
-                                            s.status === 'complete' ? 'bg-green-500' :
-                                            s.status === 'running' ? 'bg-indigo-500' :
-                                            s.status === 'error' ? 'bg-red-500' : 'bg-amber-500'
-                                        }`}>
-                                            {s.status === 'complete' ? '✓' : s.status === 'running' ? '•' : '!'}
-                                        </div>
-                                        <span className={s.status === 'error' ? 'text-red-400' : ''}>{s.name}</span>
-                                        {s.details && <span className="text-slate-500 text-sm">({s.details})</span>}
+                    {/* Active Deployments - Multiple Status Boxes */}
+                    {activeDeployments && activeDeployments.length > 0 && (
+                        <div className="space-y-3">
+                            {activeDeployments.map(deployment => (
+                                <div key={deployment.id} className={`bg-slate-800 rounded-xl border p-4 fade-in ${
+                                    deployment.status === 'running' ? 'border-indigo-500' :
+                                    deployment.status === 'success' ? 'border-green-500' : 'border-red-500'
+                                }`}>
+                                    <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                                        {deployment.status === 'running' ? (
+                                            <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                                        ) : deployment.status === 'success' ? (
+                                            <span className="text-green-400">✓</span>
+                                        ) : (
+                                            <span className="text-red-400">✗</span>
+                                        )}
+                                        <span className="text-slate-300">{deployment.appName || 'Deploy'}</span>
+                                        {deployment.target && <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">{deployment.target.toUpperCase()}</span>}
+                                        {deployment.status === 'running' 
+                                            ? <span className="text-indigo-300">{deployment.isRollback ? 'Rolling back' : deployment.isPromotion ? 'Promoting' : 'Deploying'}...</span>
+                                            : deployment.status === 'success' ? <span className="text-green-400">Complete!</span> : <span className="text-red-400">Failed</span>
+                                        }
+                                        {deployment.fileCount && <span className="text-xs text-slate-500">({deployment.fileCount} files)</span>}
+                                        <span className="flex-1" />
+                                        {/* Show close button for errors, success auto-closes */}
+                                        {deployment.status !== 'running' && deployment.status !== 'success' && (
+                                            <button onClick={() => removeActiveDeployment(deployment.id)} className="text-slate-400 hover:text-white">
+                                                <Icons.X />
+                                            </button>
+                                        )}
+                                        {/* Show manual close for success too */}
+                                        {deployment.status === 'success' && (
+                                            <button onClick={() => removeActiveDeployment(deployment.id)} className="text-slate-500 hover:text-white text-xs">
+                                                ✕
+                                            </button>
+                                        )}
+                                    </h2>
+                                    <div className="space-y-1.5">
+                                        {deployment.steps.map((s, i) => (
+                                            <div key={i} className="flex items-center gap-2 text-sm">
+                                                <div className={`w-4 h-4 rounded-full flex items-center justify-center text-xs ${
+                                                    s.status === 'complete' ? 'bg-green-500' :
+                                                    s.status === 'running' ? 'bg-indigo-500' :
+                                                    s.status === 'error' ? 'bg-red-500' : 'bg-amber-500'
+                                                }`}>
+                                                    {s.status === 'complete' ? '✓' : s.status === 'running' ? '•' : '!'}
+                                                </div>
+                                                <span className={s.status === 'error' ? 'text-red-400' : 'text-slate-300'}>{s.name}</span>
+                                                {s.details && <span className="text-slate-500 text-xs">({s.details})</span>}
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
-                            {activeDeployment.status === 'success' && activeDeployment.url && (
-                                <a href={activeDeployment.url} target="_blank" className="mt-3 inline-flex items-center gap-1 text-indigo-400 hover:underline">
-                                    <Icons.ExternalLink /> Open Site
-                                </a>
-                            )}
+                                    {deployment.status === 'success' && deployment.url && (
+                                        <a href={deployment.url} target="_blank" className="mt-2 inline-flex items-center gap-1 text-indigo-400 hover:underline text-sm">
+                                            <Icons.ExternalLink /> Open Site
+                                        </a>
+                                    )}
+                                </div>
+                            ))}
                         </div>
                     )}
                 </div>
@@ -7331,6 +7491,498 @@
                                 )}
                             </div>
                         ))}
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // SMART DEPLOY VIEW - Deploy from gs-active archive
+    // =========================================================================
+    
+    // Map gs-active folder names to app IDs
+    const GS_ACTIVE_FOLDER_MAP = {
+        'gameshelf': 'gameshelf',
+        'quotle': 'quotle',
+        'slate': 'slate',
+        'rungs': 'rungs',
+        'wordboxing': 'wordboxing',
+        'beta': 'beta',
+        'landing': 'landing',
+        'command-center': 'management',
+        'testplan': 'testplan',
+        'firebase-functions': 'firebase-functions'
+    };
+    
+    function SmartDeployView({ apps, github, onDeploy, onBatchDeploy, showAlert, showConfirm, activeDeployments, removeActiveDeployment, pendingFile, clearPendingFile }) {
+        const [archiveApps, setArchiveApps] = React.useState([]); // Apps found in archive
+        const [selectedApps, setSelectedApps] = React.useState(new Set());
+        const [loading, setLoading] = React.useState(false);
+        const [checkingVersions, setCheckingVersions] = React.useState(false);
+        const [archiveName, setArchiveName] = React.useState(null);
+        const fileInputRef = React.useRef(null);
+        
+        // Get safe default target for an app based on type
+        // Public apps → TEST (safe), Internal apps → PROD (only option)
+        const getDefaultTarget = (appId) => {
+            const appConfig = apps[appId];
+            if (!appConfig) return 'test';
+            // Internal apps only have prod
+            if (appConfig.appType === 'internal') return 'prod';
+            // Public apps default to test for safety
+            return 'test';
+        };
+        
+        // Auto-load pending file from Dashboard redirect
+        React.useEffect(() => {
+            if (pendingFile) {
+                processArchive(pendingFile);
+                clearPendingFile();
+            }
+        }, [pendingFile]);
+        
+        // Parse gs-active archive
+        const handleFileSelect = async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            processArchive(file);
+        };
+        
+        // Process archive file (shared by handleFileSelect and pendingFile)
+        const processArchive = async (file) => {
+            setLoading(true);
+            setArchiveName(file.name);
+            
+            try {
+                const zip = await JSZip.loadAsync(file);
+                const foundApps = [];
+                
+                // Find all folders in gs-active/
+                const folders = new Set();
+                zip.forEach((path, entry) => {
+                    if (entry.dir) {
+                        // Extract folder name from paths like "gs-active/gameshelf/" or "gameshelf/"
+                        const parts = path.split('/').filter(p => p && p !== 'gs-active');
+                        if (parts.length >= 1) {
+                            folders.add(parts[0]);
+                        }
+                    }
+                });
+                
+                // Process each known folder
+                for (const folder of folders) {
+                    const appId = GS_ACTIVE_FOLDER_MAP[folder];
+                    if (!appId) continue;
+                    
+                    const appConfig = apps[appId];
+                    if (!appConfig) continue;
+                    
+                    // Try to find index.html in this folder
+                    const possiblePaths = [
+                        `gs-active/${folder}/index.html`,
+                        `${folder}/index.html`,
+                        `gs-active/${folder}/${appConfig.targetPath || 'index.html'}`,
+                        `${folder}/${appConfig.targetPath || 'index.html'}`
+                    ];
+                    
+                    let indexContent = null;
+                    let foundPath = null;
+                    
+                    for (const path of possiblePaths) {
+                        const entry = zip.file(path);
+                        if (entry) {
+                            indexContent = await entry.async('string');
+                            foundPath = path;
+                            break;
+                        }
+                    }
+                    
+                    if (!indexContent) continue;
+                    
+                    // Extract version
+                    const archiveVersion = extractVersionFromHTML(indexContent);
+                    
+                    // Collect all files for this app
+                    const appFiles = [];
+                    const basePath = foundPath.substring(0, foundPath.lastIndexOf('/') + 1);
+                    
+                    zip.forEach((path, entry) => {
+                        if (!entry.dir && path.startsWith(basePath)) {
+                            const relativePath = path.substring(basePath.length);
+                            appFiles.push({ path, relativePath, entry });
+                        }
+                    });
+                    
+                    foundApps.push({
+                        id: appId,
+                        folder,
+                        name: appConfig.name,
+                        icon: appConfig.icon,
+                        archiveVersion,
+                        deployedVersion: null, // Will fetch later
+                        deployedVersionLoading: false,
+                        needsUpdate: null,
+                        files: appFiles,
+                        indexContent,
+                        testRepo: appConfig.testRepo,
+                        prodRepo: appConfig.prodRepo,
+                        subPath: appConfig.subPath,
+                        targetPath: appConfig.targetPath || 'index.html',
+                        hasServiceWorker: appConfig.hasServiceWorker,
+                        swPath: appConfig.swPath
+                    });
+                }
+                
+                // Sort: apps needing update first, then alphabetically
+                foundApps.sort((a, b) => a.name.localeCompare(b.name));
+                
+                setArchiveApps(foundApps);
+                
+                // Auto-check deployed versions if GitHub is available
+                if (github && foundApps.length > 0) {
+                    checkDeployedVersions(foundApps);
+                }
+                
+            } catch (err) {
+                console.error('Failed to parse archive:', err);
+                showAlert('Failed to parse archive: ' + err.message);
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        // Check deployed versions for all apps
+        const checkDeployedVersions = async (appsToCheck) => {
+            setCheckingVersions(true);
+            
+            const updated = [...appsToCheck];
+            
+            for (let i = 0; i < updated.length; i++) {
+                const app = updated[i];
+                const target = getDefaultTarget(app.id);
+                const repo = target === 'prod' ? app.prodRepo : app.testRepo;
+                
+                // Store target on app for later use
+                updated[i] = { ...app, deployTarget: target };
+                
+                if (!repo) {
+                    updated[i] = { ...updated[i], deployedVersion: 'No repo', needsUpdate: false };
+                    continue;
+                }
+                
+                try {
+                    // Try to fetch the deployed version from GitHub
+                    const targetPath = app.subPath ? `${app.subPath}/${app.targetPath}` : app.targetPath;
+                    const fileData = await github.getFileContent(repo, targetPath);
+                    
+                    if (fileData?.textContent) {
+                        const deployedVersion = extractVersionFromHTML(fileData.textContent);
+                        const needsUpdate = app.archiveVersion !== deployedVersion;
+                        updated[i] = { ...app, deployedVersion, needsUpdate };
+                    } else {
+                        updated[i] = { ...app, deployedVersion: 'Not found', needsUpdate: true };
+                    }
+                } catch (err) {
+                    console.warn(`Failed to check ${app.name}:`, err.message);
+                    updated[i] = { ...app, deployedVersion: 'Error', needsUpdate: null };
+                }
+                
+                // Update state incrementally
+                setArchiveApps([...updated]);
+            }
+            
+            // Auto-select apps that need updates
+            const needingUpdate = updated.filter(a => a.needsUpdate === true).map(a => a.id);
+            setSelectedApps(new Set(needingUpdate));
+            
+            setCheckingVersions(false);
+        };
+        
+        // Toggle app selection
+        const toggleApp = (appId) => {
+            setSelectedApps(prev => {
+                const next = new Set(prev);
+                if (next.has(appId)) next.delete(appId);
+                else next.add(appId);
+                return next;
+            });
+        };
+        
+        // Select all / none
+        const selectAll = () => setSelectedApps(new Set(archiveApps.map(a => a.id)));
+        const selectNone = () => setSelectedApps(new Set());
+        const selectOutdated = () => setSelectedApps(new Set(archiveApps.filter(a => a.needsUpdate === true).map(a => a.id)));
+        
+        // Deploy selected apps
+        const deploySelected = async () => {
+            const toDeploy = archiveApps.filter(a => selectedApps.has(a.id));
+            if (toDeploy.length === 0) return;
+            
+            // Group by target for confirmation message
+            const testApps = toDeploy.filter(a => a.deployTarget === 'test');
+            const prodApps = toDeploy.filter(a => a.deployTarget === 'prod');
+            
+            let confirmMsg = `Deploy ${toDeploy.length} app(s)?\n\n`;
+            if (testApps.length > 0) {
+                confirmMsg += `TEST:\n${testApps.map(a => `  • ${a.name} v${a.archiveVersion}`).join('\n')}\n\n`;
+            }
+            if (prodApps.length > 0) {
+                confirmMsg += `PROD:\n${prodApps.map(a => `  • ${a.name} v${a.archiveVersion}`).join('\n')}`;
+            }
+            
+            const confirmed = await showConfirm(confirmMsg, '📦 Smart Deploy');
+            
+            if (!confirmed) return;
+            
+            // Deploy each app to its appropriate target
+            for (const app of toDeploy) {
+                const target = app.deployTarget || getDefaultTarget(app.id);
+                
+                try {
+                    // Build staged files from archive
+                    const stagedFiles = [];
+                    
+                    for (const file of app.files) {
+                        const content = await file.entry.async('string');
+                        stagedFiles.push({
+                            id: `${app.id}-${file.relativePath}`,
+                            name: file.relativePath,
+                            content,
+                            size: content.length,
+                            appId: app.id,
+                            version: app.archiveVersion
+                        });
+                    }
+                    
+                    // Use batch deploy for multiple files
+                    if (stagedFiles.length > 1) {
+                        await onBatchDeploy(stagedFiles, app.id, target);
+                    } else if (stagedFiles.length === 1) {
+                        await onDeploy(stagedFiles[0], app.id, target);
+                    }
+                    
+                } catch (err) {
+                    console.error(`Failed to deploy ${app.name}:`, err);
+                }
+            }
+        };
+        
+        return (
+            <div className="space-y-6">
+                {/* Header */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                        📦 Smart Deploy from gs-active
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Upload a gs-active archive to compare versions and deploy updates in one click.
+                    </p>
+                    
+                    <div className="flex items-center gap-4">
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".zip"
+                            onChange={handleFileSelect}
+                            className="hidden"
+                        />
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={loading}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                        >
+                            {loading ? (
+                                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Parsing...</>
+                            ) : (
+                                <><Icons.Upload /> Choose gs-active.zip</>
+                            )}
+                        </button>
+                        
+                        {archiveName && (
+                            <span className="text-sm text-slate-400">
+                                📁 {archiveName}
+                            </span>
+                        )}
+                        
+                        <div className="ml-auto text-xs text-slate-500">
+                            <span className="text-blue-400">Public apps → TEST</span>
+                            <span className="mx-2">•</span>
+                            <span className="text-green-400">Internal apps → PROD</span>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* Active Deployments */}
+                {activeDeployments && activeDeployments.length > 0 && (
+                    <div className="space-y-3">
+                        {activeDeployments.map(deployment => (
+                            <div key={deployment.id} className={`bg-slate-800 rounded-xl border p-4 fade-in ${
+                                deployment.status === 'running' ? 'border-indigo-500' :
+                                deployment.status === 'success' ? 'border-green-500' : 'border-red-500'
+                            }`}>
+                                <div className="flex items-center gap-2 text-sm">
+                                    {deployment.status === 'running' ? (
+                                        <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                                    ) : deployment.status === 'success' ? (
+                                        <span className="text-green-400">✓</span>
+                                    ) : (
+                                        <span className="text-red-400">✗</span>
+                                    )}
+                                    <span className="font-medium">{deployment.appName}</span>
+                                    <span className="text-slate-400">→</span>
+                                    <span className={deployment.status === 'success' ? 'text-green-400' : deployment.status === 'error' ? 'text-red-400' : 'text-indigo-300'}>
+                                        {deployment.status === 'running' ? 'Deploying...' : deployment.status === 'success' ? 'Complete!' : 'Failed'}
+                                    </span>
+                                    <span className="flex-1" />
+                                    {deployment.status !== 'running' && (
+                                        <button onClick={() => removeActiveDeployment(deployment.id)} className="text-slate-400 hover:text-white text-xs">✕</button>
+                                    )}
+                                </div>
+                                {deployment.steps && deployment.steps.length > 0 && (
+                                    <div className="mt-2 space-y-1 text-xs text-slate-400">
+                                        {deployment.steps.slice(-2).map((s, i) => (
+                                            <div key={i} className="flex items-center gap-1">
+                                                <span className={s.status === 'complete' ? 'text-green-400' : s.status === 'error' ? 'text-red-400' : 'text-indigo-400'}>
+                                                    {s.status === 'complete' ? '✓' : s.status === 'error' ? '✗' : '•'}
+                                                </span>
+                                                {s.name} {s.details && <span className="text-slate-500">({s.details})</span>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+                
+                {/* Apps Table */}
+                {archiveApps.length > 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                        {/* Table Header */}
+                        <div className="p-4 border-b border-slate-700 flex items-center gap-4">
+                            <span className="font-semibold">Apps in Archive ({archiveApps.length})</span>
+                            <span className="flex-1" />
+                            <button onClick={selectAll} className="text-xs text-indigo-400 hover:underline">Select All</button>
+                            <button onClick={selectOutdated} className="text-xs text-amber-400 hover:underline">Select Outdated</button>
+                            <button onClick={selectNone} className="text-xs text-slate-400 hover:underline">Select None</button>
+                            {checkingVersions && (
+                                <span className="text-xs text-slate-400 flex items-center gap-1">
+                                    <div className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                                    Checking versions...
+                                </span>
+                            )}
+                        </div>
+                        
+                        {/* Table */}
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-slate-700 text-slate-400">
+                                    <th className="px-4 py-2 text-left w-8"></th>
+                                    <th className="px-4 py-2 text-left">App</th>
+                                    <th className="px-4 py-2 text-center">Target</th>
+                                    <th className="px-4 py-2 text-center">Archive</th>
+                                    <th className="px-4 py-2 text-center">Deployed</th>
+                                    <th className="px-4 py-2 text-center">Status</th>
+                                    <th className="px-4 py-2 text-center">Files</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {archiveApps.map(app => {
+                                    const isSelected = selectedApps.has(app.id);
+                                    const target = app.deployTarget || getDefaultTarget(app.id);
+                                    const repo = target === 'prod' ? app.prodRepo : app.testRepo;
+                                    
+                                    return (
+                                        <tr key={app.id} className={`border-b border-slate-700/50 hover:bg-slate-700/30 ${isSelected ? 'bg-indigo-900/20' : ''}`}>
+                                            <td className="px-4 py-3">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isSelected}
+                                                    onChange={() => toggleApp(app.id)}
+                                                    disabled={!repo}
+                                                    className="rounded"
+                                                />
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="flex items-center gap-2">
+                                                    <AppIcon icon={app.icon} size={20} />
+                                                    <span className="font-medium">{app.name}</span>
+                                                    {!repo && <span className="text-xs text-red-400">(no {target} repo)</span>}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <span className={`px-2 py-0.5 rounded text-xs ${target === 'prod' ? 'bg-green-900/50 text-green-300' : 'bg-blue-900/50 text-blue-300'}`}>
+                                                    {target.toUpperCase()}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-center font-mono text-indigo-300">
+                                                {app.archiveVersion || '?'}
+                                            </td>
+                                            <td className="px-4 py-3 text-center font-mono">
+                                                {app.deployedVersionLoading ? (
+                                                    <div className="w-4 h-4 border border-slate-400 border-t-transparent rounded-full animate-spin mx-auto" />
+                                                ) : (
+                                                    <span className={app.deployedVersion === app.archiveVersion ? 'text-green-400' : 'text-slate-400'}>
+                                                        {app.deployedVersion || '—'}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                {app.needsUpdate === true && (
+                                                    <span className="px-2 py-0.5 rounded bg-amber-900/50 text-amber-300 text-xs">🔄 Needs Update</span>
+                                                )}
+                                                {app.needsUpdate === false && (
+                                                    <span className="px-2 py-0.5 rounded bg-green-900/50 text-green-300 text-xs">✓ Current</span>
+                                                )}
+                                                {app.needsUpdate === null && app.deployedVersion && (
+                                                    <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-400 text-xs">? Unknown</span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-center text-slate-400">
+                                                {app.files.length}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                        
+                        {/* Deploy Button */}
+                        <div className="p-4 border-t border-slate-700 flex items-center gap-4">
+                            <button
+                                onClick={deploySelected}
+                                disabled={selectedApps.size === 0}
+                                className="px-6 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 rounded-lg font-medium flex items-center gap-2"
+                            >
+                                🚀 Deploy Selected ({selectedApps.size})
+                            </button>
+                            
+                            {selectedApps.size > 0 && (
+                                <span className="text-sm text-slate-400">
+                                    {archiveApps.filter(a => selectedApps.has(a.id)).map(a => a.name).join(', ')}
+                                </span>
+                            )}
+                            
+                            <button
+                                onClick={() => checkDeployedVersions(archiveApps)}
+                                disabled={checkingVersions}
+                                className="ml-auto px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm flex items-center gap-2"
+                            >
+                                <Icons.Refresh className={checkingVersions ? 'animate-spin' : ''} /> Refresh Versions
+                            </button>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Empty State */}
+                {!loading && archiveApps.length === 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-12 text-center">
+                        <div className="text-4xl mb-4">📦</div>
+                        <div className="text-lg font-medium mb-2">No archive loaded</div>
+                        <div className="text-sm text-slate-400">
+                            Upload a gs-active-*.zip file to compare and deploy apps
+                        </div>
                     </div>
                 )}
             </div>
@@ -10550,7 +11202,7 @@ const pushIssueToCommandCenter = async (testResult) => {
         const [testing, setTesting] = React.useState(false);
         const [result, setResult] = React.useState(null);
         
-        // Token expiration tracking (v8.2.12)
+        // Token expiration tracking (v8.3.2)
         const [tokenExpires, setTokenExpires] = React.useState(() => {
             try { return localStorage.getItem('cc_token_expires') || ''; } catch { return ''; }
         });
