@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.3.6">
+    <meta name="version" content="8.3.8">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,7 +27,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.3.4 starting...');
+    console.log('Command Center v8.3.8 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -232,7 +232,7 @@
             );
         }
         
-        // Fix const VERSION = '8.3.6' (but not GAMESHELF_VERSION)
+        // Fix const VERSION = 'x.x.x' (but not GAMESHELF_VERSION)
         fixed = fixed.replace(
             /(const\s+VERSION\s*=\s*['"])[^'"]*(['"])/g,
             `$1${targetVersion}$2`
@@ -1394,6 +1394,102 @@
             return { success: false, error: 'Timeout waiting for deployment', status: lastStatus };
         }
         
+        // Get recent workflow runs for a repo
+        async getWorkflowRuns(repo, options = {}) {
+            const [owner, repoName] = repo.split('/');
+            const params = new URLSearchParams();
+            if (options.per_page) params.append('per_page', options.per_page);
+            if (options.branch) params.append('branch', options.branch);
+            if (options.event) params.append('event', options.event);
+            if (options.status) params.append('status', options.status);
+            
+            const queryString = params.toString();
+            const endpoint = `/repos/${owner}/${repoName}/actions/runs${queryString ? '?' + queryString : ''}`;
+            
+            try {
+                const result = await this.request(endpoint);
+                return result.workflow_runs || [];
+            } catch (e) {
+                console.error('Failed to get workflow runs:', e);
+                return [];
+            }
+        }
+        
+        // Get a specific workflow run
+        async getWorkflowRun(repo, runId) {
+            const [owner, repoName] = repo.split('/');
+            try {
+                return await this.request(`/repos/${owner}/${repoName}/actions/runs/${runId}`);
+            } catch (e) {
+                console.error('Failed to get workflow run:', e);
+                return null;
+            }
+        }
+        
+        // Get workflow run logs URL (returns URL, not content - logs require redirect)
+        async getWorkflowRunLogsUrl(repo, runId) {
+            const [owner, repoName] = repo.split('/');
+            return `https://github.com/${owner}/${repoName}/actions/runs/${runId}`;
+        }
+        
+        // Monitor a workflow run until completion
+        async waitForWorkflowRun(repo, runId, maxWaitMs = 300000, onStatus = null) {
+            const startTime = Date.now();
+            let lastStatus = null;
+            
+            while (Date.now() - startTime < maxWaitMs) {
+                const run = await this.getWorkflowRun(repo, runId);
+                
+                if (run && run.status !== lastStatus) {
+                    lastStatus = run.status;
+                    if (onStatus) onStatus(run);
+                }
+                
+                // Terminal states
+                if (run?.status === 'completed') {
+                    return { 
+                        success: run.conclusion === 'success',
+                        conclusion: run.conclusion, // success, failure, cancelled, skipped
+                        run,
+                        logsUrl: await this.getWorkflowRunLogsUrl(repo, runId)
+                    };
+                }
+                
+                // Wait 5 seconds before checking again
+                await new Promise(r => setTimeout(r, 5000));
+            }
+            
+            return { 
+                success: false, 
+                error: 'Timeout waiting for workflow', 
+                logsUrl: await this.getWorkflowRunLogsUrl(repo, runId)
+            };
+        }
+        
+        // Find a workflow run triggered after a specific time
+        async findRecentWorkflowRun(repo, afterTime, maxWaitMs = 30000) {
+            const startTime = Date.now();
+            
+            while (Date.now() - startTime < maxWaitMs) {
+                const runs = await this.getWorkflowRuns(repo, { per_page: 5 });
+                
+                // Find a run that started after our commit
+                const recentRun = runs.find(run => {
+                    const runTime = new Date(run.created_at).getTime();
+                    return runTime >= afterTime - 5000; // 5 second tolerance
+                });
+                
+                if (recentRun) {
+                    return recentRun;
+                }
+                
+                // Wait 3 seconds before checking again
+                await new Promise(r => setTimeout(r, 3000));
+            }
+            
+            return null;
+        }
+        
         // Batch commit multiple files in one commit
         async batchCommit(repo, files, message) {
             const [owner, repoName] = repo.split('/');
@@ -1547,7 +1643,7 @@
         const pendingAutoClose = React.useRef(new Set());
         
         // Auto-close successful deployments after delay
-        // v8.3.6: Fixed - check both step status AND ensure deployment is truly done
+        // v8.3.8: Fixed - check both step status AND ensure deployment is truly done
         React.useEffect(() => {
             activeDeployments.forEach(deployment => {
                 // Check if deployment is truly complete:
@@ -1754,7 +1850,7 @@
                         addStep('GitHub Pages', status, detail);
                         setActiveDeployment({ ...deployment });
                         setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
-                    });
+                    }, appId, target);
                 }
                 
             } catch (err) {
@@ -1779,7 +1875,7 @@
         const [repoFiles, setRepoFiles] = React.useState({}); // { repoFullName: { files: [], loading: bool } }
         const [selectedRepoForBrowse, setSelectedRepoForBrowse] = React.useState(null);
         const [markedForDeletion, setMarkedForDeletion] = React.useState([]); // [{ repo, path, sha }]
-        const [deployingRepos, setDeployingRepos] = React.useState({}); // { repoFullName: { version, startTime } }
+        const [deployingRepos, setDeployingRepos] = React.useState({}); // { appId: { version, startTime, repo } }
         
         // Session log state (persisted to localStorage)
         const [sessionLog, setSessionLog] = React.useState(() => {
@@ -1855,7 +1951,7 @@
         React.useEffect(() => { try { localStorage.setItem('cc_session_log', JSON.stringify(sessionLog)); } catch {} }, [sessionLog]);
         
         // Monitor live site until new version appears
-        const monitorLiveDeployment = async (url, expectedVersion, repo, onUpdate) => {
+        const monitorLiveDeployment = async (url, expectedVersion, repo, onUpdate, appId = null, target = 'prod') => {
             const maxWaitMs = 180000; // 3 minutes max
             const pollInterval = 5000; // Check every 5 seconds
             const startTime = Date.now();
@@ -1863,13 +1959,17 @@
             let corsFailures = 0;
             const maxCorsFailures = 3; // Give up after 3 CORS errors
             
+            // Key for deployingRepos - use appId:target if provided, otherwise fall back to repo
+            const deployKey = appId ? `${appId}:${target}` : repo;
+            
             console.log(`=== MONITORING LIVE DEPLOYMENT ===`);
             console.log(`URL: ${url}`);
             console.log(`Repo: ${repo}`);
             console.log(`Expected version: ${expectedVersion}`);
+            console.log(`Deploy key: ${deployKey}`);
             
-            // Mark repo as deploying
-            setDeployingRepos(prev => ({ ...prev, [repo]: { version: expectedVersion, startTime } }));
+            // Mark app as deploying
+            setDeployingRepos(prev => ({ ...prev, [deployKey]: { version: expectedVersion, startTime, repo } }));
             
             while (Date.now() - startTime < maxWaitMs) {
                 attempts++;
@@ -1902,7 +2002,7 @@
                             setTimeout(() => {
                                 setDeployingRepos(prev => {
                                     const next = { ...prev };
-                                    delete next[repo];
+                                    delete next[deployKey];
                                     return next;
                                 });
                             }, remainingMs);
@@ -1924,7 +2024,7 @@
                         onUpdate('complete', `Commit pushed ✓ (verify at site)`);
                         setDeployingRepos(prev => {
                             const next = { ...prev };
-                            delete next[repo];
+                            delete next[deployKey];
                             return next;
                         });
                         return { success: true, corsBlocked: true };
@@ -1941,7 +2041,7 @@
             // Clear deploying state on timeout
             setDeployingRepos(prev => {
                 const next = { ...prev };
-                delete next[repo];
+                delete next[deployKey];
                 return next;
             });
             return { success: false, timeout: true };
@@ -2570,7 +2670,7 @@
                         addStep('GitHub Pages', status, detail);
                         setActiveDeployment({ ...deployment });
                         setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
-                    });
+                    }, appId, target);
                 }
                 
             } catch (error) {
@@ -2661,8 +2761,9 @@
             setActiveDeployment(deployment);
             setDeployments(prev => [deployment, ...prev]);
             
-            // v8.3.3: Set deploying indicator immediately when deploy starts
-            setDeployingRepos(prev => ({ ...prev, [repo]: { version: newVersion, startTime: Date.now() } }));
+            // v8.3.8: Set deploying indicator using appId:target key to avoid shared repo conflicts
+            const deployKey = `${appId}:${target}`;
+            setDeployingRepos(prev => ({ ...prev, [deployKey]: { version: newVersion, startTime: Date.now(), repo } }));
             
             const addStep = (name, status, details = null) => {
                 const existingIndex = deployment.steps.findIndex(s => s.name === name);
@@ -2716,6 +2817,9 @@
                         }
                     }
                     
+                    // Capture time BEFORE commit for GitHub Actions workflow detection
+                    deployment.preCommitTime = Date.now();
+                    
                     result = await github.createOrUpdateFile(
                         repo,
                         file.path,
@@ -2726,6 +2830,9 @@
                     result.sha = result.commit.sha;
                 } else {
                     // Multiple files - use batch commit (Git Data API)
+                    // Capture time BEFORE commit for GitHub Actions workflow detection
+                    deployment.preCommitTime = Date.now();
+                    
                     result = await github.batchCommit(
                         repo,
                         filesToCommit,
@@ -2735,12 +2842,15 @@
                 deployment.commitSha = result.sha;
                 addStep('Creating commit', 'complete', result.sha.substring(0, 7));
                 
-                addStep('GitHub Pages', 'running');
-                try {
-                    await github.enablePages(repo);
-                    addStep('GitHub Pages', 'complete', 'Ready');
-                } catch (e) {
-                    addStep('GitHub Pages', 'warning', e.message);
+                // Skip GitHub Pages for GitHub Actions deploys (Firebase Functions doesn't use Pages)
+                if (app.deployType !== 'github-actions') {
+                    addStep('GitHub Pages', 'running');
+                    try {
+                        await github.enablePages(repo);
+                        addStep('GitHub Pages', 'complete', 'Ready');
+                    } catch (e) {
+                        addStep('GitHub Pages', 'warning', e.message);
+                    }
                 }
                 
                 if (settings.createTag && newVersion !== 'batch') {
@@ -2754,7 +2864,10 @@
                     }
                 }
                 
-                deployment.status = 'success';
+                // For GitHub Actions deploys, don't set success yet - wait for workflow
+                if (app.deployType !== 'github-actions') {
+                    deployment.status = 'success';
+                }
                 deployment.url = getGitHubPagesUrl(repo, app.subPath);
                 
                 // Verify the deployment by fetching back from repo
@@ -2791,14 +2904,54 @@
                 // Refresh will happen on next manual refresh or page load
                 // setTimeout(() => refreshAllVersions(), 500); // DISABLED - causes version revert due to GitHub caching
                 
-                // Start monitoring live site for deployment completion
-                if (deployment.url && newVersion !== 'batch') {
+                // v8.3.8: For GitHub Actions deploys (Firebase Functions), monitor workflow instead of live site
+                if (app.deployType === 'github-actions') {
+                    addStep('GitHub Actions', 'running', 'Finding workflow...');
+                    // Use preCommitTime captured before the commit, with extra buffer
+                    const searchTime = (deployment.preCommitTime || Date.now()) - 10000; // 10 second buffer before commit
+                    
+                    // Find the workflow run triggered by our commit (wait up to 60 seconds for it to appear)
+                    const workflowRun = await github.findRecentWorkflowRun(repo, searchTime, 60000);
+                    
+                    if (workflowRun) {
+                        const logsUrl = await github.getWorkflowRunLogsUrl(repo, workflowRun.id);
+                        addStep('GitHub Actions', 'running', `Workflow #${workflowRun.run_number} running...`);
+                        deployment.workflowUrl = logsUrl;
+                        setActiveDeployment({ ...deployment });
+                        
+                        // Monitor the workflow
+                        const monitorStartTime = Date.now();
+                        const result = await github.waitForWorkflowRun(repo, workflowRun.id, 300000, (run) => {
+                            addStep('GitHub Actions', 'running', `${run.status}... (${Math.round((Date.now() - monitorStartTime) / 1000)}s)`);
+                            setActiveDeployment({ ...deployment });
+                            setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                        });
+                        
+                        if (result.success) {
+                            addStep('GitHub Actions', 'complete', `✓ Deployed! (${result.run?.conclusion})`);
+                            deployment.status = 'success';
+                        } else {
+                            addStep('GitHub Actions', 'error', `Failed: ${result.conclusion || result.error}`);
+                            deployment.status = 'failed';
+                            deployment.error = result.conclusion || result.error;
+                            // Show link to logs
+                            if (result.logsUrl) {
+                                deployment.workflowUrl = result.logsUrl;
+                            }
+                        }
+                    } else {
+                        addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
+                        deployment.workflowUrl = `https://github.com/${repo}/actions`;
+                    }
+                }
+                // Start monitoring live site for deployment completion (non-Actions deploys)
+                else if (deployment.url && newVersion !== 'batch') {
                     addStep('GitHub Pages', 'running', 'Waiting for deploy...');
                     monitorLiveDeployment(deployment.url, newVersion, repo, (status, detail) => {
                         addStep('GitHub Pages', status, detail);
                         setActiveDeployment({ ...deployment });
                         setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
-                    });
+                    }, appId, target);
                 }
                 
                 // Remove deployed files from staged
@@ -2811,9 +2964,10 @@
                 console.error('Batch deployment failed:', error);
                 
                 // v8.3.3: Clear deploying indicator on failure
+                const deployKey = `${appId}:${target}`;
                 setDeployingRepos(prev => {
                     const next = { ...prev };
-                    delete next[repo];
+                    delete next[deployKey];
                     return next;
                 });
                 
@@ -3101,7 +3255,7 @@
                         addStep('GitHub Pages', status, detail);
                         setActiveDeployment({ ...deployment });
                         setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
-                    });
+                    }, appId, 'prod');
                 }
                 
             } catch (error) {
@@ -3188,7 +3342,7 @@
                         addStep('GitHub Pages', status, detail);
                         setActiveDeployment({ ...deployment });
                         setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
-                    });
+                    }, deploymentToRollbackTo.appId, deploymentToRollbackTo.target);
                 }
                 
             } catch (error) {
@@ -3212,7 +3366,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.3.6 • Local file warning banner</div>
+                                    <div className="text-xs text-slate-400">v8.3.8 • GitHub Actions workflow monitoring</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -4173,6 +4327,9 @@
         const [isDeploying, setIsDeploying] = React.useState(false);
         const [deployCompleted, setDeployCompleted] = React.useState(false);
         const [lastCompletedDeployId, setLastCompletedDeployId] = React.useState(null);
+        // Track if deploy button was clicked in this session (prevents history-based false positive)
+        const deployClickedThisSession = React.useRef(false);
+        
         const [otherCollapsed, setOtherCollapsed] = React.useState(true); // v8.3.3: Collapse "Other" by default
         
         // Compatibility: get first deployment for legacy code
@@ -4234,8 +4391,10 @@
                 } else if (activeDeployment.status === 'success' || activeDeployment.status === 'failed' || activeDeployment.status === 'error') {
                     // Only stop spinner when deployment finishes (success or failure)
                     setIsDeploying(false);
-                    // v8.3.3: Only set deployCompleted if this is a NEW completed deployment
-                    if (activeDeployment.status === 'success' && activeDeployment.id !== lastCompletedDeployId) {
+                    // Only set deployCompleted if deploy was clicked this session
+                    if (activeDeployment.status === 'success' && 
+                        activeDeployment.id !== lastCompletedDeployId &&
+                        deployClickedThisSession.current) {
                         setDeployCompleted(true);
                         setLastCompletedDeployId(activeDeployment.id);
                     }
@@ -4243,12 +4402,12 @@
             }
         }, [activeDeployment, activeDeployment?.status, activeDeployment?.id, lastCompletedDeployId]);
         
-        // Reset deployCompleted when staging new files
+        // Reset deployCompleted when staging new files or files change
+        const stagedFileIds = stagedFiles.map(f => f.id).join(',');
         React.useEffect(() => {
-            if (stagedFiles.length > 0) {
-                setDeployCompleted(false);
-            }
-        }, [stagedFiles.length]);
+            // Reset whenever staged files change (new files, different files, or cleared)
+            setDeployCompleted(false);
+        }, [stagedFileIds]);
         
         // Expanded app menus state
         const [expandedApps, setExpandedApps] = React.useState({});
@@ -4499,7 +4658,15 @@
                                     )}
                                     
                                     <div className="grid grid-cols-2 gap-3 mb-3">
-                                        <select value={deployTarget.appId} onChange={e => setDeployTarget(p => ({ ...p, appId: e.target.value }))}
+                                        <select value={deployTarget.appId} onChange={e => {
+                                            const newAppId = e.target.value;
+                                            const selectedApp = apps[newAppId];
+                                            // Auto-switch to prod for apps that only have prod repo
+                                            const defaultTarget = (newAppId === 'firebase-functions' || (selectedApp?.prodRepo && !selectedApp?.testRepo)) 
+                                                ? 'prod' 
+                                                : deployTarget.target;
+                                            setDeployTarget({ appId: newAppId, target: defaultTarget });
+                                        }}
                                             className={`p-2 border rounded text-sm ${
                                                 hasMismatch 
                                                     ? 'bg-amber-900 border-amber-500' 
@@ -4533,17 +4700,25 @@
                                             );
                                             if (confirmed) {
                                                 setIsDeploying(true);
+                                                deployClickedThisSession.current = true;
                                                 console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
                                                 onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
-                                                // Always reset to TEST after initiating deploy (safety default)
-                                                setDeployTarget(prev => ({ ...prev, target: 'test' }));
+                                                // Reset to TEST after deploy, unless this is a prod-only app
+                                                const currentApp = apps[deployTarget.appId];
+                                                if (currentApp?.testRepo) {
+                                                    setDeployTarget(prev => ({ ...prev, target: 'test' }));
+                                                }
                                             }
                                         } else {
                                             setIsDeploying(true);
+                                            deployClickedThisSession.current = true;
                                             console.log('Deploying files:', selectedFiles.map(f => ({ name: f.name, id: f.id, size: f.content?.length })));
                                             onBatchDeploy(selectedFiles, deployTarget.appId, deployTarget.target);
-                                            // Always reset to TEST after initiating deploy (safety default)
-                                            setDeployTarget(prev => ({ ...prev, target: 'test' }));
+                                            // Reset to TEST after deploy, unless this is a prod-only app
+                                            const currentApp = apps[deployTarget.appId];
+                                            if (currentApp?.testRepo) {
+                                                setDeployTarget(prev => ({ ...prev, target: 'test' }));
+                                            }
                                         }
                                     }}
                                         disabled={!github || isDeploying}
@@ -4806,6 +4981,11 @@
                                             <Icons.ExternalLink /> Open Site
                                         </a>
                                     )}
+                                    {deployment.workflowUrl && (
+                                        <a href={deployment.workflowUrl} target="_blank" className="mt-2 ml-3 inline-flex items-center gap-1 text-amber-400 hover:underline text-sm">
+                                            <Icons.ExternalLink /> View Workflow
+                                        </a>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -4831,8 +5011,8 @@
                                             const canPromote = app.testRepo && app.prodRepo && app.currentTestVersion && app.currentTestVersion !== app.currentProdVersion;
                                             const testUrl = getGitHubPagesUrl(app.testRepo, app.subPath);
                                             const prodUrl = getGitHubPagesUrl(app.prodRepo, app.subPath);
-                                            const testDeploying = deployingRepos && deployingRepos[app.testRepo];
-                                            const prodDeploying = deployingRepos && deployingRepos[app.prodRepo];
+                                            const testDeploying = deployingRepos && deployingRepos[`${app.id}:test`];
+                                            const prodDeploying = deployingRepos && deployingRepos[`${app.id}:prod`];
                                             const isExpanded = expandedApps[app.id];
                                             const info = appInfo[app.id];
                                             const isLoadingInfo = loadingAppInfo[app.id];
@@ -4990,7 +5170,7 @@
                                     <div className="space-y-2">
                                         {internalApps.map(app => {
                                             const prodUrl = getGitHubPagesUrl(app.prodRepo, app.subPath);
-                                            const prodDeploying = deployingRepos && deployingRepos[app.prodRepo];
+                                            const prodDeploying = deployingRepos && deployingRepos[`${app.id}:prod`];
                                             const isExpanded = expandedApps[app.id];
                                             const info = appInfo[app.id];
                                             
@@ -5059,7 +5239,7 @@
                                             {otherApps.map(app => {
                                                 const testUrl = getGitHubPagesUrl(app.testRepo, app.subPath);
                                                 const prodUrl = getGitHubPagesUrl(app.prodRepo, app.subPath);
-                                                const prodDeploying = deployingRepos && deployingRepos[app.prodRepo];
+                                                const prodDeploying = deployingRepos && deployingRepos[`${app.id}:prod`];
                                                 
                                                 return (
                                                     <div key={app.id} className="bg-slate-700/30 rounded-lg p-2 flex items-center gap-2">
