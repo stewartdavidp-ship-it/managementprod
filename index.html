@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.5.0">
+    <meta name="version" content="8.5.2">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,7 +27,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.5.0 starting...');
+    console.log('Command Center v8.5.2 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -108,29 +108,45 @@
     function findAllVersionStrings(content) {
         const versions = [];
         
-        // Helper to check if a match is inside a comment
-        function isInComment(matchIndex) {
+        // Helper to check if a match is inside a comment or code example
+        function shouldSkip(matchIndex, matchText) {
+            // Get surrounding context (200 chars before, line content)
+            const before = content.substring(Math.max(0, matchIndex - 200), matchIndex);
             const lineStart = content.lastIndexOf('\n', matchIndex) + 1;
-            const lineContent = content.substring(lineStart, matchIndex);
-            // Skip if line starts with // or * (comment) or contains Pattern/Example keywords
-            return /^\s*(\/\/|\*|#)/.test(lineContent) || /Pattern|Example|e\.g\.|like/i.test(lineContent);
+            const lineEnd = content.indexOf('\n', matchIndex);
+            const lineContent = content.substring(lineStart, lineEnd === -1 ? matchIndex + 100 : lineEnd);
+            
+            // Skip if inside a comment block or pattern documentation
+            if (/^\s*(\/\/|\*|#)/.test(lineContent)) return true;
+            if (/Pattern|Example|e\.g\.|like|→|-->/i.test(lineContent)) return true;
+            
+            // Skip if the match looks like documentation (Pattern 1:, Pattern 2:, etc.)
+            if (/Pattern\s*\d+|\/\/\s*Pattern/i.test(before.slice(-80))) return true;
+            
+            // Skip if this appears to be inside function code that manipulates versions
+            // (i.e., the fixVersionsInContent function, version bump examples, etc.)
+            if (/fixVersions|incrementVersion|bumpVersion|parseVersion/i.test(before.slice(-150))) return true;
+            
+            // Skip template literal patterns - these are code, not actual versions
+            if (matchText && matchText.includes('${')) return true;
+            if (matchText && matchText.includes('targetVersion')) return true;
+            
+            // Skip if it's a version format example like "1.0.0 → 1.0.1"
+            if (/\d+\.\d+\.\d+\s*→/.test(lineContent)) return true;
+            
+            return false;
         }
         
         // Meta tag versions
         const metaMatches = content.matchAll(/<meta\s+[^>]*name=["']version["'][^>]*content=["']([^"']+)["'][^>]*>/gi);
         for (const m of metaMatches) {
-            // Skip if the content contains template literal syntax
-            if (m[1].includes('${') || m[1].includes('targetVersion')) continue;
-            // Skip if inside a comment
-            if (isInComment(m.index)) continue;
+            if (shouldSkip(m.index, m[1])) continue;
             versions.push({ source: 'meta tag', value: m[1], line: content.substring(0, m.index).split('\n').length });
         }
         // Also check reverse order: content before name
         const metaMatches2 = content.matchAll(/<meta\s+[^>]*content=["']([^"']+)["'][^>]*name=["']version["'][^>]*>/gi);
         for (const m of metaMatches2) {
-            if (m[1].includes('${') || m[1].includes('targetVersion')) continue;
-            // Skip if inside a comment
-            if (isInComment(m.index)) continue;
+            if (shouldSkip(m.index, m[1])) continue;
             versions.push({ source: 'meta tag', value: m[1], line: content.substring(0, m.index).split('\n').length });
         }
         
@@ -139,34 +155,22 @@
         for (const m of jsMatches) {
             // Skip if it's inside the GameShelf integration module (those are module versions, not app versions)
             const before = content.substring(Math.max(0, m.index - 200), m.index);
-            if (!before.includes('GAMESHELF_VERSION') && !before.includes('Integration Module')) {
-                // Skip template literals and code examples
-                if (m[2].includes('${') || m[2].includes('targetVersion')) continue;
-                // Skip if inside a comment
-                if (isInComment(m.index)) continue;
-                versions.push({ source: `JS: ${m[1]}`, value: m[2], line: content.substring(0, m.index).split('\n').length });
-            }
+            if (before.includes('GAMESHELF_VERSION') || before.includes('Integration Module')) continue;
+            if (shouldSkip(m.index, m[2])) continue;
+            versions.push({ source: `JS: ${m[1]}`, value: m[2], line: content.substring(0, m.index).split('\n').length });
         }
         
         // Footer versions - look for patterns like "v1.0.0 •" or ">v1.0.0<"
-        // But skip anything in code comments or template literals
         const footerMatches = content.matchAll(/[>\s]v(\d+\.\d+\.\d+)\s*[•<·]/g);
         for (const m of footerMatches) {
-            // Check if this is inside a comment or code example
-            const lineStart = content.lastIndexOf('\n', m.index) + 1;
-            const lineContent = content.substring(lineStart, m.index);
-            // Skip if line starts with // or * (comment) or contains Pattern or Example
-            if (/^\s*(\/\/|\*|#)/.test(lineContent) || /Pattern|Example|e\.g\.|like/i.test(lineContent)) continue;
+            if (shouldSkip(m.index, m[1])) continue;
             versions.push({ source: 'footer/visible', value: m[1], line: content.substring(0, m.index).split('\n').length });
         }
         
         // Version in about/info sections
         const aboutMatches = content.matchAll(/Version:?\s*<\/?\w*>?\s*v?(\d+\.\d+\.\d+)/gi);
         for (const m of aboutMatches) {
-            // Skip code comments
-            const lineStart = content.lastIndexOf('\n', m.index) + 1;
-            const lineContent = content.substring(lineStart, m.index);
-            if (/^\s*(\/\/|\*|#)/.test(lineContent) || /Pattern|Example/i.test(lineContent)) continue;
+            if (shouldSkip(m.index, m[1])) continue;
             versions.push({ source: 'about/info text', value: m[1], line: content.substring(0, m.index).split('\n').length });
         }
         
@@ -410,7 +414,7 @@
                 test: ['gameshelftest'],
                 prod: ['gameshelf']
             },
-            detectionPatterns: ['<title>Terms of Service', 'Terms of Service.*Game Shelf', 'Stewartstuff LLC']
+            detectionPatterns: ['gameshelf-terms', '<title>Terms of Service', 'Terms of Service.*Game Shelf']
         },
         privacy: {
             id: 'privacy', name: 'Privacy Policy', icon: '🔒',
@@ -423,7 +427,7 @@
                 test: ['gameshelftest'],
                 prod: ['gameshelf']
             },
-            detectionPatterns: ['<title>Privacy Policy', 'Privacy Policy.*Game Shelf', 'Information We Collect']
+            detectionPatterns: ['gameshelf-privacy', '<title>Privacy Policy', 'Privacy Policy.*Game Shelf']
         },
         
         // ===== INTERNAL TOOLS (Prod only) =====
@@ -986,6 +990,11 @@
             return `https://${owner}.github.io/${repoName}/${subPath}/`;
         }
         return `https://${owner}.github.io/${repoName}/`;
+    }
+    
+    // Helper to get effective subPath (falls back to defaults if stored value is empty)
+    function getEffectiveSubPath(app, appId) {
+        return app.subPath || DEFAULT_APP_DEFINITIONS[appId]?.subPath || '';
     }
     
     // Helper to get full file path in repo (prepends subPath if needed)
@@ -1830,6 +1839,9 @@
             }
             
             const app = apps[appId];
+            // Ensure subPath is set from defaults (localStorage may have empty string from old config)
+            const effectiveSubPath = app.subPath || DEFAULT_APP_DEFINITIONS[appId]?.subPath || '';
+            
             const confirmed = await showConfirm(
                 `Roll back ${app.name} ${target.toUpperCase()} to v${snapshot.version || 'unknown'}?\n\nSaved: ${new Date(snapshot.savedAt).toLocaleString()}`,
                 '⏪ Quick Rollback'
@@ -1873,7 +1885,7 @@
                 addStep('Restoring snapshot', 'complete', result.commit.sha.substring(0, 7));
                 
                 deployment.status = 'success';
-                deployment.url = getGitHubPagesUrl(snapshot.repo, app.subPath);
+                deployment.url = getGitHubPagesUrl(snapshot.repo, effectiveSubPath);
                 
                 const versionKey = target === 'prod' ? 'currentProdVersion' : 'currentTestVersion';
                 updateApp(appId, { [versionKey]: snapshot.version });
@@ -2125,8 +2137,12 @@
             
             const updates = {};
             for (const [appId, app] of Object.entries(currentApps)) {
+                // Ensure subPath is set from defaults (localStorage may have empty string from old config)
+                const effectiveSubPath = app.subPath || DEFAULT_APP_DEFINITIONS[appId]?.subPath || '';
+                const appWithSubPath = { ...app, subPath: effectiveSubPath };
+                
                 // Get the full path including subPath if set
-                const fullTargetPath = getRepoFilePath(app, app.targetPath);
+                const fullTargetPath = getRepoFilePath(appWithSubPath, app.targetPath);
                 
                 if (app.testRepo) {
                     try {
@@ -2586,11 +2602,15 @@
             if (!github) { await showAlert('Configure GitHub token', 'Configuration Required'); return; }
             
             const app = apps[appId];
+            // Ensure subPath is set from defaults (localStorage may have empty string from old config)
+            const effectiveSubPath = app.subPath || DEFAULT_APP_DEFINITIONS[appId]?.subPath || '';
+            const appWithSubPath = { ...app, subPath: effectiveSubPath };
+            
             const repo = target === 'prod' ? app.prodRepo : app.testRepo;
             if (!repo) { await showAlert(`Configure ${target} repo`, 'Configuration Required'); return; }
             
             // Get full path including subPath
-            const fullTargetPath = getRepoFilePath(app, file.targetPath || app.targetPath);
+            const fullTargetPath = getRepoFilePath(appWithSubPath, file.targetPath || app.targetPath);
             
             const currentVersion = await fetchCurrentVersion(repo, fullTargetPath);
             const newVersion = file.version;
@@ -2672,7 +2692,7 @@
                 }
                 
                 deployment.status = 'success';
-                deployment.url = getGitHubPagesUrl(repo, app.subPath);
+                deployment.url = getGitHubPagesUrl(repo, effectiveSubPath);
                 updateApp(appId, { [target === 'prod' ? 'currentProdVersion' : 'currentTestVersion']: newVersion });
                 removeStaged(file.id);
                 
@@ -2835,11 +2855,18 @@
                 }));
                 console.log('Files to commit with paths:', filesToCommit.map(f => f.path));
                 
+                // Check if any file has a subdirectory that might not exist
+                // Use batch commit (Git Data API) for these cases since it auto-creates directories
+                const hasSubdirectories = filesToCommit.some(f => f.path.includes('/'));
+                
                 let result;
-                // Use simple Contents API for single files (more reliable than Git Data API)
-                if (filesToCommit.length === 1) {
+                // Use Git Data API (batchCommit) for:
+                // 1. Multiple files
+                // 2. Files with subdirectories (to auto-create directories)
+                // Use Contents API only for single files at repo root (more reliable for simple cases)
+                if (filesToCommit.length === 1 && !hasSubdirectories) {
                     const file = filesToCommit[0];
-                    console.log('Single file deploy, using Contents API for:', file.path);
+                    console.log('Single file at root, using Contents API for:', file.path);
                     
                     // Get current file SHA if it exists (needed for update)
                     let existingSha = null;
@@ -2877,7 +2904,10 @@
                     );
                     result.sha = result.commit.sha;
                 } else {
-                    // Multiple files - use batch commit (Git Data API)
+                    // Multiple files OR files with subdirectories - use batch commit (Git Data API)
+                    // Git Data API auto-creates directories, which is essential for new subdirectories
+                    console.log(`Using Git Data API (batchCommit) - files: ${filesToCommit.length}, hasSubdirs: ${hasSubdirectories}`);
+                    
                     // Capture time BEFORE commit for GitHub Actions workflow detection
                     deployment.preCommitTime = Date.now();
                     
@@ -3087,6 +3117,11 @@
                 await showAlert(`App "${appId}" not found`, 'Promote Error');
                 return;
             }
+            
+            // Ensure subPath is set from defaults (localStorage may have empty string from old config)
+            const effectiveSubPath = app.subPath || DEFAULT_APP_DEFINITIONS[appId]?.subPath || '';
+            const appWithSubPath = { ...app, subPath: effectiveSubPath };
+            
             if (!app.testRepo) {
                 await showAlert(`No TEST repo configured for ${app.name}. Assign a test repo first.`, 'Promote Error');
                 return;
@@ -3099,6 +3134,7 @@
             console.log(`[Promote] Starting promotion for ${appId}`);
             console.log(`[Promote] TEST repo: ${app.testRepo}`);
             console.log(`[Promote] PROD repo: ${app.prodRepo}`);
+            console.log(`[Promote] subPath: ${effectiveSubPath || '(root)'}`);
             
             setModal(null);
             
@@ -3136,17 +3172,17 @@
                 }
                 
                 // Convert to full paths with subPath
-                const filesToPromote = baseFilesToPromote.map(f => getRepoFilePath(app, f));
+                const filesToPromote = baseFilesToPromote.map(f => getRepoFilePath(appWithSubPath, f));
                 
                 // For PWA apps, also check for icons folder
                 let iconFiles = [];
                 if (app.hasServiceWorker) {
                     try {
-                        const iconsPath = getRepoFilePath(app, 'icons');
+                        const iconsPath = getRepoFilePath(appWithSubPath, 'icons');
                         const iconsContents = await github.listRepoContents(app.testRepo, iconsPath);
                         iconFiles = iconsContents
                             .filter(f => f.type === 'file' && /\.(png|ico|svg|webp)$/i.test(f.name))
-                            .map(f => getRepoFilePath(app, `icons/${f.name}`));
+                            .map(f => getRepoFilePath(appWithSubPath, `icons/${f.name}`));
                         console.log(`Found ${iconFiles.length} icon files in TEST at ${iconsPath}`);
                     } catch (e) {
                         console.log('No icons folder found in TEST');
@@ -3159,7 +3195,7 @@
                 let testVersion = null;
                 
                 // Fetch main PWA files
-                const fullTargetPath = getRepoFilePath(app, app.targetPath);
+                const fullTargetPath = getRepoFilePath(appWithSubPath, app.targetPath);
                 for (const filePath of filesToPromote) {
                     try {
                         const testFile = await github.getFile(app.testRepo, filePath);
@@ -3290,7 +3326,7 @@
                 
                 deployment.status = 'success';
                 deployment.version = testVersion;
-                deployment.url = getGitHubPagesUrl(app.prodRepo, app.subPath);
+                deployment.url = getGitHubPagesUrl(app.prodRepo, effectiveSubPath);
                 updateApp(appId, { currentProdVersion: testVersion });
                 
                 // Don't refresh immediately - GitHub's CDN needs time to propagate
@@ -3322,6 +3358,10 @@
             const app = apps[deploymentToRollbackTo.appId];
             if (!app) return;
             
+            // Ensure subPath is set from defaults (localStorage may have empty string from old config)
+            const effectiveSubPath = app.subPath || DEFAULT_APP_DEFINITIONS[deploymentToRollbackTo.appId]?.subPath || '';
+            const appWithSubPath = { ...app, subPath: effectiveSubPath };
+            
             setModal(null);
             
             const repo = deploymentToRollbackTo.repo;
@@ -3352,7 +3392,7 @@
             
             try {
                 // Get full path including subPath
-                const fullTargetPath = getRepoFilePath(app, app.targetPath);
+                const fullTargetPath = getRepoFilePath(appWithSubPath, app.targetPath);
                 
                 addStep('Getting current state', 'running');
                 const currentFileData = await github.getFileContent(repo, fullTargetPath);
@@ -3379,7 +3419,7 @@
                 addStep('Rolling back', 'complete', result.commit.sha.substring(0, 7));
                 
                 deployment.status = 'success';
-                deployment.url = getGitHubPagesUrl(repo, app.subPath);
+                deployment.url = getGitHubPagesUrl(repo, effectiveSubPath);
                 const versionKey = deploymentToRollbackTo.target === 'prod' ? 'currentProdVersion' : 'currentTestVersion';
                 updateApp(deploymentToRollbackTo.appId, { [versionKey]: targetVersion });
                 
@@ -3414,7 +3454,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.5.0 • GitHub Actions workflow monitoring</div>
+                                    <div className="text-xs text-slate-400">v8.5.2 • Deploy & manage apps</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -5057,8 +5097,9 @@
                                     <div className="space-y-2">
                                         {publicApps.map(app => {
                                             const canPromote = app.testRepo && app.prodRepo && app.currentTestVersion && app.currentTestVersion !== app.currentProdVersion;
-                                            const testUrl = getGitHubPagesUrl(app.testRepo, app.subPath);
-                                            const prodUrl = getGitHubPagesUrl(app.prodRepo, app.subPath);
+                                            const effectiveSubPath = getEffectiveSubPath(app, app.id);
+                                            const testUrl = getGitHubPagesUrl(app.testRepo, effectiveSubPath);
+                                            const prodUrl = getGitHubPagesUrl(app.prodRepo, effectiveSubPath);
                                             const testDeploying = deployingRepos && deployingRepos[`${app.id}:test`];
                                             const prodDeploying = deployingRepos && deployingRepos[`${app.id}:prod`];
                                             const isExpanded = expandedApps[app.id];
@@ -5217,7 +5258,8 @@
                                     </div>
                                     <div className="space-y-2">
                                         {internalApps.map(app => {
-                                            const prodUrl = getGitHubPagesUrl(app.prodRepo, app.subPath);
+                                            const effectiveSubPath = getEffectiveSubPath(app, app.id);
+                                            const prodUrl = getGitHubPagesUrl(app.prodRepo, effectiveSubPath);
                                             const prodDeploying = deployingRepos && deployingRepos[`${app.id}:prod`];
                                             const isExpanded = expandedApps[app.id];
                                             const info = appInfo[app.id];
@@ -5285,8 +5327,9 @@
                                     {!otherCollapsed && (
                                         <div className="space-y-2">
                                             {otherApps.map(app => {
-                                                const testUrl = getGitHubPagesUrl(app.testRepo, app.subPath);
-                                                const prodUrl = getGitHubPagesUrl(app.prodRepo, app.subPath);
+                                                const effectiveSubPath = getEffectiveSubPath(app, app.id);
+                                                const testUrl = getGitHubPagesUrl(app.testRepo, effectiveSubPath);
+                                                const prodUrl = getGitHubPagesUrl(app.prodRepo, effectiveSubPath);
                                                 const prodDeploying = deployingRepos && deployingRepos[`${app.id}:prod`];
                                                 
                                                 return (
