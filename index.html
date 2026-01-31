@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.5.6">
+    <meta name="version" content="8.5.9">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -14,6 +14,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-functions-compat.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; }
@@ -27,7 +28,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.5.6 starting...');
+    console.log('Command Center v8.5.9 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -2687,6 +2688,7 @@
                 }
                 
                 addStep('Committing', 'running');
+                deployment.preCommitTime = Date.now(); // Capture time before commit for workflow search
                 const currentFile = await github.getFile(repo, fullTargetPath);
                 const result = await github.createOrUpdateFile(
                     repo, fullTargetPath, file.content,
@@ -2746,8 +2748,43 @@
                     }, 500);
                 }
                 
-                // Start monitoring live site for deployment completion
-                if (deployment.url && newVersion) {
+                // Start monitoring for deployment completion
+                if (app?.deployType === 'github-actions') {
+                    // For github-actions apps (Firebase Functions), monitor the workflow
+                    addStep('GitHub Actions', 'running', 'Finding workflow...');
+                    const searchTime = (deployment.preCommitTime || Date.now()) - 10000;
+                    
+                    const workflowRun = await github.findRecentWorkflowRun(repo, searchTime, 60000);
+                    
+                    if (workflowRun) {
+                        const logsUrl = await github.getWorkflowRunLogsUrl(repo, workflowRun.id);
+                        addStep('GitHub Actions', 'running', `Workflow #${workflowRun.run_number} running...`);
+                        deployment.workflowUrl = logsUrl;
+                        setActiveDeployment({ ...deployment });
+                        
+                        const monitorStartTime = Date.now();
+                        const result = await github.waitForWorkflowRun(repo, workflowRun.id, 300000, (run) => {
+                            addStep('GitHub Actions', 'running', `${run.status}... (${Math.round((Date.now() - monitorStartTime) / 1000)}s)`);
+                            setActiveDeployment({ ...deployment });
+                            setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                        });
+                        
+                        if (result.success) {
+                            addStep('GitHub Actions', 'complete', `✓ Deployed! (${result.run?.conclusion})`);
+                        } else {
+                            addStep('GitHub Actions', 'error', `Failed: ${result.conclusion || result.error}`);
+                            deployment.status = 'failed';
+                            deployment.error = result.conclusion || result.error;
+                            if (result.logsUrl) {
+                                deployment.workflowUrl = result.logsUrl;
+                            }
+                        }
+                    } else {
+                        addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
+                        deployment.workflowUrl = `https://github.com/${repo}/actions`;
+                    }
+                } else if (deployment.url && newVersion) {
+                    // For regular apps, monitor the live site
                     addStep('GitHub Pages', 'running', 'Waiting for deploy...');
                     monitorLiveDeployment(deployment.url, newVersion, repo, (status, detail) => {
                         addStep('GitHub Pages', status, detail);
@@ -3319,6 +3356,9 @@
                 
                 addStep('Deploying', 'running', `${filesToCommit.length} files`);
                 
+                // Capture time before commit for workflow search
+                deployment.preCommitTime = Date.now();
+                
                 // Use batch commit for multiple files
                 const result = await github.batchCommit(
                     app.prodRepo,
@@ -3356,8 +3396,40 @@
                 // Don't refresh immediately - GitHub's CDN needs time to propagate
                 // setTimeout(() => refreshAllVersions(), 1000); // DISABLED - causes version revert
                 
-                // Start monitoring live site for deployment completion
-                if (deployment.url && testVersion) {
+                // Start monitoring for deployment completion
+                if (app?.deployType === 'github-actions') {
+                    // For github-actions apps, monitor the workflow
+                    addStep('GitHub Actions', 'running', 'Finding workflow...');
+                    const searchTime = (deployment.preCommitTime || Date.now()) - 10000;
+                    
+                    const workflowRun = await github.findRecentWorkflowRun(app.prodRepo, searchTime, 60000);
+                    
+                    if (workflowRun) {
+                        const logsUrl = await github.getWorkflowRunLogsUrl(app.prodRepo, workflowRun.id);
+                        addStep('GitHub Actions', 'running', `Workflow #${workflowRun.run_number} running...`);
+                        deployment.workflowUrl = logsUrl;
+                        setActiveDeployment({ ...deployment });
+                        
+                        const monitorStartTime = Date.now();
+                        const result = await github.waitForWorkflowRun(app.prodRepo, workflowRun.id, 300000, (run) => {
+                            addStep('GitHub Actions', 'running', `${run.status}... (${Math.round((Date.now() - monitorStartTime) / 1000)}s)`);
+                            setActiveDeployment({ ...deployment });
+                            setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                        });
+                        
+                        if (result.success) {
+                            addStep('GitHub Actions', 'complete', `✓ Deployed! (${result.run?.conclusion})`);
+                        } else {
+                            addStep('GitHub Actions', 'error', `Failed: ${result.conclusion || result.error}`);
+                            deployment.status = 'failed';
+                            deployment.error = result.conclusion || result.error;
+                        }
+                    } else {
+                        addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
+                        deployment.workflowUrl = `https://github.com/${app.prodRepo}/actions`;
+                    }
+                } else if (deployment.url && testVersion) {
+                    // For regular apps, monitor the live site
                     addStep('GitHub Pages', 'running', 'Waiting for deploy...');
                     monitorLiveDeployment(deployment.url, testVersion, app.prodRepo, (status, detail) => {
                         addStep('GitHub Pages', status, detail);
@@ -3434,6 +3506,7 @@
                 addStep('Fetching rollback version', 'complete', formatVersion(targetVersion));
                 
                 addStep('Rolling back', 'running');
+                deployment.preCommitTime = Date.now(); // Capture time before commit for workflow search
                 const result = await github.createOrUpdateFile(
                     repo, fullTargetPath, content,
                     `Rollback ${app.name} to ${formatVersion(targetVersion)} (was ${formatVersion(currentVersion)})`,
@@ -3447,8 +3520,40 @@
                 const versionKey = deploymentToRollbackTo.target === 'prod' ? 'currentProdVersion' : 'currentTestVersion';
                 updateApp(deploymentToRollbackTo.appId, { [versionKey]: targetVersion });
                 
-                // Start monitoring live site for deployment completion
-                if (deployment.url && targetVersion) {
+                // Start monitoring for deployment completion
+                if (app?.deployType === 'github-actions') {
+                    // For github-actions apps, monitor the workflow
+                    addStep('GitHub Actions', 'running', 'Finding workflow...');
+                    const searchTime = (deployment.preCommitTime || Date.now()) - 10000;
+                    
+                    const workflowRun = await github.findRecentWorkflowRun(repo, searchTime, 60000);
+                    
+                    if (workflowRun) {
+                        const logsUrl = await github.getWorkflowRunLogsUrl(repo, workflowRun.id);
+                        addStep('GitHub Actions', 'running', `Workflow #${workflowRun.run_number} running...`);
+                        deployment.workflowUrl = logsUrl;
+                        setActiveDeployment({ ...deployment });
+                        
+                        const monitorStartTime = Date.now();
+                        const result = await github.waitForWorkflowRun(repo, workflowRun.id, 300000, (run) => {
+                            addStep('GitHub Actions', 'running', `${run.status}... (${Math.round((Date.now() - monitorStartTime) / 1000)}s)`);
+                            setActiveDeployment({ ...deployment });
+                            setDeployments(prev => prev.map(d => d.id === deployment.id ? { ...deployment } : d));
+                        });
+                        
+                        if (result.success) {
+                            addStep('GitHub Actions', 'complete', `✓ Deployed! (${result.run?.conclusion})`);
+                        } else {
+                            addStep('GitHub Actions', 'error', `Failed: ${result.conclusion || result.error}`);
+                            deployment.status = 'failed';
+                            deployment.error = result.conclusion || result.error;
+                        }
+                    } else {
+                        addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
+                        deployment.workflowUrl = `https://github.com/${repo}/actions`;
+                    }
+                } else if (deployment.url && targetVersion) {
+                    // For regular apps, monitor the live site
                     addStep('GitHub Pages', 'running', 'Waiting for deploy...');
                     monitorLiveDeployment(deployment.url, targetVersion, repo, (status, detail) => {
                         addStep('GitHub Pages', status, detail);
@@ -3478,7 +3583,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.5.6 • Deploy & manage apps</div>
+                                    <div className="text-xs text-slate-400">v8.5.9 • Deploy & manage apps</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
