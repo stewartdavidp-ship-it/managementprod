@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.5.9">
+    <meta name="version" content="8.6.2">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -28,7 +28,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.5.9 starting...');
+    console.log('Command Center v8.6.2 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -70,37 +70,58 @@
     // =========================================================================
     
     function extractVersionFromHTML(content) {
-        // Pattern 1: <meta name="version" content="1.0.0">
+        // Collect all version candidates with their source
+        const candidates = [];
+        
+        // Priority 1: const APP_VERSION - the authoritative runtime version
+        const appVersionMatch = content.match(/const\s+APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+        if (appVersionMatch) {
+            candidates.push({ version: appVersionMatch[1], source: 'APP_VERSION', priority: 1 });
+        }
+        
+        // Priority 2: meta version tag
         const metaMatch = content.match(/<meta\s+name=["']version["']\s+content=["']([^"']+)["']/i);
-        if (metaMatch) return metaMatch[1];
+        if (metaMatch) {
+            candidates.push({ version: metaMatch[1], source: 'meta', priority: 2 });
+        }
         
-        // Pattern 2: <meta content="1.0.0" name="version">
+        // Priority 2b: meta tag with reversed attributes
         const metaMatch2 = content.match(/<meta\s+content=["']([^"']+)["']\s+name=["']version["']/i);
-        if (metaMatch2) return metaMatch2[1];
+        if (metaMatch2 && !metaMatch) {
+            candidates.push({ version: metaMatch2[1], source: 'meta', priority: 2 });
+        }
         
-        // Pattern 3: <!-- VERSION: 1.0.0 -->
+        // Priority 3: const VERSION (without APP_ prefix)
+        const versionConstMatch = content.match(/const\s+VERSION\s*=\s*['"]([^'"]+)['"]/);
+        if (versionConstMatch) {
+            candidates.push({ version: versionConstMatch[1], source: 'VERSION', priority: 3 });
+        }
+        
+        // Priority 4: HTML comment with VERSION label
         const commentMatch = content.match(/<!--\s*VERSION:\s*([^\s]+)\s*-->/i);
-        if (commentMatch) return commentMatch[1];
+        if (commentMatch) {
+            candidates.push({ version: commentMatch[1], source: 'comment', priority: 4 });
+        }
         
-        // Pattern 4: const APP_VERSION = '1.0.0' or "1.0.0"
-        const constMatch = content.match(/(?:const|let|var)\s+(?:APP_)?VERSION\s*=\s*['"]([^'"]+)['"]/i);
-        if (constMatch) return constMatch[1];
-        
-        // Pattern 5: data-version="1.0.0" on html or body tag
+        // Priority 5: data-version attribute
         const dataMatch = content.match(/data-version=["']([^"']+)["']/i);
-        if (dataMatch) return dataMatch[1];
+        if (dataMatch) {
+            candidates.push({ version: dataMatch[1], source: 'data-attr', priority: 5 });
+        }
         
-        // Pattern 6: "version": "1.0.0" in package.json style or inline JSON
-        const jsonMatch = content.match(/["']version["']\s*:\s*["']([^"']+)["']/i);
-        if (jsonMatch) return jsonMatch[1];
+        // If we have candidates, return the highest priority one
+        if (candidates.length > 0) {
+            candidates.sort((a, b) => a.priority - b.priority);
+            return candidates[0].version;
+        }
         
-        // Pattern 7: @version 1.0.0 in JSDoc style comments
+        // Fallback: JSON-style version field (but skip if looks like example/docs)
+        const jsonMatch = content.match(/["']version["']\s*:\s*["'](\d+\.\d+\.\d+)["']/i);
+        if (jsonMatch && jsonMatch[1] !== '1.0.0') return jsonMatch[1];
+        
+        // Fallback: JSDoc @version tag
         const jsdocMatch = content.match(/@version\s+(\d+\.\d+\.\d+)/i);
-        if (jsdocMatch) return jsdocMatch[1];
-        
-        // Pattern 8: Version 1.0.0 or v1.0.0 in title or comments
-        const titleMatch = content.match(/(?:Version|v)[\s:]*(\d+\.\d+\.\d+)/i);
-        if (titleMatch) return titleMatch[1];
+        if (jsdocMatch && jsdocMatch[1] !== '1.0.0') return jsdocMatch[1];
         
         return null;
     }
@@ -2782,6 +2803,7 @@
                     } else {
                         addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
                         deployment.workflowUrl = `https://github.com/${repo}/actions`;
+                        deployment.status = 'success'; // Code committed successfully, just couldn't track workflow
                     }
                 } else if (deployment.url && newVersion) {
                     // For regular apps, monitor the live site
@@ -3427,6 +3449,7 @@
                     } else {
                         addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
                         deployment.workflowUrl = `https://github.com/${app.prodRepo}/actions`;
+                        deployment.status = 'success'; // Code committed successfully, just couldn't track workflow
                     }
                 } else if (deployment.url && testVersion) {
                     // For regular apps, monitor the live site
@@ -3551,6 +3574,7 @@
                     } else {
                         addStep('GitHub Actions', 'warning', 'Workflow not found - check GitHub manually');
                         deployment.workflowUrl = `https://github.com/${repo}/actions`;
+                        deployment.status = 'success'; // Code committed successfully, just couldn't track workflow
                     }
                 } else if (deployment.url && targetVersion) {
                     // For regular apps, monitor the live site
@@ -3583,7 +3607,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.5.9 • Deploy & manage apps</div>
+                                    <div className="text-xs text-slate-400">v8.6.2 • Deploy & manage apps</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
