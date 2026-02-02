@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.6.2">
+    <meta name="version" content="8.7.0">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -28,7 +28,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.6.2 starting...');
+    console.log('Command Center v8.7.0 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -3607,7 +3607,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.6.2 • Deploy & manage apps</div>
+                                    <div className="text-xs text-slate-400">v8.7.0 • Deploy & manage apps</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -3619,7 +3619,7 @@
                                 {/* Consolidated Navigation - 4 main sections */}
                                 {[
                                     { id: 'deploy', icon: '🚀', label: 'Deploy', views: ['dashboard', 'smartdeploy', 'history'] },
-                                    { id: 'monitor', icon: '📊', label: 'Monitor', views: ['users', 'firebase', 'integrations', 'issues'] },
+                                    { id: 'monitor', icon: '📊', label: 'Monitor', views: ['users', 'beta', 'firebase', 'integrations', 'issues'] },
                                     { id: 'maintain', icon: '🔧', label: 'Maintain', views: ['cleanup', 'files', 'archive', 'session'] },
                                     { id: 'configure', icon: '⚙️', label: 'Configure', views: ['config', 'apps', 'settings'] }
                                 ].map(section => (
@@ -3646,6 +3646,7 @@
                                                     {v === 'smartdeploy' && '📦 Smart Deploy'}
                                                     {v === 'history' && '📜 Deploy History'}
                                                     {v === 'users' && '👥 Users'}
+                                                    {v === 'beta' && '🧪 Beta Program'}
                                                     {v === 'firebase' && '🔥 Firebase'}
                                                     {v === 'integrations' && '⚡ Integrations'}
                                                     {v === 'issues' && '🐛 Issues'}
@@ -3835,6 +3836,10 @@
                     
                     {view === 'users' && (
                         <UsersView showAlert={showAlert} />
+                    )}
+                    
+                    {view === 'beta' && (
+                        <BetaAnalyticsView showAlert={showAlert} />
                     )}
                     
                     {view === 'integrations' && (
@@ -6070,6 +6075,578 @@
                         {userStats.lastUpdated && (
                             <div className="text-xs text-slate-500 text-right">
                                 Last updated: {new Date(userStats.lastUpdated).toLocaleString()}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // BETA ANALYTICS VIEW (v8.7.0) - Onboarding responses, survey ratings, user details
+    // =========================================================================
+    
+    function BetaAnalyticsView({ showAlert }) {
+        const [betaUsers, setBetaUsers] = React.useState([]);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [activeTab, setActiveTab] = React.useState('overview');
+        const [expandedUser, setExpandedUser] = React.useState(null);
+        const [surveyFilter, setSurveyFilter] = React.useState('all');
+        
+        const loadBetaData = async () => {
+            if (!firebaseDb) {
+                setError('Firebase not connected');
+                return;
+            }
+            setLoading(true);
+            setError(null);
+            try {
+                const snapshot = await firebaseDb.ref('users').once('value');
+                const allUsers = snapshot.val() || {};
+                
+                // Filter to users with earlyAccess data
+                const beta = [];
+                Object.entries(allUsers).forEach(([uid, userData]) => {
+                    if (userData.earlyAccess) {
+                        beta.push({
+                            uid,
+                            displayName: userData.displayName || 'Unknown',
+                            email: userData.email || '',
+                            photoURL: userData.photoURL || '',
+                            lastVisit: userData.lastVisit || null,
+                            createdAt: userData.createdAt || null,
+                            earlyAccess: userData.earlyAccess,
+                            userType: userData.userType || 'unknown'
+                        });
+                    }
+                });
+                
+                // Sort by join date (newest first)
+                beta.sort((a, b) => (b.earlyAccess.joinedAt || 0) - (a.earlyAccess.joinedAt || 0));
+                setBetaUsers(beta);
+            } catch (e) {
+                console.error('Failed to load beta data:', e);
+                setError(e.message || 'Failed to load beta data');
+            }
+            setLoading(false);
+        };
+        
+        React.useEffect(() => { loadBetaData(); }, []);
+        
+        // Aggregate onboarding stats
+        const onboardingStats = React.useMemo(() => {
+            const stats = {
+                total: betaUsers.length,
+                completedOnboarding: 0,
+                sources: {},
+                experience: {},
+                games: {},
+                frequency: {},
+                devices: {},
+                sharing: {},
+                shareWhere: {},
+                hints: {},
+                compete: {},
+                frustrations: {},
+                dailyUseResponses: [],
+                otherTexts: { source: [], games: [], shareWhere: [], frustration: [] }
+            };
+            
+            betaUsers.forEach(u => {
+                const ob = u.earlyAccess?.onboarding;
+                if (!ob || !ob.completedAt) return;
+                stats.completedOnboarding++;
+                
+                // Count each field
+                if (ob.source) stats.sources[ob.source] = (stats.sources[ob.source] || 0) + 1;
+                if (ob.sourceOther) stats.otherTexts.source.push({ user: u.displayName, text: ob.sourceOther });
+                
+                if (ob.experience) stats.experience[ob.experience] = (stats.experience[ob.experience] || 0) + 1;
+                
+                if (Array.isArray(ob.games)) {
+                    ob.games.forEach(g => { stats.games[g] = (stats.games[g] || 0) + 1; });
+                }
+                if (ob.gamesOther) stats.otherTexts.games.push({ user: u.displayName, text: ob.gamesOther });
+                
+                if (ob.frequency) stats.frequency[ob.frequency] = (stats.frequency[ob.frequency] || 0) + 1;
+                if (ob.device) stats.devices[ob.device] = (stats.devices[ob.device] || 0) + 1;
+                if (ob.sharing) stats.sharing[ob.sharing] = (stats.sharing[ob.sharing] || 0) + 1;
+                
+                if (Array.isArray(ob.shareWhere)) {
+                    ob.shareWhere.forEach(s => { stats.shareWhere[s] = (stats.shareWhere[s] || 0) + 1; });
+                }
+                if (ob.shareWhereOther) stats.otherTexts.shareWhere.push({ user: u.displayName, text: ob.shareWhereOther });
+                
+                if (ob.hints) stats.hints[ob.hints] = (stats.hints[ob.hints] || 0) + 1;
+                if (ob.compete) stats.compete[ob.compete] = (stats.compete[ob.compete] || 0) + 1;
+                if (ob.frustration) stats.frustrations[ob.frustration] = (stats.frustrations[ob.frustration] || 0) + 1;
+                if (ob.frustrationOther) stats.otherTexts.frustration.push({ user: u.displayName, text: ob.frustrationOther });
+                
+                if (ob.dailyUse) stats.dailyUseResponses.push({ user: u.displayName, text: ob.dailyUse });
+            });
+            
+            return stats;
+        }, [betaUsers]);
+        
+        // Aggregate survey stats
+        const surveyStats = React.useMemo(() => {
+            const allRatings = [];
+            const byDate = {};
+            const byUser = {};
+            
+            betaUsers.forEach(u => {
+                const surveys = u.earlyAccess?.surveys;
+                if (!surveys) return;
+                byUser[u.displayName] = [];
+                
+                Object.entries(surveys).forEach(([date, data]) => {
+                    const entry = { user: u.displayName, date, rating: data.rating, feedback: data.feedback || '' };
+                    allRatings.push(entry);
+                    if (!byDate[date]) byDate[date] = [];
+                    byDate[date].push(entry);
+                    byUser[u.displayName].push(entry);
+                });
+            });
+            
+            allRatings.sort((a, b) => b.date.localeCompare(a.date));
+            
+            const avg = allRatings.length > 0 
+                ? (allRatings.reduce((sum, r) => sum + r.rating, 0) / allRatings.length).toFixed(1) 
+                : '—';
+            
+            const distribution = [0, 0, 0, 0, 0];
+            allRatings.forEach(r => { if (r.rating >= 1 && r.rating <= 5) distribution[r.rating - 1]++; });
+            
+            const withFeedback = allRatings.filter(r => r.feedback);
+            
+            return { allRatings, byDate, byUser, avg, distribution, withFeedback, total: allRatings.length };
+        }, [betaUsers]);
+        
+        // Helper: render a bar chart for key-value data
+        const renderBarChart = (data, labelMap = null) => {
+            const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
+            const max = entries.length > 0 ? entries[0][1] : 1;
+            return entries.map(([key, count]) => (
+                <div key={key} className="flex items-center gap-2 mb-1.5">
+                    <div className="text-xs text-slate-400 w-28 truncate text-right" title={labelMap?.[key] || key}>
+                        {labelMap?.[key] || key}
+                    </div>
+                    <div className="flex-1 h-5 bg-slate-900 rounded overflow-hidden">
+                        <div 
+                            className="h-full bg-indigo-600 rounded flex items-center justify-end pr-1.5"
+                            style={{ width: `${Math.max((count / max) * 100, 12)}%` }}
+                        >
+                            <span className="text-[10px] text-white font-bold">{count}</span>
+                        </div>
+                    </div>
+                </div>
+            ));
+        };
+        
+        // Helper: format timestamp
+        const fmtDate = (ts) => {
+            if (!ts) return '—';
+            return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        };
+        
+        const fmtDaysAgo = (ts) => {
+            if (!ts) return '';
+            const days = Math.floor((Date.now() - ts) / (1000 * 60 * 60 * 24));
+            if (days === 0) return 'today';
+            if (days === 1) return '1 day ago';
+            return `${days} days ago`;
+        };
+        
+        const tabs = [
+            { id: 'overview', label: '📊 Overview' },
+            { id: 'onboarding', label: '📝 Onboarding' },
+            { id: 'surveys', label: '⭐ Surveys' },
+            { id: 'users', label: '👤 Users' },
+            { id: 'goldq', label: '💡 Gold Question' }
+        ];
+        
+        return (
+            <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-xl font-bold flex items-center gap-2">🧪 Beta Program Analytics</h2>
+                    <button onClick={loadBetaData} disabled={loading}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                        {loading ? '⏳ Loading...' : '🔄 Refresh'}
+                    </button>
+                </div>
+                
+                {error && <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 text-red-400">⚠️ {error}</div>}
+                
+                {loading && !betaUsers.length && (
+                    <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-400 animate-pulse">Loading beta data...</div>
+                )}
+                
+                {/* Tabs */}
+                {betaUsers.length > 0 && (
+                    <div className="space-y-6">
+                        <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
+                            {tabs.map(t => (
+                                <button key={t.id} onClick={() => setActiveTab(t.id)}
+                                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                                        activeTab === t.id ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                                    }`}>{t.label}</button>
+                            ))}
+                        </div>
+                        
+                        {/* ---- OVERVIEW TAB ---- */}
+                        {activeTab === 'overview' && (
+                            <div className="space-y-6">
+                                {/* Key Metrics */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-gradient-to-br from-indigo-900/50 to-purple-900/50 rounded-xl p-5 border border-indigo-700 text-center">
+                                        <div className="text-3xl font-bold text-indigo-400">{onboardingStats.total}</div>
+                                        <div className="text-xs text-slate-400 mt-1">Beta Users</div>
+                                    </div>
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700 text-center">
+                                        <div className="text-3xl font-bold text-green-400">{onboardingStats.completedOnboarding}</div>
+                                        <div className="text-xs text-slate-400 mt-1">Completed Onboarding</div>
+                                    </div>
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700 text-center">
+                                        <div className="text-3xl font-bold text-amber-400">{surveyStats.total}</div>
+                                        <div className="text-xs text-slate-400 mt-1">Survey Responses</div>
+                                    </div>
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700 text-center">
+                                        <div className="text-3xl font-bold text-cyan-400">{surveyStats.avg}</div>
+                                        <div className="text-xs text-slate-400 mt-1">Avg Rating (1-5)</div>
+                                    </div>
+                                </div>
+                                
+                                {/* Rating Distribution */}
+                                {surveyStats.total > 0 && (
+                                    <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+                                        <h3 className="font-semibold mb-4">⭐ Rating Distribution</h3>
+                                        <div className="flex items-end gap-3 justify-center h-32">
+                                            {surveyStats.distribution.map((count, i) => {
+                                                const maxCount = Math.max(...surveyStats.distribution, 1);
+                                                const height = (count / maxCount) * 100;
+                                                const colors = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-lime-500', 'bg-green-500'];
+                                                return (
+                                                    <div key={i} className="flex flex-col items-center gap-1 flex-1 max-w-16">
+                                                        <span className="text-xs text-slate-400 font-bold">{count}</span>
+                                                        <div className={`w-full ${colors[i]} rounded-t`}
+                                                            style={{ height: `${Math.max(height, 4)}%`, minHeight: '4px' }}></div>
+                                                        <span className="text-xs text-slate-500">{i + 1}★</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {/* Recent Feedback */}
+                                {surveyStats.withFeedback.length > 0 && (
+                                    <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+                                        <h3 className="font-semibold mb-4">💬 Recent Feedback ({surveyStats.withFeedback.length})</h3>
+                                        <div className="space-y-3 max-h-64 overflow-y-auto">
+                                            {surveyStats.withFeedback.slice(0, 10).map((r, i) => (
+                                                <div key={i} className="bg-slate-900 rounded-lg p-3">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className="text-sm font-medium text-slate-300">{r.user}</span>
+                                                        <span className="text-xs text-slate-500">{r.date} · {'⭐'.repeat(r.rating)}</span>
+                                                    </div>
+                                                    <div className="text-sm text-slate-400">{r.feedback}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* ---- ONBOARDING TAB ---- */}
+                        {activeTab === 'onboarding' && (
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    {/* How did you find GS? */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">🔍 How did you find Game Shelf?</h3>
+                                        {renderBarChart(onboardingStats.sources, {
+                                            'friend': 'Friend', 'dave': 'Dave told me', 'social': 'Social Media',
+                                            'search': 'Search', 'app-store': 'App Store', 'other': 'Other'
+                                        })}
+                                        {onboardingStats.otherTexts.source.length > 0 && (
+                                            <div className="mt-2 text-xs text-slate-500">
+                                                Other: {onboardingStats.otherTexts.source.map(o => `"${o.text}" (${o.user})`).join(', ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Experience */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">⏳ How long playing daily puzzles?</h3>
+                                        {renderBarChart(onboardingStats.experience, {
+                                            'new': 'Brand new', 'months': 'A few months', 'year': 'About a year', 'years': '2+ years'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Games played */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">🎮 What puzzles do you play?</h3>
+                                        {renderBarChart(onboardingStats.games)}
+                                        {onboardingStats.otherTexts.games.length > 0 && (
+                                            <div className="mt-2 text-xs text-slate-500">
+                                                Other: {onboardingStats.otherTexts.games.map(o => `"${o.text}" (${o.user})`).join(', ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Frequency */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">📊 How many puzzles per day?</h3>
+                                        {renderBarChart(onboardingStats.frequency, {
+                                            '1': 'Just 1', '2-3': '2-3 games', '4-5': '4-5 games', '6+': '6+ games'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Device */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">📱 Primary device?</h3>
+                                        {renderBarChart(onboardingStats.devices, {
+                                            'iphone': 'iPhone', 'android': 'Android', 'ipad': 'iPad', 
+                                            'desktop': 'Desktop', 'multiple': 'Multiple'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Sharing */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">📤 Do you share results?</h3>
+                                        {renderBarChart(onboardingStats.sharing, {
+                                            'daily': 'Daily', 'sometimes': 'Sometimes', 'rarely': 'Rarely', 'never': 'Never'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Where share */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">💬 Where do you share?</h3>
+                                        {renderBarChart(onboardingStats.shareWhere, {
+                                            'imessage': 'iMessage', 'twitter': 'Twitter/X', 'discord': 'Discord',
+                                            'facebook': 'Facebook', 'slack': 'Slack', 'whatsapp': 'WhatsApp', 'other': 'Other'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Hints */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">💡 Do you look up hints?</h3>
+                                        {renderBarChart(onboardingStats.hints, {
+                                            'never': 'Never', 'rarely': 'Rarely', 'sometimes': 'Sometimes', 'often': 'Often'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Compete */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">🏆 Do you compete with others?</h3>
+                                        {renderBarChart(onboardingStats.compete, {
+                                            'yes-regular': 'Yes, regularly', 'yes-casual': 'Casually', 
+                                            'want-to': 'Want to', 'no': 'No'
+                                        })}
+                                    </div>
+                                    
+                                    {/* Frustrations */}
+                                    <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                        <h3 className="font-semibold mb-3 text-sm">😤 Biggest frustration?</h3>
+                                        {renderBarChart(onboardingStats.frustrations, {
+                                            'no-tracking': 'No tracking across games', 'scattered': 'Games scattered everywhere',
+                                            'no-compare': "Can't compare with friends", 'no-hints': 'No good hints',
+                                            'manual-share': 'Manual sharing is tedious', 'other': 'Other'
+                                        })}
+                                        {onboardingStats.otherTexts.frustration.length > 0 && (
+                                            <div className="mt-2 text-xs text-slate-500">
+                                                Other: {onboardingStats.otherTexts.frustration.map(o => `"${o.text}" (${o.user})`).join(', ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* ---- SURVEYS TAB ---- */}
+                        {activeTab === 'surveys' && (
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 text-center">
+                                        <div className="text-2xl font-bold text-amber-400">{surveyStats.total}</div>
+                                        <div className="text-xs text-slate-400">Total Responses</div>
+                                    </div>
+                                    <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 text-center">
+                                        <div className="text-2xl font-bold text-cyan-400">{surveyStats.avg}</div>
+                                        <div className="text-xs text-slate-400">Avg Rating</div>
+                                    </div>
+                                    <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 text-center">
+                                        <div className="text-2xl font-bold text-green-400">{surveyStats.withFeedback.length}</div>
+                                        <div className="text-xs text-slate-400">With Comments</div>
+                                    </div>
+                                    <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 text-center">
+                                        <div className="text-2xl font-bold text-purple-400">{Object.keys(surveyStats.byUser).length}</div>
+                                        <div className="text-xs text-slate-400">Unique Respondents</div>
+                                    </div>
+                                </div>
+                                
+                                {/* Filter */}
+                                <div className="flex gap-2">
+                                    {['all', 'with-feedback', 'low-rating'].map(f => (
+                                        <button key={f} onClick={() => setSurveyFilter(f)}
+                                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                                                surveyFilter === f ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
+                                            }`}>
+                                            {f === 'all' ? 'All' : f === 'with-feedback' ? 'With Comments' : 'Low Ratings (1-2)'}
+                                        </button>
+                                    ))}
+                                </div>
+                                
+                                {/* Survey entries */}
+                                <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                                    <div className="max-h-96 overflow-y-auto divide-y divide-slate-700">
+                                        {surveyStats.allRatings
+                                            .filter(r => {
+                                                if (surveyFilter === 'with-feedback') return r.feedback;
+                                                if (surveyFilter === 'low-rating') return r.rating <= 2;
+                                                return true;
+                                            })
+                                            .map((r, i) => (
+                                            <div key={i} className="px-4 py-3 flex items-start gap-3">
+                                                <div className={`text-lg font-bold min-w-[2rem] text-center ${
+                                                    r.rating >= 4 ? 'text-green-400' : r.rating >= 3 ? 'text-yellow-400' : 'text-red-400'
+                                                }`}>{r.rating}★</div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm font-medium text-slate-300">{r.user}</span>
+                                                        <span className="text-xs text-slate-500">{r.date}</span>
+                                                    </div>
+                                                    {r.feedback && <div className="text-sm text-slate-400 mt-0.5">{r.feedback}</div>}
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {surveyStats.total === 0 && (
+                                            <div className="px-4 py-8 text-center text-slate-500">No survey responses yet</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* ---- USERS TAB ---- */}
+                        {activeTab === 'users' && (
+                            <div className="space-y-4">
+                                <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                                    <div className="max-h-[600px] overflow-y-auto divide-y divide-slate-700">
+                                        {betaUsers.map(u => {
+                                            const ob = u.earlyAccess?.onboarding;
+                                            const surveys = u.earlyAccess?.surveys;
+                                            const surveyCount = surveys ? Object.keys(surveys).length : 0;
+                                            const isExpanded = expandedUser === u.uid;
+                                            
+                                            return (
+                                                <div key={u.uid}>
+                                                    <button onClick={() => setExpandedUser(isExpanded ? null : u.uid)}
+                                                        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-700/50 transition-colors text-left">
+                                                        {u.photoURL ? (
+                                                            <img src={u.photoURL} className="w-8 h-8 rounded-full" alt="" />
+                                                        ) : (
+                                                            <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-xs">
+                                                                {u.displayName.charAt(0)}
+                                                            </div>
+                                                        )}
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-sm font-medium text-slate-200 truncate">{u.displayName}</div>
+                                                            <div className="text-xs text-slate-500">
+                                                                Joined {fmtDate(u.earlyAccess.joinedAt)}
+                                                                {u.lastVisit ? ` · Last active ${fmtDaysAgo(u.lastVisit)}` : ''}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            {ob?.completedAt && <span className="px-2 py-0.5 bg-green-900/30 text-green-400 rounded text-[10px]">Onboarded</span>}
+                                                            {surveyCount > 0 && <span className="px-2 py-0.5 bg-amber-900/30 text-amber-400 rounded text-[10px]">{surveyCount} survey{surveyCount > 1 ? 's' : ''}</span>}
+                                                            <span className={`text-xs transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+                                                        </div>
+                                                    </button>
+                                                    
+                                                    {isExpanded && (
+                                                        <div className="px-4 pb-4 bg-slate-900/50">
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                                                                {/* Onboarding responses */}
+                                                                <div className="bg-slate-800 rounded-lg p-4">
+                                                                    <h4 className="text-xs font-semibold text-slate-400 mb-2 uppercase">Onboarding</h4>
+                                                                    {ob?.completedAt ? (
+                                                                        <div className="space-y-1.5 text-sm">
+                                                                            {ob.source && <div><span className="text-slate-500">Source:</span> <span className="text-slate-300">{ob.source}{ob.sourceOther ? ` (${ob.sourceOther})` : ''}</span></div>}
+                                                                            {ob.experience && <div><span className="text-slate-500">Experience:</span> <span className="text-slate-300">{ob.experience}</span></div>}
+                                                                            {ob.games && <div><span className="text-slate-500">Games:</span> <span className="text-slate-300">{Array.isArray(ob.games) ? ob.games.join(', ') : ob.games}{ob.gamesOther ? ` + ${ob.gamesOther}` : ''}</span></div>}
+                                                                            {ob.frequency && <div><span className="text-slate-500">Per day:</span> <span className="text-slate-300">{ob.frequency}</span></div>}
+                                                                            {ob.device && <div><span className="text-slate-500">Device:</span> <span className="text-slate-300">{ob.device}</span></div>}
+                                                                            {ob.sharing && <div><span className="text-slate-500">Sharing:</span> <span className="text-slate-300">{ob.sharing}{ob.shareWhere ? ` via ${Array.isArray(ob.shareWhere) ? ob.shareWhere.join(', ') : ob.shareWhere}` : ''}</span></div>}
+                                                                            {ob.hints && <div><span className="text-slate-500">Hints:</span> <span className="text-slate-300">{ob.hints}</span></div>}
+                                                                            {ob.compete && <div><span className="text-slate-500">Compete:</span> <span className="text-slate-300">{ob.compete}</span></div>}
+                                                                            {ob.frustration && <div><span className="text-slate-500">Frustration:</span> <span className="text-slate-300">{ob.frustration}{ob.frustrationOther ? ` (${ob.frustrationOther})` : ''}</span></div>}
+                                                                            {ob.dailyUse && <div className="mt-2 p-2 bg-amber-900/20 border border-amber-800/30 rounded"><span className="text-amber-400 text-xs font-semibold">💡 Daily use:</span> <span className="text-slate-300 text-xs">{ob.dailyUse}</span></div>}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="text-sm text-slate-500">Not completed</div>
+                                                                    )}
+                                                                </div>
+                                                                
+                                                                {/* Survey history */}
+                                                                <div className="bg-slate-800 rounded-lg p-4">
+                                                                    <h4 className="text-xs font-semibold text-slate-400 mb-2 uppercase">Survey History</h4>
+                                                                    {surveyCount > 0 ? (
+                                                                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                                                                            {Object.entries(surveys).sort((a, b) => b[0].localeCompare(a[0])).map(([date, data]) => (
+                                                                                <div key={date} className="text-sm flex items-start gap-2">
+                                                                                    <span className={`font-bold ${data.rating >= 4 ? 'text-green-400' : data.rating >= 3 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                                                        {data.rating}★
+                                                                                    </span>
+                                                                                    <div>
+                                                                                        <span className="text-slate-500 text-xs">{date}</span>
+                                                                                        {data.feedback && <div className="text-slate-400 text-xs mt-0.5">{data.feedback}</div>}
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="text-sm text-slate-500">No surveys yet</div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* ---- GOLD QUESTION TAB ---- */}
+                        {activeTab === 'goldq' && (
+                            <div className="space-y-6">
+                                <div className="bg-gradient-to-br from-amber-900/30 to-yellow-900/20 rounded-xl p-6 border border-amber-700/50">
+                                    <h3 className="font-semibold text-amber-400 mb-1">💡 "What would make you use Game Shelf every day?"</h3>
+                                    <p className="text-sm text-slate-400">The most valuable onboarding question — raw user intent and desires.</p>
+                                </div>
+                                
+                                <div className="space-y-3">
+                                    {onboardingStats.dailyUseResponses.length > 0 ? (
+                                        onboardingStats.dailyUseResponses.map((r, i) => (
+                                            <div key={i} className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <span className="text-sm font-medium text-slate-300">{r.user}</span>
+                                                </div>
+                                                <div className="text-slate-300 text-sm leading-relaxed">"{r.text}"</div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-500">
+                                            No responses to the daily use question yet
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>
