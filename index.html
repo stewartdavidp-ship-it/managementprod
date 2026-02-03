@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Shelf Command Center</title>
-    <meta name="version" content="8.7.1">
+    <meta name="version" content="8.7.2">
     <meta name="gs-app-id" content="management">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -28,7 +28,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.7.1 starting...');
+    console.log('Command Center v8.7.3 starting...');
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -492,6 +492,19 @@
         },
         
         // ===== OTHER PROJECTS (Collapsed by default) =====
+        'labelkeeper': {
+            id: 'labelkeeper', name: 'LabelKeeper', icon: '🏷️',
+            appType: 'public',
+            targetPath: 'index.html', swPath: '', hasServiceWorker: false,
+            subPath: '',
+            repos: { test: '', prod: '' },
+            versions: { test: '', prod: '' },
+            repoPatterns: {
+                test: ['labelkeepertest'],
+                prod: ['labelkeeper']
+            },
+            detectionPatterns: ['labelkeeper', 'label.keeper']
+        },
         'teacher-assist': {
             id: 'teacher-assist', name: 'Teacher Assist', icon: '👩‍🏫',
             appType: 'other',
@@ -503,7 +516,7 @@
                 test: ['teacher-assist-test'],
                 prod: ['teacher-assist']
             },
-            detectionPatterns: ['teacher.assist', 'classroom']
+            detectionPatterns: ['teacher.assist', 'teacher-assist']
         },
         'daily-shelf': {
             id: 'daily-shelf', name: 'Daily Shelf', icon: '📅',
@@ -575,6 +588,11 @@
         // Merge stored config with defaults (handles upgrades)
         mergeWithDefaults(stored) {
             const defaults = this.getDefaultConfig();
+            
+            // v8.7.2: Ensure labelkeeper has correct appType (public, not other)
+            if (stored.apps && stored.apps['labelkeeper']) {
+                stored.apps['labelkeeper'].appType = 'public';
+            }
             
             // Ensure environments structure
             if (!stored.environments) {
@@ -3607,7 +3625,7 @@
                                 <Icons.GameShelfLogo size={32} />
                                 <div>
                                     <h1 className="text-lg font-bold">Command Center</h1>
-                                    <div className="text-xs text-slate-400">v8.7.1 • Deploy & manage apps</div>
+                                    <div className="text-xs text-slate-400">v8.7.2 • Deploy & manage apps</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -5639,9 +5657,10 @@
             
             setDownloadingPackage(true);
             try {
-                // Get app info for naming
+                // Get app info for naming and subPath
                 const app = configuredApps.find(a => a.testRepo === selectedRepo || a.prodRepo === selectedRepo);
                 const repoName = selectedRepo.split('/')[1];
+                const subPath = app?.subPath || '';
                 
                 // WHITELIST: Only include files that belong in deploy packages
                 // Based on gs-active skill deploy structure
@@ -5662,17 +5681,23 @@
                 ];
                 
                 // Check if a file should be included in deploy package
-                const shouldInclude = (path) => {
+                // v8.7.3: Handle subPath - strip it from path before checking
+                const shouldInclude = (fullPath) => {
+                    // Remove subPath prefix if present to get relative path
+                    let path = fullPath;
+                    if (subPath && fullPath.startsWith(subPath + '/')) {
+                        path = fullPath.substring(subPath.length + 1);
+                    }
                     const filename = path.split('/').pop();
-                    // Root level deploy files
+                    // Root level deploy files (relative to app folder)
                     if (deployFiles.includes(filename) && !path.includes('/')) return true;
                     // Icons folder files (both prod and test)
                     if ((path.startsWith('icons/') || path.startsWith('icons-test/')) && validIcons.includes(filename)) return true;
                     return false;
                 };
                 
-                // Fetch repo contents
-                const fetchAllFiles = async (path = '') => {
+                // Fetch repo contents - v8.7.3: Start from subPath if set
+                const fetchAllFiles = async (path = subPath) => {
                     const contents = await github.listRepoContents(selectedRepo, path);
                     let files = [];
                     
@@ -5761,7 +5786,11 @@
             setVersionAudit({ loading: true });
             
             try {
-                const fileData = await github.getFileContent(selectedRepo, 'index.html');
+                // v8.7.3: Get app's subPath to find correct index.html
+                const app = configuredApps.find(a => a.testRepo === selectedRepo || a.prodRepo === selectedRepo);
+                const indexPath = app?.subPath ? `${app.subPath}/index.html` : 'index.html';
+                
+                const fileData = await github.getFileContent(selectedRepo, indexPath);
                 if (fileData) {
                     // Use textContent which handles both normal and large files
                     const content = fileData.textContent;
@@ -11644,29 +11673,31 @@ const pushIssueToCommandCenter = async (testResult) => {
         const [briefingText, setBriefingText] = React.useState('');
         
         // Get deployed versions for all apps
+        // v8.7.3: Use subPath to find correct index.html location
         const getDeployedVersions = async () => {
             if (!github) return {};
             const versions = {};
             
             for (const [appId, app] of Object.entries(apps)) {
                 versions[appId] = { test: null, prod: null };
+                const indexPath = app.subPath ? `${app.subPath}/index.html` : 'index.html';
                 
                 if (app.testRepo) {
                     try {
-                        const fileData = await github.getFileContent(app.testRepo, 'index.html');
+                        const fileData = await github.getFileContent(app.testRepo, indexPath);
                         if (fileData) {
                             versions[appId].test = extractVersionFromHTML(fileData.textContent);
                         }
-                    } catch (e) { console.log(`Could not fetch ${appId} test version`); }
+                    } catch (e) { console.log(`Could not fetch ${appId} test version from ${indexPath}`); }
                 }
                 
                 if (app.prodRepo) {
                     try {
-                        const fileData = await github.getFileContent(app.prodRepo, 'index.html');
+                        const fileData = await github.getFileContent(app.prodRepo, indexPath);
                         if (fileData) {
                             versions[appId].prod = extractVersionFromHTML(fileData.textContent);
                         }
-                    } catch (e) { console.log(`Could not fetch ${appId} prod version`); }
+                    } catch (e) { console.log(`Could not fetch ${appId} prod version from ${indexPath}`); }
                 }
             }
             
