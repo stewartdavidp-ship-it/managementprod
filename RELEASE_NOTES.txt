@@ -1,6 +1,58 @@
 Command Center — Release Notes
 ================================
 
+v8.18.0 — 2026-02-09
+--------------------
+Firebase Sync Settings UI + Debounced Writes
+
+New "Firebase Config Sync" section in Settings view with:
+- Sync status display (synced/syncing/offline/error)
+- Firebase data size with per-key breakdown
+- Manual "Push All to Firebase" button (force overwrite)
+- Manual "Pull All from Firebase" button (force overlay)
+- "Clear Firebase Data" button (with confirmation)
+- Last manual sync timestamp
+
+Debounced writes: deploy history, session log, and deletion
+history now use 2-second debounce window to prevent rapid-fire
+writes to Firebase RTDB during batch deploy operations.
+
+New FirebaseConfigSync methods: clearAll() removes all CC data
+from Firebase, getDataSize() measures data per key.
+
+v8.17.0 — 2026-02-09
+--------------------
+Firebase Config Sync — CC data now syncs to Firebase RTDB.
+
+New FirebaseConfigSync class syncs non-sensitive configuration
+data to Firebase at command-center/ path. localStorage remains
+the instant-load cache; Firebase is the source of truth.
+
+Dual-write: every save writes localStorage first (instant),
+then fire-and-forget pushes to Firebase RTDB.
+
+Startup overlay: loads localStorage immediately, pulls Firebase
+async, overlays into state if Firebase data is newer. On first
+run (Firebase empty), seeds Firebase with all local data.
+
+Sync status indicator in header shows connection state:
+☁️ synced | 🔄 syncing | ⚡ offline | ⚠️ error
+
+Data synced: config (apps/projects/environments), deploy
+history, rules history, session log, deletion history,
+rollback snapshots.
+
+Secrets stay local only: GitHub PAT, Firebase SA key, API keys,
+collapsed projects (UI preference), Firebase UID (session).
+
+Foundation for future multi-user access to CC configuration.
+
+--- REMAINING WORK (next session) ---
+- Firebase security rules for command-center/ path
+- Settings UI: manual push/pull buttons, sync status details
+- Sync conflict resolution UI (currently last-write-wins)
+- Test with actual multi-device scenario
+
 v8.16.7 — 2026-02-09
 --------------------
 Google auth moved from Firebase page to header status bar.
