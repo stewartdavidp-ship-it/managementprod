@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.18.4** — Released 2026-02-09
+**v8.21.0** — Released 2026-02-09
 
 ## What Command Center Is
 
@@ -48,6 +48,8 @@ Command Center is an internal tool for managing the Game Shelf ecosystem of web 
 - `cc_session_log` — Session activity log — **also synced to Firebase**
 - `cc_deletion_history` — File deletion log — **also synced to Firebase**
 - `cc_rollback_snapshots` — Deploy rollback data — **also synced to Firebase**
+- `cc_token_registry` — Token estimation cache per app (NEW v8.20.0 — local only)
+- `cc_default_engine` — User's preferred AI engine ID (NEW v8.20.0 — local only)
 
 ### Firebase Config Sync (v8.17.0)
 Non-sensitive configuration data is synced to Firebase RTDB at `command-center/` path.
@@ -74,7 +76,19 @@ Non-sensitive configuration data is synced to Firebase RTDB at `command-center/`
     repoPatterns: { test: ['pattern'], prod: ['pattern'] },
     detectionPatterns: ['regex1', 'regex2'],
     createdAt: 1707300000000,
-    updatedAt: 1707300000000
+    updatedAt: 1707300000000,
+    // v8.20.0: Lifecycle metadata (orchestrator)
+    lifecycle: {
+        category: 'game',            // game | tool | dashboard | content | admin
+        currentMaturity: 'beta',     // prototype | alpha | beta | production
+        maturityTarget: 'production',
+        problemStatement: '...',
+        targetAudience: '...',
+        userGoal: '...',
+        successMetric: '...',
+        stack: {},
+        maturityCriteria: {}
+    }
 }
 ```
 
@@ -144,6 +158,10 @@ Configure
 | `SmartDeployView` | Batch deploy from gs-active archives |
 | `ProjectsTab` | Project & app management |
 | `ClaudePrepModal` | Fetch source+docs from repo, generate session brief, build zip for Claude sessions (NEW v8.13.0) |
+| `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, milestone filtering (NEW v8.20.0) |
+| `SessionService` | Claude session tracking via Firebase, deploy linking (NEW v8.20.0) |
+| `TokenRegistryService` | Heuristic token estimation, content type detection, localStorage cache (NEW v8.20.0) |
+| `EngineRegistryService` | AI engine profiles, session type recommendations, budget checking (NEW v8.20.0) |
 | `ProjectEditModal` | Create/edit/delete projects (NEW v8.12.0) |
 | `SetupNewAppView` | 4-step new app wizard |
 | `FirebaseView` | Tabbed container: Data Browser + Rules + Functions + Logs |
