@@ -1,6 +1,24 @@
 Command Center — Release Notes
 ================================
 
+v8.15.6 — 2026-02-09
+--------------------
+FIX: HTML Deploy Path from Zip
+
+Root cause of promotion showing wrong version and live monitoring
+never completing.
+
+Zips like cc-project-v8/command-center/index.html had the root
+folder stripped (cc-project-v8/) but the subfolder (command-center/)
+remained in the deploy targetPath. This caused:
+1. index.html deployed to command-center/index.html in test repo
+2. GitHub Pages served the old root index.html (v1.0.0)
+3. Live monitoring expected 8.15.x but found 1.0.0 forever
+4. Promote fetched root index.html (v1.0.0) instead of the real deploy
+
+Fix: HTML files always use filename-only as targetPath. Non-HTML
+files (icons/, sw.js, manifest.json) still preserve subdirectory paths.
+
 v8.15.5 — 2026-02-09
 --------------------
 FIX: setStagedFiles Scoping Error
