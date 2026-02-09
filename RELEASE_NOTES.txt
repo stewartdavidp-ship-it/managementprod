@@ -1,6 +1,19 @@
 Command Center — Release Notes
 ================================
 
+v8.18.3 — 2026-02-09
+--------------------
+Fix: Firebase overlay was overwriting locally-migrated repos.
+
+Root cause: startup overlay pulled Firebase config (empty repos)
+and overlaid it onto local config (which had repos from
+cc_apps_v6 migration), erasing the repo assignments.
+
+Overlay now preserves locally-populated repos when Firebase
+has empty strings, then pushes the corrected config back to
+Firebase automatically. Also added diagnostic logging to
+migrateFromOldFormat.
+
 v8.18.2 — 2026-02-09
 --------------------
 Fix: Auto-detected repos not synced to config/Firebase.
