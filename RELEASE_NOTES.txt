@@ -1,6 +1,20 @@
 Command Center — Release Notes
 ================================
 
+v8.18.4 — 2026-02-09
+--------------------
+Fix: Firebase overlay blocked by migration timestamp bump.
+
+ConfigManager.save() during cc_apps_v6 migration set a fresh
+_updatedAt, making local config "newer" than Firebase. Overlay
+skipped, hosted version never got repos from Firebase.
+
+Two fixes:
+1. Migration save no longer bumps _updatedAt (preserves
+   existing timestamp so Firebase overlay can still win)
+2. Removed timestamp comparison for Phase 1 — always overlay
+   Firebase config when it has data (single-user, no conflicts)
+
 v8.18.3 — 2026-02-09
 --------------------
 Fix: Firebase overlay was overwriting locally-migrated repos.
