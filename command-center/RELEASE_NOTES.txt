@@ -1,0 +1,311 @@
+Command Center — Release Notes
+================================
+
+v8.15.2 — 2026-02-09
+--------------------
+FIX: Seed Drift + Copy Buttons
+
+Fixed 3 config ↔ code drift items detected by v8.15.1:
+- Quotle icon: 📖 → 💬 (manifest + definitions)
+- quotle-info project name: Quotle.info → Quotle-info (manifest + seeds + definitions)
+- Command Center appType: internal → public (manifest + definitions)
+
+Added 📋 Copy button inside the expanded prompt text for both
+doc validation and config drift banners.
+
+v8.15.1 — 2026-02-09
+--------------------
+FEATURE: Config ↔ Code Drift Detection
+
+When deploying CC itself, the new version's seed values are compared
+against the running config to detect mismatches.
+
+How it works:
+1. CC_SEED_MANIFEST is a JSON block embedded in index.html between
+   /* CC_SEED_MANIFEST_START */ and /* CC_SEED_MANIFEST_END */ markers
+2. detectConfigDrift() parses it from the staged file and diffs against
+   the running config (localStorage)
+3. Drifts are classified:
+   - 🔴 Error: gs-app-id doesn't match any config app
+   - ⚠️ Warn: project/app name, project assignment, etc. mismatch
+   - ℹ️ Info: apps/projects in config but not in code seeds
+
+UI:
+- Color-coded banner appears in staged files area (only on CC self-deploy)
+- "Copy Fix Prompt" button copies detailed Claude prompt with all drifts
+- Expandable prompt shows exactly what to tell Claude to fix
+
+This ensures that when you edit app/project config in the CC UI,
+you get alerted if the code's seed values don't match.
+
+v8.15.0 — 2026-02-09
+--------------------
+BREAKING: App Identity Rename (management → command-center)
+
+Command Center is now a standalone app with its own identity.
+Previously it was "management" — a sub-app under Game Shelf.
+
+Changes:
+- gs-app-id meta tag: "command-center" (was "management")
+- Page title: "Command Center" (was "Game Shelf Command Center")
+- DEFAULT_APP_DEFINITIONS key/id: "command-center"
+- Fallback detection signature: "command-center"
+- Default deploy target: "command-center"
+- Repo-to-app-id mappings: both Smart Deploy + Claude Prep
+- Internal tools list in Projects view
+- Deploy instructions: references command-center-test repo
+
+Migration:
+- mergeWithDefaults() auto-renames "management" → "command-center"
+  in localStorage on first load of v8.15.0
+- Old deployment history still displays correctly (read-only)
+
+v8.14.2 — 2026-02-09
+--------------------
+FIX: Deploy + Docs UX
+
+- Batch deploy controls now show "Deploy 1 file + Push 6 docs" (was "Deploy 7 selected files")
+- Doc files from zip now inherit the detected app from index.html
+- Single button click deploys to GitHub Pages AND pushes docs to source repo
+- Refactored batch action handler to eliminate code duplication
+
+v8.14.1 — 2026-02-09
+--------------------
+FEATURE: Doc Package Validation
+
+When deploy + doc files are staged together, CC now validates:
+1. Missing required docs (CONTEXT.md, PROJECT_PLAN.md, CHANGELOG.md, RELEASE_NOTES.txt)
+2. CONTEXT.md version header matches deploy version
+3. CHANGELOG.md latest [X.X.X] entry matches deploy version
+4. RELEASE_NOTES.txt latest entry matches deploy version
+
+UI:
+- Amber "Doc Package Issues" banner above staged files with all issues listed
+- Expandable "Show Claude fix prompt" with ready-to-paste text
+- "Copy Fix Prompt" button for one-click copy
+- Per-file green ✓ or amber ⚠️ indicators on each doc card
+
+The Claude fix prompt includes specific file names, expected versions,
+and what action to take (create missing docs, update version references).
+
+v8.14.0 — 2026-02-09
+--------------------
+FEATURE: Unified Deploy + Push Docs
+
+Drop a project zip (e.g. cc-project-v8_14_0.zip) and CC automatically:
+- Routes index.html/sw.js/manifest.json → deploy to GitHub Pages
+- Routes CONTEXT.md/CHANGELOG.md/etc → push to source repo
+- SESSION_BRIEF.md auto-skipped (it's auto-generated)
+
+New in staged files:
+- Doc files (.md, .txt) show cyan "Push to repo:" label
+- Deploy files show normal "Deploy as:" label
+- Both types selectable/deselectable individually
+
+Deploy All modal:
+- Files grouped into "Deploy to GitHub Pages" and "Push docs to repo" sections
+- Adaptive button text: "Deploy 1 + Push 6 Docs"
+- Docs pushed via GitHub API with SHA check for updates vs creates
+
+Also: file input now accepts .md and .txt files, drop zone hint updated.
+
+v8.13.2.0 — 2026-02-09
+--------------------
+ARCHITECTURE: Config as Source of Truth
+
+mergeWithDefaults() overhaul:
+- Seed data (DEFAULT_APP_DEFINITIONS, SEED_PROJECTS) now only used for first-time init
+- Stored config.apps and config.projects are authoritative after first load
+- No more force-merging defaults into existing stored data on every load
+- Schema migration only: ensures structural fields exist without overwriting values
+
+Removed DEFAULT_APP_DEFINITIONS runtime fallbacks:
+- 8 subPath fallback references removed (deploy, Smart Deploy, version check, Projects)
+- PWA detection now reads from config.apps instead of hardcoded defaults
+- targetPath lookup now reads from config.apps
+- repoPatterns for auto-env-selection now reads from config.apps
+- appWithDefaults spread removed from deploy function
+
+This prevents hardcoded seed values from overriding user customizations
+(e.g., Command Center project assignment reverting to Game Shelf on reload).
+
+v8.13.1.7 — 2026-02-09
+--------------------
+CHANGE: Command Center Project Independence
+- Added "Command Center" project to SEED_PROJECTS (🏗️, cyan)
+- Updated management app default: project 'command-center' (was 'gameshelf')
+- Updated repoPatterns: command-center / command-center-test (was management-prod)
+- Added repos.test to management app definition
+- Icon updated from 🎛️ to 🏗️ to match user config
+
+v8.13.1.6 — 2026-02-09
+--------------------
+FIX: Version Scanner False Positives on CC Self-Deploy
+- Extracted SEED_VERSION constant for new app scaffolding (generateInitialHTML, generateAdminHTML)
+  Previously hardcoded "0.1.0" in template HTML triggered "Version Issues Detected"
+- Enhanced shouldSkip() in findAllVersionStrings():
+  - Detects meta version tags inside generate*() functions (1000-char lookback)
+  - Skips placeholder patterns (X.X.X, X.Y.Z) as non-version strings
+- CC now deploys cleanly with single version (8.13.1.6) detected
+
+v8.13.1.5 — 2026-02-07
+--------------------
+FEATURE: Push Docs to Repo + Detection Improvements
+
+Push Docs (v8.13.1.0-1.3):
+- New "Push Docs to Repo" feature in Claude Prep modal
+- Drop .md/.txt files or .zip packages — extracts docs automatically
+- Checks repo for existing files (update vs create), pushes via GitHub API
+- Clear progress states: staging → animated pushing → completion/error banner
+- Zip support: drops a project zip, all docs extracted and deduplicated
+
+Extra Docs Scanning (v8.13.1.4):
+- Claude Prep now scans repo for additional .md files beyond the standard 4
+- Follows CLAUDE-PREP-STANDARD: extras included when present in repo
+
+App Configuration (v8.13.0.4-0.8):
+- Sub Path field in app edit modal for subdirectory apps
+- Repository Assignment dropdowns — select from real repos instead of typing
+- Repos grouped as Shared (with app labels) vs Available
+- Projects promoted to main navigation (5 tabs)
+- Emoji picker on both App and Project edit modals
+- Auto-generated detection patterns from app name
+- Dynamic app detection — configurable patterns scored by specificity
+
+v8.13.0 — 2025-02-07
+--------------------
+FEATURE: Claude Prep (Session Prep per App)
+- New 🤖 button on each app row in Projects & Apps view
+- Click to generate a context package for starting a Claude session:
+  - Fetches source files from GitHub repo (index.html + sw.js/manifest.json for PWAs)
+  - Fetches project docs (CONTEXT.md, PROJECT_PLAN.md, CHANGELOG.md, RELEASE_NOTES.txt, ARCHITECTURE.md)
+  - Generates SESSION_BRIEF.md with current versions, recent deploys, open issues
+  - Packages everything into a downloadable zip
+- Smart doc detection: standalone repos check root, consolidated repos check {subPath}/docs/
+- Bootstrap mode: generates skeleton doc templates when docs don't exist yet
+- Progress modal with real-time log, file manifest, and download button
+
+v8.12.0 — 2025-02-07
+--------------------
+FEATURE: Projects as Stored Data (Priority 1)
+- Projects promoted from hardcoded constant to stored objects in config
+- New ProjectEditModal: create, edit, delete projects
+  - Name, icon (emoji or gs-logo), color picker (7 themes), description, sort order
+  - Delete with app reassignment to Other project
+- "_standalone" concept removed, replaced with "Other" project
+- New Project button in ProjectsTab header
+- Edit button (✏️) on each project card
+- Project state (active/hidden) now stored in config instead of separate localStorage
+- All project dropdowns (AppEditModal, SetupNewAppView) read from config
+- Auto-migration: seeds projects from SEED_PROJECTS on first load,
+  migrates _standalone → other, migrates cc_projectStates into config
+
+v8.11.0 — 2025-02-07
+--------------------
+FEATURE: Functions Dashboard (Phase 3)
+- New "Functions" tab in Monitor → Firebase
+- Summary cards: active/total functions, 24h error count, last deploy time
+- Functions table: name, status badge (ACTIVE/green, deploying/amber, error/red),
+  runtime, memory, 24h error count, last deploy time
+- Health ping: POST to each function's HTTPS endpoint, reports status + response time
+  - 4xx = healthy (auth error but function is alive), 5xx = broken
+  - Ping All button tests every function sequentially
+- Error counts fetched from Cloud Logging API grouped by function name
+
+FEATURE: Log Viewer (Phase 3)
+- New "Logs" tab in Monitor → Firebase
+- Filters: severity level, function name, free-text search, page size (25-200)
+- Auto-refresh toggle with 30-second interval
+- Severity summary bar with clickable counts for quick filtering
+- Color-coded log entries: timestamp, severity badge, function name, payload
+- Click any function name in a log entry to filter to that function
+- Supports both textPayload and jsonPayload formats
+- Error/Critical entries highlighted with red background
+
+REFACTOR: FirebaseView now has 4 tabs
+- Data Browser | Rules | Functions | Logs
+
+v8.10.0 — 2025-02-07
+--------------------
+FEATURE: Firebase Security Rules Manager (Phase 2)
+- New Rules tab in Monitor → Firebase (alongside existing Data Browser)
+- Fetch and display current RTDB security rules as formatted JSON
+- Size and line count stats displayed on rules viewer
+- Inline editor with Tab key support and real-time JSON validation
+- Format/prettify button to clean up edited JSON
+- Deploy rules to Firebase with confirmation dialog
+  - Shows path count, warns about overwrite
+  - Automatically snapshots current rules before deploying
+- Rules history stored in localStorage (cc_rulesHistory, last 20 snapshots)
+- Manual snapshot button to save current state without deploying
+- Snapshot viewer with raw JSON display
+- Line-by-line diff view: compare any snapshot against current live rules
+- Restore from snapshot: loads into editor, requires explicit Deploy to push
+- Delete individual snapshots from history
+- Graceful handling when service account not configured (shows setup prompt)
+
+REFACTOR: FirebaseView tabbed layout
+- FirebaseView now has two tabs: Data Browser | Rules
+- FirebaseDataBrowser extracted from original FirebaseView (no functionality changes)
+- Tab switching preserves state within each tab
+
+v8.9.0 — 2025-02-07
+--------------------
+FEATURE: Firebase Admin Token Management (Phase 1)
+- New FirebaseAdmin class for Google OAuth2 service account authentication
+- Service account JSON key stored in localStorage (cc_firebase_sa)
+- JWT signing using browser-native Web Crypto API (RS256 / RSASSA-PKCS1-v1_5)
+- Signed JWT exchanged for Google OAuth2 access token (1-hour lifetime)
+- Token cached in memory with automatic 55-minute refresh window
+- Admin API methods ready for Phase 2-3:
+  - getRules() / putRules() — Read/deploy RTDB security rules
+  - listFunctions() — List Cloud Functions and status
+  - getLogs() — Query Cloud Logging entries
+  - testConnection() — 3-point validation (token, rules, functions)
+
+UI: Firebase Admin Settings (in Configure → Settings)
+- Paste service account JSON key with validation (checks type, required fields, key format)
+- Status display: service account email, project ID, key ID, token state
+- Token state indicator: active (green), expired (amber), not yet requested (grey)
+- Test Connection: validates OAuth2 token exchange, RTDB rules access, Cloud Functions API
+- Refresh Token: force new token (useful after scope/permission changes)
+- Update Key: replace existing service account key
+- Remove: clear service account from localStorage
+
+INFRASTRUCTURE:
+- Global firebaseAdmin singleton instance available to all components
+- No external dependencies — all crypto handled by browser SubtleCrypto
+- Base64url encoding for JWT components
+- PEM key parsing (handles both RSA PRIVATE KEY and PRIVATE KEY formats)
+
+DOCS: Design Decisions Documented (discussed but not yet implemented)
+- Priority 1: Projects as stored data — promote DEFAULT_PROJECTS to cc_config_v3.projects
+  with ConfigManager migration and Project Edit Modal (create/edit/delete)
+- Priority 2: App creation consolidation — merge Setup New App wizard into Projects view,
+  remove standalone nav entry, pre-fill project context on "Add App"
+- Priority 3: Firebase-per-app metadata — new firebasePaths field on app definitions
+  to formally link apps with their Firebase RTDB paths
+- Firebase capabilities gap analysis — documented what FirebaseView has vs what's missing
+  (rules editor, functions dashboard, schema map, per-app paths, multi-project support)
+
+v8.8.0 — 2025-02-07
+--------------------
+FEATURE: Project Layer
+- Added project-based grouping for all apps (replaces Public/Internal/Other categories)
+- 5 default projects: Game Shelf, Quotle.info, LabelKeeper, Super Bowl, Standalone
+- Dashboard: collapsible project cards with color-coded borders, auto-expand on active deploy
+- New standalone Projects view (Configure → Projects) replaces old Apps view
+- Timestamp tracking (createdAt/updatedAt) on all apps
+- SB Squares app added under Super Bowl project
+
+FEATURE: Setup New App Wizard
+- 4-step wizard: define → check repos → create → Claude prompt
+
+v8.7.7 — 2025-02-07
+--------------------
+FEATURE: Quotle.info Integration
+- Added quotle-info and quotle-info-admin app definitions
+
+v8.7.6 — prior
+--------------------
+(See previous release notes for earlier versions)
