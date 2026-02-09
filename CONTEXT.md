@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.16.7** — Released 2026-02-09
+**v8.18.0** — Released 2026-02-09
 
 ## What Command Center Is
 
@@ -39,12 +39,23 @@ Command Center is an internal tool for managing the Game Shelf ecosystem of web 
 ```
 
 ### Config Storage
-- `cc_config_v3` — Main config (apps, **projects**, environments, repos)
-- `cc_deployHistory` — Deploy log
-- `cc_collapsedProjects` — Dashboard project collapse state
-- `cc_github_token` — GitHub PAT
-- `cc_firebase_sa` — Firebase service account JSON key (NEW v8.9.0)
-- `cc_rulesHistory` — Firebase rules snapshots for rollback (NEW v8.10.0)
+- `cc_config_v3` — Main config (apps, **projects**, environments, repos) — **also synced to Firebase**
+- `cc_deployHistory` — Deploy log — **also synced to Firebase**
+- `cc_collapsedProjects` — Dashboard project collapse state (local only)
+- `cc_github_token` — GitHub PAT (local only — sensitive)
+- `cc_firebase_sa` — Firebase service account JSON key (local only — sensitive)
+- `cc_rulesHistory` — Firebase rules snapshots for rollback — **also synced to Firebase**
+- `cc_session_log` — Session activity log — **also synced to Firebase**
+- `cc_deletion_history` — File deletion log — **also synced to Firebase**
+- `cc_rollback_snapshots` — Deploy rollback data — **also synced to Firebase**
+
+### Firebase Config Sync (v8.17.0)
+Non-sensitive configuration data is synced to Firebase RTDB at `command-center/` path.
+- **Primary store**: Firebase RTDB
+- **Cache**: localStorage (instant load, offline fallback)
+- **Strategy**: Load localStorage immediately, overlay Firebase data if newer on startup
+- **Dual-write**: Every save writes to localStorage first, then fire-and-forget to Firebase
+- **Sync status indicator**: ☁️ synced | 🔄 syncing | ⚡ offline | ⚠️ error (shown in header)
 
 ### App Definition Schema
 ```javascript
@@ -146,6 +157,28 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.18.0 — Firebase Sync Settings UI + Debounced Writes
+- **Firebase Sync section in Settings** — new UI panel showing sync status, Firebase data size (total + per-key breakdown), last manual sync time, and action buttons
+- **Push All to Firebase** — force-overwrite all local data to Firebase from Settings
+- **Pull All from Firebase** — force-overlay Firebase data onto local state from Settings
+- **Clear Firebase Data** — remove all `command-center/` data from Firebase RTDB (with window.confirm dialog)
+- **`FirebaseConfigSync.clearAll()`** — removes all CC data from Firebase
+- **`FirebaseConfigSync.getDataSize()`** — measures approximate data size per key
+- **Debounced writes** — deploy history, session log, deletion history use 2-second debounce (`pushSmart()`) to avoid hammering RTDB during batch deploys
+- **`pushSmart()` routing** — auto-selects debounced vs immediate push based on data key
+- **SettingsView** receives `syncStatus` and `onForceSync` props
+
+### v8.17.0 — Firebase Config Sync
+- New `FirebaseConfigSync` class — syncs non-sensitive CC data to Firebase RTDB at `command-center/` path
+- Dual-write pattern: every save writes to localStorage (instant) then fire-and-forget to Firebase
+- Startup overlay: loads localStorage immediately, pulls Firebase async, overlays if newer
+- First-run seed: if Firebase is empty, pushes all local data up to initialize
+- Sync status indicator in header: ☁️ synced | 🔄 syncing | ⚡ offline | ⚠️ error
+- Data synced: config (apps/projects/envs), deploy history, rules history, session log, deletion history, rollback snapshots
+- Secrets stay in localStorage only: GitHub PAT, Firebase SA key, API keys
+- Open read/write Firebase rules for now; lock down in multi-user phase
+- Foundation for future multi-user CRUD access to CC configuration
 
 ### v8.16.2 — Health Alert → Repo Reset Navigation
 - "Open Repo Reset" button now auto-selects the Repo Reset tab via `cleanupInitialTab` state passed to CleanupView. Also dismisses the alert banner.
@@ -442,8 +475,9 @@ This creates a formal link between apps and their Firebase data, which enables:
 - [ ] Doc migration: Quotle.info — split PROJECT_FOUNDATION.md into CONTEXT.md + PROJECT_PLAN.md, add CHANGELOG.md + RELEASE_NOTES.txt
 - [ ] Doc bootstrapping: Game Shelf consolidated repo — create {subPath}/docs/ folders per app (bootstrap on first Claude Prep use)
 - [ ] App reordering within projects
-- [ ] Config export/import
+- [x] Config export/import — ✅ SUPERSEDED by Firebase Config Sync (v8.17.0)
 - [ ] Command Center self-update
+- [ ] Firebase security rules: lock down `command-center/` path for multi-user auth
 
 ---
 
