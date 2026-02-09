@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.18.2] — 2026-02-09
+
+### Fixed
+- **Auto-detected repos not synced to Firebase** — `autoMapRepos()` wrote `testRepo`/`prodRepo` to legacy `apps` state but never back to `config.apps[id].repos`. Firebase config had empty repo strings, causing hosted Dashboard to filter out apps without repos. Now syncs detected repos back to config after auto-mapping.
+
 ## [8.18.1] — 2026-02-09
 
 ### Fixed
