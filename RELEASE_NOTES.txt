@@ -1,6 +1,29 @@
 Command Center — Release Notes
 ================================
 
+v8.15.5 — 2026-02-09
+--------------------
+FIX: setStagedFiles Scoping Error
+
+Root cause of "Push 6 Docs" reappearing after deploy.
+
+setStagedFiles was defined in App() but called inside DashboardView
+(a child component) without being passed as a prop. The batch deploy
+executeBatchAction pushed docs successfully to GitHub, but the
+setStagedFiles call threw ReferenceError, leaving the docs in the
+staged files list.
+
+Fix: Pass setStagedFiles as prop from App to DashboardView.
+
+v8.15.4 — 2026-02-09
+--------------------
+UX: Drift Banner Auto-Collapse
+
+Config drift banner is now a <details> element:
+- Errors/warnings: auto-opens, red/orange styling, Copy Fix Prompt visible
+- Info-only: collapsed one-liner with slate styling, click to expand
+- Reduces visual noise for non-critical drift items
+
 v8.15.3 — 2026-02-09
 --------------------
 FIX: Doc Push Bugs
