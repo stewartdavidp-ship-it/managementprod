@@ -6,6 +6,90 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.15.3] — 2026-02-09
+
+### Fixed
+- **Doc files not clearing after push** — batch deploy and Deploy All modal now remove successfully pushed docs from staged files via `setStagedFiles` filter, preventing double-push loop
+- **Wrong doc target path for standalone repos** — zip-derived paths like `command-center/CONTEXT.md` were used instead of root `CONTEXT.md`; default `docTargetPath` now uses `fileName` not zip `targetPath`
+
+## [8.15.2] — 2026-02-09
+
+### Fixed
+- **Seed drift** — Quotle icon (📖→💬), quotle-info name (Quotle.info→Quotle-info), CC appType (internal→public) in manifest, seeds, and app definitions
+- **Copy buttons** — added 📋 Copy button inside both doc validation and config drift prompt text blocks
+
+## [8.15.1] — 2026-02-09
+
+### Added
+- **`CC_SEED_MANIFEST`** — machine-readable JSON block in index.html capturing identity fields for all seed projects and apps, delimited by comment markers for easy parsing
+- **`detectConfigDrift()`** — compares manifest from staged HTML against running config; checks gs-app-id, project names/presence, app identity fields; classifies as error/warn/info
+- **Config ↔ Code Drift banner** — color-coded banner (red/orange/blue) in staged files area when deploying CC; shows all drifts with Copy Fix Prompt button and expandable Claude prompt
+
+## [8.15.0] — 2026-02-09
+
+### Changed
+- **App identity rename: management → command-center** — full rename across all code, seeds, detection, mappings, and UI defaults
+- **Page title** — "Command Center" (was "Game Shelf Command Center")
+- **gs-app-id meta tag** — `command-center` (was `management`)
+- **DEFAULT_APP_DEFINITIONS** — key and id changed to `command-center`
+- **Hardcoded fallback detection** — legacy signature updated
+- **Default deploy target** — `command-center` (was `management`)
+- **Repo-to-app-id mappings** — Smart Deploy + Claude Prep updated
+- **Internal tools list** — Projects view updated
+- **Console startup log** — now shows v8.15.0
+
+### Added
+- **localStorage migration** — `mergeWithDefaults()` auto-renames `management` → `command-center` in stored config
+
+## [8.14.2] — 2026-02-09
+
+### Fixed
+- **Batch deploy controls** — now correctly split deploy files from push-doc files; shows "Deploy 1 file + Push 6 docs" instead of treating all files as deploy targets
+- **Doc files inherit primaryApp** — post-extraction assigns detected app from index.html to all doc files in the same zip package
+- **Batch action handler** — refactored into single `executeBatchAction()` that deploys files to Pages AND pushes docs to source repo in one click
+
+## [8.14.1] — 2026-02-09
+
+### Added
+- **`validateDocPackage()`** — checks staged files for missing required docs and version alignment between deploy files and doc headers
+- **Doc validation banner** — amber warning banner in staged files area showing missing docs, version mismatches, and expandable Claude fix prompt
+- **Copy Fix Prompt** — one-click button copies a pre-written prompt for Claude with specific files and versions to fix
+- **Per-file doc indicators** — green ✓ or amber ⚠️ inline on each doc file card showing version alignment status
+
+## [8.14.0] — 2026-02-09
+
+### Added
+- **Unified deploy + push docs** — files dropped on dashboard auto-classified as deploy (`.html/.js/.json`) or push-doc (`.md/.txt`); both handled in single "Deploy All" flow
+- **`classifyFileAction()`** — helper that routes files by name/extension; known doc files → `push-doc`, `SESSION_BRIEF.md` → `skip`, deploy files → `deploy`
+- **Staged file visual distinction** — doc files show cyan "📄 Push to repo:" label; deploy files show standard "Deploy as:"
+- **DeployAllModal** — now shows two sections: "🚀 Deploy to GitHub Pages" and "📄 Push docs to repo" with separate counts and adaptive button text
+- **Batch doc push** — groups docs by app, checks SHA for existing files, commits via GitHub API
+- **File input accepts .md/.txt** — upload and drop zone now accept doc files
+
+## [8.13.2.0] — 2026-02-09
+
+### Changed
+- **Config as source of truth** — `mergeWithDefaults()` no longer force-merges `DEFAULT_APP_DEFINITIONS` into stored apps on every load; seed data used only for first-time initialization
+- **Schema migration** — `mergeWithDefaults()` now only ensures structural fields exist (repos, versions, createdAt, detectionPatterns) without overwriting user values
+
+### Removed
+- **`DEFAULT_APP_DEFINITIONS` runtime fallbacks** — 8 references across deploy, Smart Deploy, version checking, and Projects views replaced with `config.apps[appId]`
+- **`subPath` fallback pattern** — `DEFAULT_APP_DEFINITIONS[appId]?.subPath` fallback removed from all 8 locations; simplified to `app.subPath || ''`
+- **`SEED_PROJECTS` force-merge** — existing stored projects are no longer merged with seed definitions on every load
+
+## [8.13.1.7] — 2026-02-09
+
+### Changed
+- **Command Center project independence** — `management` app seed now defaults to `project: 'command-center'` (was `'gameshelf'`), icon updated to 🏗️, `repoPatterns` updated to `command-center` / `command-center-test`
+- **SEED_PROJECTS** — added `command-center` project definition (🏗️, cyan), re-ordered existing projects
+
+## [8.13.1.6] — 2026-02-09
+
+### Fixed
+- **Version scanner false positives** — extracted `SEED_VERSION` constant for `generateInitialHTML()` and `generateAdminHTML()` scaffolding; `0.1.0` no longer appears as literal meta/footer versions in CC source
+- **shouldSkip() lookback range** — increased from 500 to 1000 chars to catch `generate*()` function declarations further from their template content
+- **Placeholder version patterns** — `X.X.X` / `X.Y.Z` format auto-skipped as obvious non-versions
+
 ## [8.13.1.5] — 2026-02-07
 
 ### Added
