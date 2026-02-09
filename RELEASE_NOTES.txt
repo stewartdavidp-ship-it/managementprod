@@ -1,7 +1,7 @@
 Command Center — Release Notes
 ================================
 
-v8.21.0 — 2026-02-09
+v8.21.1 — 2026-02-09
 --------------------
 Orchestrator Phase 0.3: Engine Registry UI + Token Integration in Claude Prep.
 
