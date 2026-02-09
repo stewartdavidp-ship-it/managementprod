@@ -1,6 +1,18 @@
 Command Center — Release Notes
 ================================
 
+v8.18.1 — 2026-02-09
+--------------------
+Fix: Apps missing project field after Firebase sync.
+
+mergeWithDefaults() schema migration was missing the project
+field, so apps synced from Firebase without it defaulted to
+'other'. Dashboard showed all apps under "Other" project.
+
+Added project backfill from DEFAULT_APP_DEFINITIONS seeds
+during migration. Existing apps get their correct project
+assignment restored automatically on load.
+
 v8.18.0 — 2026-02-09
 --------------------
 Firebase Sync Settings UI + Debounced Writes
