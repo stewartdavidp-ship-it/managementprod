@@ -158,6 +158,13 @@ Configure
 
 ## Recent Changes (This Session)
 
+### v8.18.6 — Fix: Firebase Overlay Deleting Local-Only Apps
+- **Full merge overlay** — local-only apps, repos, versions, and projects are preserved during Firebase overlay and pushed back to Firebase automatically
+
+### v8.18.5 — Fix: Firebase Overlay Overwriting Correct Local Repos
+- **Overlay preserves local repos as authoritative** — changed from "fill empty only" to "prefer local when local has a value". Prevents stale Firebase repo names from overwriting correct local assignments. Pushes corrections back to Firebase.
+- **Reverted migration timestamp hack** — restored `ConfigManager.save()` in migration
+
 ### v8.18.4 — Fix: Firebase Overlay Blocked by Migration Timestamp
 - **Migration save preserves timestamp** — `cc_apps_v6` migration no longer calls `ConfigManager.save()` (which bumped `_updatedAt`), instead writes directly to localStorage preserving existing timestamp
 - **Always overlay in Phase 1** — removed timestamp comparison from startup overlay; always applies Firebase config when available. Conflict resolution deferred to multi-user phase.
