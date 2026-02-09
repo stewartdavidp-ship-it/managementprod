@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.18.0** — Released 2026-02-09
+**v8.18.1** — Released 2026-02-09
 
 ## What Command Center Is
 
@@ -157,6 +157,9 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.18.1 — Fix: Project Field Missing After Sync
+- **`mergeWithDefaults()` schema migration** — added `project` field backfill from `DEFAULT_APP_DEFINITIONS` seeds. Apps synced from Firebase without a `project` field were defaulting to `'other'`, causing the Dashboard to group everything under "Other".
 
 ### v8.18.0 — Firebase Sync Settings UI + Debounced Writes
 - **Firebase Sync section in Settings** — new UI panel showing sync status, Firebase data size (total + per-key breakdown), last manual sync time, and action buttons
