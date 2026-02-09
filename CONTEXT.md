@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.18.2** — Released 2026-02-09
+**v8.18.3** — Released 2026-02-09
 
 ## What Command Center Is
 
@@ -157,6 +157,10 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.18.3 — Fix: Firebase Overlay Overwriting Local Repos
+- **Overlay repo preservation** — startup overlay now preserves locally-populated repos when Firebase has empty strings, then pushes corrected config back to Firebase automatically
+- **Diagnostic logging** — `migrateFromOldFormat()` logs repo sync count
 
 ### v8.18.2 — Fix: Auto-Detected Repos Not Synced to Config
 - **Repo sync-back** — `autoMapRepos()` now writes detected `testRepo`/`prodRepo` back to `config.apps[id].repos` and calls `ConfigManager.save()`. Previously repos only lived in the legacy `apps` state (`cc_apps_v6`) and never made it into `cc_config_v3`, so Firebase config had empty repo strings and the hosted Dashboard filtered out those apps.
