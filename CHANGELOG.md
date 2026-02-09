@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.18.3] — 2026-02-09
+
+### Fixed
+- **Firebase overlay overwriting locally-migrated repos** — startup overlay pulled Firebase config (with empty repo strings) and replaced local config (which had repos from `cc_apps_v6` migration). Now preserves local repo assignments when Firebase has empty values, and pushes corrected config back to Firebase automatically.
+- **Diagnostic logging** — `migrateFromOldFormat()` now logs how many apps had repos synced.
+
 ## [8.18.2] — 2026-02-09
 
 ### Fixed
