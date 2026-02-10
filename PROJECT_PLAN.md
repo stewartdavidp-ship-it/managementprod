@@ -129,11 +129,20 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] Copy for Claude — formatted context generation per work item
 - [x] source field — manual | scoped | imported | promoted
 
+### Orchestrator Phase 2.2: Claude Session Wizard (v8.26.0)
+- [x] 4-step wizard flow: Work Items → Session Type → Context Budget → Generate+Download
+- [x] Visual step indicator with clickable completed steps
+- [x] Context budget preview — pre-build file inclusion strategy by session type
+- [x] Work item auto-transition to in-progress on package generation
+- [x] Session record creation via SessionService
+- [x] Session-type-aware file filtering (skip/include per context strategy)
+- [x] Quick skip path for fast builds
+
 ---
 
 ## In Progress
 
-_(Phase 1.1 complete — next: Phase 1.2 Project Scoping Flow)_
+_(Phase 2.2 complete — next: Phase 2.3 Session Tracking + Deploy Close-the-Loop)_
 
 ---
 
