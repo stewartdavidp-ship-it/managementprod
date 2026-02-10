@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.32.0] — 2026-02-09
+
+### Added
+- **PorkbunService** — Full API wrapper for Porkbun domain registrar: ping, domain listing, availability check, registration, DNS CRUD, TLD pricing (cached), GitHub Pages DNS auto-configuration
+- **DomainsView** — New view under Monitor → Domains: domain selector, DNS records table with type badges, add/delete records, "Wire for GitHub Pages" one-click flow with progress log
+- **DomainRegistrarSettings** — Settings UI for Porkbun API key + secret key configuration, connection test, domain list with status/expiry/auto-renew display
+- **GitHub Pages custom domain methods** — `updatePagesConfig()` and `checkPagesHealth()` added to GitHubAPI wrapper
+- **Wire for GitHub Pages flow** — Orchestrated 3-step flow: DNS records at Porkbun (4 A + 1 CNAME) → CNAME file commit → GitHub Pages config update, with progress log
+- **Domains nav entry** — Added under Monitor group (after Optimize)
+- **`cc_domain_config`** — localStorage key for Porkbun credentials (NOT synced to Firebase — sensitive)
+- **`cc_tld_prices`** — localStorage cache for TLD pricing (24hr TTL)
+- **`cc_domain_health`** — localStorage cache for domain health check results
+
+## [8.31.0] — 2026-02-09
+
+### Added
+- **Environment Optimization View** — New top-level view under Monitor with per-app Claude Project setup guides (Phase 4.2)
+- **Doc Classification** — Identifies persistent docs (Project Knowledge) vs session docs (upload each time) with change frequency
+- **Token Savings Calculator** — Estimates per-session and monthly token savings from using Claude Project Knowledge, based on actual session history
+- **Project Instructions Generator** — Generates copy-paste-ready Custom Instructions from app lifecycle metadata, scope, and conventions
+- **Skills Recommendations** — Category-driven skill recommendations with relevance badges (high/medium/low) and reasoning
+- **Platform Feature Guide** — Per-feature recommendations (Projects, Skills, Artifacts, Memory, Extended Thinking, Computer Use, Web Search) with status badges
+- **Session Type Quick Reference** — Overview table with all 8 session types, recommended engines, and platform tips
+- **App Selector** — Visual grid sorted by session activity, showing maturity badges and session counts
+- **Setup Checklist** — 6-step guided checklist for setting up a new Claude Project per app
+- **Optimize nav entry** — Added under Monitor group (second position, after Portfolio)
+
+### Fixed
+- **Portfolio nav label** — Added missing "📊 Portfolio" dropdown label in Monitor menu (bug from v8.30.0)
+
 ## [8.30.0] — 2026-02-09
 
 ### Added
