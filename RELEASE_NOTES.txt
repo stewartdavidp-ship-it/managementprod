@@ -1,6 +1,85 @@
 Command Center — Release Notes
 ================================
 
+v8.26.0 — Claude Session Wizard (Phase 2.2)
+--------------------------------------------
+Date: February 9, 2026
+
+Claude Prep is now a 4-step wizard that guides you through building a targeted session
+package instead of a one-click dump.
+
+WIZARD STEPS:
+• Step 1: What are you working on? — Select work items from backlog or go general
+• Step 2: Session Type — Auto-suggested from work item, shows role/scope/delivery
+• Step 3: Context Budget — Preview which files will be included based on session type
+• Step 4: Generate — Review summary, then generate package
+
+NEW BEHAVIORS:
+• Work items with status "ready" auto-transition to "in-progress" when you generate
+• A session record is created in Firebase tracking what you're working on
+• Files are filtered based on session type (e.g., Fix sessions skip CHANGELOG)
+• "Skip wizard — Quick package" on Step 1 preserves the fast path
+
+UNDER THE HOOD:
+• firebaseUid prop now threaded through to ClaudePrepModal for Firebase writes
+• CLAUDE-PREP-STANDARD.md treated as optional during doc fetch
+
+v8.25.0 — 2026-02-09
+--------------------
+Orchestrator Phase 2.1: Session Types + Enhanced Brief Generator.
+
+SESSION TYPES (NEW):
+• 8 session type definitions: Build, Design, Fix, Test, Research, Review, Polish, Document
+• Each type has: description, suggested engine, role frame, scope rules, delivery requirements
+• Context strategy per type: which files to always include, prefer, or skip when tight on budget
+• Auto-suggest from work item type (bugfix→Fix, feature→Build, research→Design)
+
+SESSION BRIEF GENERATOR (NEW):
+• SessionBriefGenerator module replaces old generateSessionBrief() function
+• Session-type-aware briefs include role frame, scope rules, delivery requirements
+• Target work item details: acceptance criteria, files affected, dependencies, notes
+• Other open work items summary table for awareness
+• Maturity context section (current + target quality level)
+• Old function preserved as thin wrapper for backward compatibility
+
+CLAUDE PREP ENHANCED:
+• New configure phase before building: pick session type + target work items
+• Session type grid selector with 8 types, descriptions, and suggested engines
+• Work item targeting: checkbox list of open items for the selected app
+• Context strategy preview: shows always/prefer/skip files for session type
+• "Skip — Quick package" option for fast builds without configuration
+• Back button on error to return to configuration
+
+SETTINGS ENHANCED:
+• Session type → engine recommendation grid now shows icons and descriptions from SESSION_TYPES
+
+v8.24.0 — 2026-02-09
+--------------------
+Orchestrator Phase 1.3: CLAUDE_INSTRUCTIONS.md + Issue Promotion.
+
+CLAUDE_INSTRUCTIONS.MD GENERATOR (NEW):
+• generateClaudeInstructions() produces structured AI briefing from project scope
+• Renders as requirement statements: Project Identity, V1 Scope, Starting Standards, Key Decisions, Architecture Constraints, Session Protocol
+• 38 standard descriptions (requirement-style text for each universal + category standard)
+• Standards grouped by category with full descriptive text
+• Out-of-scope features explicitly listed to prevent scope creep
+• Firebase config included when Firebase standards are selected
+
+CLAUDE PREP INTEGRATION:
+• CLAUDE_INSTRUCTIONS.md added to standard doc list (7 docs now)
+• Auto-generated from scope data when packaging (if not already in repo)
+• Treated as optional — no "missing doc" warning for apps without scope
+• Setup wizard generates CLAUDE_INSTRUCTIONS.md instead of generic prompt when scope available
+
+ISSUE → WORK ITEM PROMOTION (NEW):
+• "Promote to Work Item" button (📋) on each issue in IssuesView
+• Quick promote button in status bar for open/in-progress issues
+• Maps issue severity to work item priority (critical/major → core, minor/cosmetic → nice-to-have)
+• Pre-fills description with steps to reproduce, expected/actual behavior
+• Sets type: bugfix, source: promoted, links via tags and relatedItems
+• Duplicate detection — warns if issue already promoted
+• Issue back-link: promotedTo field + visual "📋 → WI-NNN" indicator
+
 v8.23.0 — 2026-02-09
 --------------------
 Orchestrator Phase 1.2: Project Scoping Flow.
