@@ -1,6 +1,25 @@
 Command Center — Release Notes
 ================================
 
+v8.36.3 — Deploy Safety & Smart Targeting
+-------------------------------------------------
+Fixes critical gap where version validation was skipped for single-file
+deploys and small packages. Adds intelligent deploy target selection.
+
+Key fixes:
+- Version downgrade protection now covers ALL deploy types, not just
+  full packages. Previously a single index.html drop bypassed all
+  version checks entirely
+- Downgrades (older version) show red error panel; same-version shows
+  amber warning — previously neither showed anything
+- Deploy dropdown intelligently defaults: two-repo apps start at TEST,
+  prod-only apps (Firebase Functions, Quotle-info, etc.) start at PROD
+- Target dropdown only shows valid environments for the selected app
+- Post-deploy reset uses smart default instead of always flipping to TEST
+- Better version extraction for renamed files and single-file scenarios
+
+---
+
 v8.36.0 — Unified Package Validation Engine
 -------------------------------------------------
 Complete overhaul of deploy-time validation. Replaces 4 separate
