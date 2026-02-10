@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.34.0] — 2026-02-10
+
+### Fixed
+- **Stale File Cleanup guardrails** — `.github/`, `package.json`, `firebase.json`, `.firebaserc`, and other CI/CD-critical files are now globally protected and never flagged as stale
+- **`firebase-functions` package type** — `gameshelf-functions` repo now correctly recognized with `functions/`, `.github/`, and config files as expected (was defaulting to `pwa` type)
+- **Critical file delete warning** — second confirmation dialog with explicit file names when selecting workflow, config, or build files for deletion
+
+### Changed
+- `getAppType()` now recognizes `firebase-functions` and `gameshelf-functions` repos
+- `isBaseFile()` checks `GLOBALLY_PROTECTED_PATHS` before package-specific rules
+- `deleteSelectedFiles()` adds extra confirmation for `.github/`, `deploy.yml`, `package.json`, `firebase.json`, `.firebaserc`
+
 ## [8.33.0] — 2026-02-10
 
 ### Added
