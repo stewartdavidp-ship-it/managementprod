@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.22.0** — Released 2026-02-09
+**v8.23.0** — Released 2026-02-09
 
 ## What Command Center Is
 
@@ -163,8 +163,9 @@ Configure
 | `ProjectsTab` | Project & app management |
 | `ClaudePrepModal` | Fetch source+docs from repo, generate session brief, build zip for Claude sessions (NEW v8.13.0) |
 | `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, batch create, milestone filtering (NEW v8.20.0, enhanced v8.22.0) |
-| `BacklogView` | Work item list with grouping, filtering, search, sort, bulk actions, status transitions (NEW v8.22.0) |
+| `BacklogView` | Work item list with grouping, filtering, search, sort, bulk actions, status transitions, scope work button (NEW v8.22.0, enhanced v8.23.0) |
 | `WorkItemEditModal` | Create/edit work items — all fields including acceptance criteria, tags, context (NEW v8.22.0) |
+| `ProjectScopeModal` | 4-step scoping wizard (Describe → Clarify → Features → Standards) with category-driven questions, feature pre-population, standards assembly, scope save + batch work item creation (NEW v8.23.0) |
 | `SessionService` | Claude session tracking via Firebase, deploy linking (NEW v8.20.0) |
 | `TokenRegistryService` | Heuristic token estimation, content type detection, localStorage cache (NEW v8.20.0) |
 | `EngineRegistryService` | AI engine profiles, session type recommendations, budget checking (NEW v8.20.0) |
@@ -181,6 +182,16 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.23.0 — Project Scoping Flow (Phase 1.2)
+- **ProjectScopeModal** — 4-step scoping wizard (Describe → Clarify → Features → Standards) captures project intent through category-driven questions
+- **Category question sets** — Static data for 5 categories (Game, Tool, Dashboard, Content, Admin) with toggles, selects, multi-selects
+- **Feature pre-population** — `generateFeaturesFromScope()` auto-generates V1 features from category + answers
+- **Starting standards assembly** — 12 universal + 24 conditional standards assembled from scoping selections
+- **Auto-generate work items** — Scope save creates batch work items via `WorkItemService.createBatch()`
+- **BacklogView integration** — "🎯 Scope Work" dropdown button for per-app scope initiation
+- **SetupNewAppView** — Expanded to 5-step wizard with new Step 2 "Scope" and quick-setup skip option
+- **Firebase scope storage** — Scope data at `command-center/{uid}/appScopes/{appId}`
 
 ### v8.22.0 — Backlog View + Work Item CRUD (Phase 1.1)
 - **BacklogView** — New top-level navigation tab with full work item management: create, edit, delete, status transitions (idea→ready→in-progress→done→deferred)
