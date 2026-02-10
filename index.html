@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.29.0">
+    <meta name="version" content="8.29.1">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -28,7 +28,7 @@
     <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;"><div style="margin-bottom:20px;"><svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="gsLoadGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs><rect x="5" y="5" width="90" height="90" rx="20" fill="url(#gsLoadGrad)"/><g transform="rotate(-12, 35, 50)"><rect x="15" y="28" width="28" height="36" rx="4" fill="white"/><circle cx="43" cy="46" r="6" fill="white"/><text x="29" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#667eea" text-anchor="middle">G</text></g><g transform="rotate(12, 65, 50)"><rect x="57" y="28" width="28" height="36" rx="4" fill="rgba(255,255,255,0.9)"/><circle cx="57" cy="46" r="6" fill="url(#gsLoadGrad)"/><text x="71" y="54" font-family="Arial" font-size="20" font-weight="bold" fill="#764ba2" text-anchor="middle">S</text></g></svg></div>Loading...</div></div></div>
 
     <script type="text/babel">
-    console.log('Command Center v8.19.0 starting...');
+    console.log(`Command Center v${document.querySelector('meta[name="version"]')?.content || '?'} starting...`);
     
     // =========================================================================
     // FIREBASE CONFIG
@@ -266,9 +266,7 @@
         async getRules() {
             const token = await this.getAccessToken();
             const dbUrl = FIREBASE_CONFIG.databaseURL;
-            const response = await fetch(`${dbUrl}/.settings/rules.json`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            const response = await fetch(`${dbUrl}/.settings/rules.json?access_token=${encodeURIComponent(token)}`);
             if (!response.ok) {
                 const err = await response.text();
                 throw new Error(`Failed to fetch rules: ${response.status} — ${err}`);
@@ -281,9 +279,8 @@
             const token = await this.getAccessToken();
             const dbUrl = FIREBASE_CONFIG.databaseURL;
             const body = typeof rules === 'string' ? rules : JSON.stringify(rules);
-            const response = await fetch(`${dbUrl}/.settings/rules.json`, {
+            const response = await fetch(`${dbUrl}/.settings/rules.json?access_token=${encodeURIComponent(token)}`, {
                 method: 'PUT',
-                headers: { 'Authorization': `Bearer ${token}` },
                 body: body
             });
             if (!response.ok) {
