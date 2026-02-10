@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.33.0] — 2026-02-10
+
+### Added
+- **GoDaddyService** — Full API wrapper for GoDaddy domain registrar: domain listing, DNS CRUD (list, add, delete-via-replace), GitHub Pages DNS auto-configuration. Auth via sso-key header. Handles GoDaddy's replace-all approach for record deletion.
+- **DomainProviderRegistry** — Multi-provider abstraction layer: registers providers (Porkbun + GoDaddy), aggregates domains across all configured registrars, routes DNS operations to correct service per domain. Extensible for future providers.
+- **ProviderConfigPanel** — Reusable settings panel with dynamic key fields, connection test, and domain list per provider
+- **Multi-provider Settings UI** — Provider tabs (🐷 Porkbun / 🟢 GoDaddy) in Settings → Domain Registrar
+- **Multi-provider DomainsView** — Domain selector shows provider icons, DNS ops route to correct API per domain
+- **Firebase proxy routing** — PorkbunService and GoDaddyService now route through `domainProxy` Cloud Function to avoid CORS blocks
+- **domainProxy Cloud Function** — Stateless CORS proxy for Porkbun/GoDaddy APIs (`functions/index.js` v2.5.0), whitelisted to two registrar hosts only
+
+### Changed
+- DomainRegistrarSettings refactored from single-provider to multi-provider tab UI
+- DomainsView fetches domains from all configured providers via DomainProviderRegistry.getAllDomains()
+- PorkbunService._call() routes through Firebase proxy instead of direct API calls
+- Domain selector pills now show provider icons (🐷/🟢) per domain
+
 ## [8.32.0] — 2026-02-09
 
 ### Added
@@ -13,11 +30,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **DomainsView** — New view under Monitor → Domains: domain selector, DNS records table with type badges, add/delete records, "Wire for GitHub Pages" one-click flow with progress log
 - **DomainRegistrarSettings** — Settings UI for Porkbun API key + secret key configuration, connection test, domain list with status/expiry/auto-renew display
 - **GitHub Pages custom domain methods** — `updatePagesConfig()` and `checkPagesHealth()` added to GitHubAPI wrapper
-- **Wire for GitHub Pages flow** — Orchestrated 3-step flow: DNS records at Porkbun (4 A + 1 CNAME) → CNAME file commit → GitHub Pages config update, with progress log
+- **Wire for GitHub Pages flow** — Orchestrated 3-step flow: DNS records at Porkbun (4 A + 1 CNAME) → CNAME file commit → GitHub Pages config update
 - **Domains nav entry** — Added under Monitor group (after Optimize)
-- **`cc_domain_config`** — localStorage key for Porkbun credentials (NOT synced to Firebase — sensitive)
+- **`cc_domain_config`** — localStorage key for Porkbun credentials (NOT synced to Firebase)
 - **`cc_tld_prices`** — localStorage cache for TLD pricing (24hr TTL)
-- **`cc_domain_health`** — localStorage cache for domain health check results
 
 ## [8.31.0] — 2026-02-09
 
