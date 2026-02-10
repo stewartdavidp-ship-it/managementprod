@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.30.0">
+    <meta name="version" content="8.32.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -1737,6 +1737,276 @@
     // SESSION TYPES + SESSION BRIEF GENERATOR (v8.25.0 — Phase 2.1)
     // =========================================================================
     
+    // =========================================================================
+    // PORKBUN SERVICE — Domain registrar API integration (v8.32.0)
+    // Handles: domain search, registration, DNS CRUD, GitHub Pages wiring
+    // API docs: https://porkbun.com/api/json/v3/documentation
+    // All calls are POST with JSON body. Auth via apiKey + secretApiKey in body.
+    // Credentials stored in localStorage (NOT synced to Firebase — sensitive).
+    // =========================================================================
+    
+    const PorkbunService = {
+        CONFIG_KEY: 'cc_domain_config',
+        PRICE_CACHE_KEY: 'cc_tld_prices',
+        HEALTH_CACHE_KEY: 'cc_domain_health',
+        BASE_URL: 'https://api.porkbun.com/api/json/v3',
+        
+        // GitHub Pages IP addresses (current as of 2025)
+        GITHUB_PAGES_IPS: [
+            '185.199.108.153',
+            '185.199.109.153',
+            '185.199.110.153',
+            '185.199.111.153'
+        ],
+        
+        // Preferred TLDs for domain search (ordered by relevance for dev tools)
+        PREFERRED_TLDS: ['com', 'dev', 'app', 'io', 'co', 'ai', 'sh', 'tools', 'site', 'net'],
+        
+        // ─── Configuration ───
+        
+        getConfig() {
+            try { return JSON.parse(localStorage.getItem(this.CONFIG_KEY) || '{}'); }
+            catch { return {}; }
+        },
+        
+        saveConfig(config) {
+            localStorage.setItem(this.CONFIG_KEY, JSON.stringify(config));
+        },
+        
+        isConfigured() {
+            const cfg = this.getConfig();
+            return !!(cfg.apiKey && cfg.secretApiKey);
+        },
+        
+        // ─── Core API Call ───
+        
+        async _call(endpoint, extraBody = {}) {
+            const cfg = this.getConfig();
+            if (!cfg.apiKey || !cfg.secretApiKey) {
+                throw new Error('Porkbun API keys not configured. Go to Settings → Domain Registrar.');
+            }
+            
+            const response = await fetch(`${this.BASE_URL}${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    apikey: cfg.apiKey,
+                    secretapikey: cfg.secretApiKey,
+                    ...extraBody
+                })
+            });
+            
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`Porkbun API error (${response.status}): ${text}`);
+            }
+            
+            const data = await response.json();
+            if (data.status === 'ERROR') {
+                throw new Error(data.message || 'Porkbun API returned an error');
+            }
+            return data;
+        },
+        
+        // ─── Connection Test ───
+        
+        async ping() {
+            return await this._call('/ping');
+            // Returns: { status: "SUCCESS", yourIp: "x.x.x.x" }
+        },
+        
+        // ─── Domain Operations ───
+        
+        async listDomains() {
+            const data = await this._call('/domain/listAll');
+            return data.domains || [];
+            // Returns: [{ domain, status, tld, createDate, expireDate, autoRenew, ... }]
+        },
+        
+        async checkAvailability(domain) {
+            const data = await this._call(`/domain/checkDomain/${domain}`);
+            return {
+                domain,
+                available: data.response?.avail === 'yes',
+                price: parseFloat(data.response?.price || 0),
+                regularPrice: parseFloat(data.response?.regularPrice || 0),
+                renewalPrice: parseFloat(data.response?.additional?.renewal?.price || 0),
+                premium: data.response?.premium === 'yes',
+                firstYearPromo: data.response?.firstYearPromo === 'yes',
+                limits: data.limits
+            };
+        },
+        
+        async checkMultipleTLDs(keyword) {
+            // Check availability across preferred TLDs
+            // Rate limited: 1 check per 10 seconds at Porkbun
+            const results = [];
+            for (const tld of this.PREFERRED_TLDS) {
+                const domain = keyword.includes('.') ? keyword : `${keyword}.${tld}`;
+                try {
+                    const result = await this.checkAvailability(domain);
+                    results.push(result);
+                } catch (e) {
+                    results.push({ domain, available: false, error: e.message });
+                }
+                // Respect rate limits
+                if (results.length < this.PREFERRED_TLDS.length) {
+                    await this._rateLimit(10500); // 10.5s between checks
+                }
+            }
+            return results;
+        },
+        
+        async registerDomain(domain, costInPennies) {
+            return await this._call(`/domain/create/${domain}`, {
+                cost: costInPennies,
+                agreeToTerms: 'yes'
+            });
+            // Returns: { status, domain, cost, orderId, balance }
+        },
+        
+        async updateAutoRenew(domain, on = true) {
+            return await this._call(`/domain/updateAutoRenew/${domain}`, {
+                status: on ? 'on' : 'off'
+            });
+        },
+        
+        // ─── DNS Record Management ───
+        
+        async listDNSRecords(domain) {
+            const data = await this._call(`/dns/retrieve/${domain}`);
+            return data.records || [];
+            // Returns: [{ id, name, type, content, ttl, prio, notes }]
+        },
+        
+        async createDNSRecord(domain, type, name, content, ttl = 600, prio = null) {
+            const body = { type, content, ttl: String(ttl) };
+            if (name) body.name = name;
+            if (prio !== null) body.prio = String(prio);
+            const data = await this._call(`/dns/create/${domain}`, body);
+            return { id: data.id, type, name: name || '@', content };
+        },
+        
+        async editDNSRecord(domain, recordId, type, name, content, ttl = 600) {
+            return await this._call(`/dns/edit/${domain}/${recordId}`, {
+                type, content, ttl: String(ttl),
+                ...(name ? { name } : {})
+            });
+        },
+        
+        async deleteDNSRecord(domain, recordId) {
+            return await this._call(`/dns/delete/${domain}/${recordId}`);
+        },
+        
+        async deleteDNSByType(domain, type, subdomain) {
+            const endpoint = subdomain 
+                ? `/dns/deleteByNameType/${domain}/${type}/${subdomain}`
+                : `/dns/deleteByNameType/${domain}/${type}`;
+            return await this._call(endpoint);
+        },
+        
+        // ─── TLD Pricing (cached) ───
+        
+        async getTLDPrices(forceRefresh = false) {
+            // Check cache first
+            if (!forceRefresh) {
+                try {
+                    const cached = JSON.parse(localStorage.getItem(this.PRICE_CACHE_KEY) || '{}');
+                    if (cached.timestamp && Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) {
+                        return cached.prices;
+                    }
+                } catch {}
+            }
+            
+            // Pricing endpoint doesn't require auth
+            const response = await fetch(`${this.BASE_URL}/pricing/get`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await response.json();
+            
+            if (data.status === 'SUCCESS' && data.pricing) {
+                localStorage.setItem(this.PRICE_CACHE_KEY, JSON.stringify({
+                    timestamp: Date.now(),
+                    prices: data.pricing
+                }));
+                return data.pricing;
+            }
+            throw new Error('Failed to fetch TLD pricing');
+        },
+        
+        // ─── GitHub Pages DNS Configuration ───
+        
+        async configureForGitHubPages(domain, githubUsername) {
+            const results = [];
+            const log = [];
+            
+            // Step 1: Get existing records and remove conflicting ones
+            log.push('Fetching existing DNS records...');
+            const existing = await this.listDNSRecords(domain);
+            
+            // Delete existing A, AAAA, and root CNAME records that would conflict
+            for (const record of existing) {
+                const isRoot = record.name === domain || record.name === '';
+                const isWww = record.name === `www.${domain}` || record.name === 'www';
+                if ((isRoot && (record.type === 'A' || record.type === 'AAAA' || record.type === 'CNAME' || record.type === 'ALIAS')) ||
+                    (isWww && record.type === 'CNAME')) {
+                    log.push(`Deleting conflicting ${record.type} record: ${record.content}`);
+                    await this.deleteDNSRecord(domain, record.id);
+                    await this._rateLimit(1100);
+                }
+            }
+            
+            // Step 2: Create 4 A records for apex domain
+            for (const ip of this.GITHUB_PAGES_IPS) {
+                log.push(`Creating A record → ${ip}`);
+                const result = await this.createDNSRecord(domain, 'A', '', ip, 600);
+                results.push(result);
+                await this._rateLimit(1100);
+            }
+            
+            // Step 3: Create CNAME for www → username.github.io
+            log.push(`Creating CNAME www → ${githubUsername}.github.io`);
+            const cnameResult = await this.createDNSRecord(
+                domain, 'CNAME', 'www', `${githubUsername}.github.io`, 600
+            );
+            results.push(cnameResult);
+            
+            return { 
+                success: true, 
+                recordsCreated: results.length, 
+                records: results,
+                log
+            };
+        },
+        
+        // ─── Domain Health Caching ───
+        
+        getHealthCache() {
+            try { return JSON.parse(localStorage.getItem(this.HEALTH_CACHE_KEY) || '{}'); }
+            catch { return {}; }
+        },
+        
+        setHealthCache(domain, result) {
+            const cache = this.getHealthCache();
+            cache[domain] = { lastCheck: new Date().toISOString(), result };
+            localStorage.setItem(this.HEALTH_CACHE_KEY, JSON.stringify(cache));
+        },
+        
+        // ─── Utility ───
+        
+        _rateLimit(ms = 1100) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        },
+        
+        // Format price from string to display
+        formatPrice(price) {
+            const num = typeof price === 'string' ? parseFloat(price) : price;
+            return isNaN(num) ? '—' : `$${num.toFixed(2)}`;
+        }
+    };
+
     const SESSION_TYPES = {
         build: {
             id: 'build',
@@ -3762,6 +4032,40 @@
             });
             if (!response.ok) throw new Error(`Failed to enable Pages`);
             return { enabled: true };
+        }
+        
+        // v8.32.0: Custom domain configuration for GitHub Pages
+        async updatePagesConfig(repo, cname, enforceHttps = false) {
+            const [owner, repoName] = repo.split('/');
+            const response = await fetch(`${this.baseUrl}/repos/${owner}/${repoName}/pages`, {
+                method: 'PUT',
+                headers: { 'Authorization': `token ${this.token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cname: cname,
+                    https_enforced: enforceHttps,
+                    source: { branch: 'main', path: '/' }
+                })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.message || `Failed to update Pages config (${response.status})`);
+            }
+            return await response.json();
+        }
+        
+        // v8.32.0: Check GitHub Pages health/DNS status
+        async checkPagesHealth(repo) {
+            const [owner, repoName] = repo.split('/');
+            const response = await fetch(`${this.baseUrl}/repos/${owner}/${repoName}/pages/health`, {
+                headers: { 'Authorization': `token ${this.token}`, 'Accept': 'application/vnd.github.v3+json' }
+            });
+            // First call may return 202 (async check in progress)
+            if (response.status === 202) return { pending: true };
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.message || `Pages health check failed (${response.status})`);
+            }
+            return await response.json();
         }
         
         // Create a new repository
@@ -6399,7 +6703,7 @@
                                     { id: 'deploy', icon: '🚀', label: 'Deploy', views: ['dashboard', 'smartdeploy', 'history'] },
                                     { id: 'projects', icon: '📂', label: 'Projects', views: ['projects'] },
                                     { id: 'backlog', icon: '📋', label: 'Backlog', views: ['backlog'] },
-                                    { id: 'monitor', icon: '📊', label: 'Monitor', views: ['portfolio', 'users', 'beta', 'firebase', 'integrations', 'issues'] },
+                                    { id: 'monitor', icon: '📊', label: 'Monitor', views: ['portfolio', 'optimize', 'domains', 'users', 'beta', 'firebase', 'integrations', 'issues'] },
                                     { id: 'maintain', icon: '🔧', label: 'Maintain', views: ['cleanup', 'files', 'archive', 'session'] },
                                     { id: 'configure', icon: '⚙️', label: 'Configure', views: ['config', 'setup', 'settings'] }
                                 ].map(section => (
@@ -6441,6 +6745,9 @@
                                                     {v === 'firebase' && '🔥 Firebase'}
                                                     {v === 'integrations' && '⚡ Integrations'}
                                                     {v === 'issues' && '🐛 Issues'}
+                                                    {v === 'portfolio' && '📊 Portfolio'}
+                                                    {v === 'optimize' && '🎯 Optimize'}
+                                                    {v === 'domains' && '🌐 Domains'}
                                                     {v === 'cleanup' && '🗑️ Cleanup'}
                                                     {v === 'files' && '📁 Files'}
                                                     {v === 'archive' && '📦 Archive'}
@@ -6707,6 +7014,24 @@
                             globalSessions={globalSessions}
                             deployments={deployments}
                             showAlert={showAlert}
+                        />
+                    )}
+                    
+                    {view === 'optimize' && (
+                        <EnvironmentOptimizationView
+                            apps={apps}
+                            config={config}
+                            globalSessions={globalSessions}
+                            showAlert={showAlert}
+                        />
+                    )}
+                    
+                    {view === 'domains' && (
+                        <DomainsView
+                            apps={apps}
+                            config={config}
+                            showAlert={showAlert}
+                            showConfirm={showConfirm}
                         />
                     )}
                     
@@ -9724,6 +10049,612 @@
                         </table>
                     </div>
                 </div>
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // ENVIRONMENT OPTIMIZATION VIEW - Claude Project setup guides
+    // Phase 4.2: Per-app optimization, token savings, platform recommendations
+    // =========================================================================
+    
+    function EnvironmentOptimizationView({ apps, config, globalSessions, showAlert }) {
+        const [selectedAppId, setSelectedAppId] = React.useState(null);
+        const [copiedSection, setCopiedSection] = React.useState(null);
+        
+        const configuredApps = React.useMemo(() => 
+            Object.entries(apps).filter(([_, a]) => a.testRepo || a.prodRepo).map(([id, a]) => ({ id, ...a })),
+            [apps]
+        );
+        
+        // Sort apps by session count (most active first)
+        const sortedApps = React.useMemo(() => {
+            const sessions = globalSessions || [];
+            const sessionCounts = {};
+            sessions.forEach(s => { sessionCounts[s.appId] = (sessionCounts[s.appId] || 0) + 1; });
+            return [...configuredApps].sort((a, b) => (sessionCounts[b.id] || 0) - (sessionCounts[a.id] || 0));
+        }, [configuredApps, globalSessions]);
+        
+        const selectedApp = selectedAppId ? { id: selectedAppId, ...apps[selectedAppId] } : null;
+        
+        // === DOC CLASSIFICATION ===
+        // Persistent docs: rarely change, belong in Claude Project Knowledge
+        const PERSISTENT_DOCS = [
+            { name: 'CONTEXT.md', desc: 'Architecture, conventions, schemas', changeFreq: 'Low — updated every few sessions' },
+            { name: 'CLAUDE_INSTRUCTIONS.md', desc: 'AI development instructions, standards profile', changeFreq: 'Very low — set during scoping' },
+            { name: 'ARCHITECTURE.md', desc: 'Detailed component/data flow reference', changeFreq: 'Low — updated on major changes' },
+            { name: 'CLAUDE-PREP-STANDARD.md', desc: 'Session start/end conventions', changeFreq: 'Very low — ecosystem-wide standard' },
+        ];
+        
+        // Session docs: change often, upload each time
+        const SESSION_DOCS = [
+            { name: 'SESSION_BRIEF.md', desc: 'Auto-generated session context with current state', changeFreq: 'Every session — auto-generated' },
+            { name: 'CHANGELOG.md', desc: 'Full version history', changeFreq: 'Every deploy — new entries added' },
+            { name: 'RELEASE_NOTES.txt', desc: 'Human-readable release notes', changeFreq: 'Every deploy — new entries added' },
+            { name: 'PROJECT_PLAN.md', desc: 'Roadmap and planned features', changeFreq: 'Moderate — updated as scope evolves' },
+            { name: 'Source file(s)', desc: 'index.html, sw.js, etc.', changeFreq: 'Every session — actively modified' },
+        ];
+        
+        // === TOKEN SAVINGS CALCULATION ===
+        const getTokenSavings = React.useCallback((app) => {
+            // Estimate tokens for persistent docs based on typical sizes
+            const persistentTokenEstimates = {
+                'CONTEXT.md': 12000,       // ~35KB typical
+                'CLAUDE_INSTRUCTIONS.md': 4000,  // ~12KB typical
+                'ARCHITECTURE.md': 6000,    // ~18KB typical
+                'CLAUDE-PREP-STANDARD.md': 3500,  // ~10KB typical
+            };
+            
+            // Check if app has these docs (approximate — we can't scan repo here)
+            const hasInstructions = app.lifecycle?.scope; // If scoped, likely has CLAUDE_INSTRUCTIONS.md
+            const hasArchitecture = app.lifecycle?.complexity === 'large' || app.lifecycle?.complexity === 'medium';
+            
+            let persistentTokens = persistentTokenEstimates['CONTEXT.md'] + persistentTokenEstimates['CLAUDE-PREP-STANDARD.md'];
+            if (hasInstructions) persistentTokens += persistentTokenEstimates['CLAUDE_INSTRUCTIONS.md'];
+            if (hasArchitecture) persistentTokens += persistentTokenEstimates['ARCHITECTURE.md'];
+            
+            // Project Knowledge docs are included for free (don't count against context)
+            // But they save the time/tokens of uploading them each session
+            const sessionsPerMonth = 4; // Conservative estimate
+            const sessions = (globalSessions || []).filter(s => s.appId === app.id);
+            const actualSessionsPerMonth = sessions.length > 0 
+                ? Math.max(1, Math.round(sessions.length / Math.max(1, (Date.now() - new Date(sessions[0]?.createdAt || Date.now()).getTime()) / (30 * 24 * 60 * 60 * 1000))))
+                : sessionsPerMonth;
+            
+            const monthlySavings = persistentTokens * actualSessionsPerMonth;
+            
+            // Cost savings
+            const engine = EngineRegistryService.ENGINES[EngineRegistryService.getDefault()];
+            const costPerToken = engine ? engine.cost.input / 1000000 : 0.003;
+            const monthlyCostSavings = monthlySavings * costPerToken;
+            
+            return {
+                persistentTokens,
+                sessionsPerMonth: actualSessionsPerMonth,
+                monthlySavings,
+                monthlyCostSavings,
+                hasCLAUDE_INSTRUCTIONS: hasInstructions,
+                hasArchitecture
+            };
+        }, [globalSessions]);
+        
+        // === SKILLS RECOMMENDATIONS ===
+        const getSkillRecommendations = React.useCallback((app) => {
+            const category = app.lifecycle?.scope?.category || app.appType;
+            const scope = app.lifecycle?.scope || {};
+            const skills = [];
+            
+            // Always recommended
+            skills.push({ name: 'gs-active', desc: 'Game Shelf archive structure and deployment conventions', relevance: 'high', reason: 'Ecosystem membership' });
+            
+            // Category-driven
+            if (category === 'game') {
+                skills.push({ name: 'game-rules', desc: 'Game mechanics and rules reference', relevance: 'high', reason: 'Game app category' });
+                skills.push({ name: 'firebase-patterns', desc: 'Firebase RTDB structure for game data', relevance: 'high', reason: 'Game data persistence' });
+                skills.push({ name: 'ui-components', desc: 'Dark mode styling, modals, buttons', relevance: 'medium', reason: 'Consistent game UI' });
+            }
+            
+            if (category === 'tool' || category === 'admin' || category === 'dashboard') {
+                skills.push({ name: 'ui-components', desc: 'Dark mode styling, modals, buttons', relevance: 'high', reason: 'Tool UI patterns' });
+            }
+            
+            // If has Firebase
+            if (scope.categoryAnswers?.multiplayer || scope.categoryAnswers?.dataPersistence === 'Firebase' || scope.categoryAnswers?.authRequired) {
+                if (!skills.find(s => s.name === 'firebase-patterns')) {
+                    skills.push({ name: 'firebase-patterns', desc: 'Firebase RTDB structure', relevance: 'high', reason: 'Firebase integration' });
+                }
+            }
+            
+            // Logo skill for branding
+            skills.push({ name: 'gs-logos', desc: 'Game Shelf logo assets and usage', relevance: 'low', reason: 'Branding when needed' });
+            
+            // Session continuity for complex apps
+            if (app.lifecycle?.complexity === 'large' || app.lifecycle?.complexity === 'medium') {
+                skills.push({ name: 'session-continuity', desc: 'Recovery protocol after session compaction', relevance: 'medium', reason: 'Complex app — long sessions likely' });
+            }
+            
+            return skills;
+        }, []);
+        
+        // === PLATFORM FEATURE RECOMMENDATIONS ===
+        const getPlatformRecommendations = React.useCallback((app) => {
+            const engine = EngineRegistryService.ENGINES[EngineRegistryService.getDefault()];
+            const features = engine?.features || {};
+            const recs = [];
+            
+            if (features.projects) {
+                recs.push({
+                    feature: 'Claude Project',
+                    icon: '📂',
+                    status: 'recommended',
+                    reason: 'Move persistent docs to Project Knowledge to save tokens every session',
+                    setup: 'Create a project per app → add CONTEXT.md, CLAUDE_INSTRUCTIONS.md, ARCHITECTURE.md, CLAUDE-PREP-STANDARD.md as Project Knowledge'
+                });
+            }
+            
+            if (features.skills) {
+                recs.push({
+                    feature: 'Custom Skills',
+                    icon: '🛠️',
+                    status: 'recommended',
+                    reason: 'Upload ecosystem-specific skills (gs-active, firebase-patterns, etc.) for consistent conventions',
+                    setup: 'Upload skill .md files to the project\'s Custom Instructions or Skills section'
+                });
+            }
+            
+            if (features.artifacts) {
+                recs.push({
+                    feature: 'Artifacts',
+                    icon: '✨',
+                    status: 'enabled',
+                    reason: 'Enables inline preview of HTML, React, and markdown outputs during build sessions',
+                    setup: 'Enabled by default — useful for UI work and documentation'
+                });
+            }
+            
+            if (features.memory) {
+                recs.push({
+                    feature: 'Memory',
+                    icon: '🧠',
+                    status: 'optional',
+                    reason: 'Remembers preferences across sessions, but Project Knowledge is more reliable for structured context',
+                    setup: 'Enable in settings — useful for general preferences, not project-specific data'
+                });
+            }
+            
+            if (features.extendedThinking) {
+                recs.push({
+                    feature: 'Extended Thinking',
+                    icon: '💭',
+                    status: 'for design sessions',
+                    reason: 'Improves architecture and design reasoning — enable for Design session types',
+                    setup: 'Enable when doing architecture design or complex problem solving'
+                });
+            }
+            
+            if (features.computerUse) {
+                recs.push({
+                    feature: 'Computer Use',
+                    icon: '🖥️',
+                    status: 'for build sessions',
+                    reason: 'File creation and code execution for generating deploy packages',
+                    setup: 'Enable when you need Claude to produce files or run tests'
+                });
+            }
+            
+            if (features.webSearch) {
+                recs.push({
+                    feature: 'Web Search',
+                    icon: '🌐',
+                    status: 'for research sessions',
+                    reason: 'Useful for research sessions to find API docs, patterns, and best practices',
+                    setup: 'Enable for Research session types, disable for Build sessions to keep focus'
+                });
+            }
+            
+            return recs;
+        }, []);
+        
+        // === SESSION TYPE ADVICE ===
+        const getSessionTypeAdvice = React.useCallback(() => {
+            const types = Object.entries(SESSION_TYPES);
+            return types.map(([id, t]) => {
+                const engine = EngineRegistryService.recommendForSessionType(id);
+                return {
+                    id,
+                    ...t,
+                    recommendedEngine: engine,
+                    platformTips: id === 'build' 
+                        ? 'Enable Computer Use + Artifacts. Disable Web Search. Use Sonnet for speed/quality balance.'
+                        : id === 'design'
+                        ? 'Enable Extended Thinking. Disable Computer Use. Use Opus for complex architecture.'
+                        : id === 'fix'
+                        ? 'Enable Computer Use. Include issue details in brief. Use Sonnet. Minimize context — skip CHANGELOG.'
+                        : id === 'research'
+                        ? 'Enable Web Search. Disable Computer Use. Use Haiku for cost efficiency. Skip source files.'
+                        : id === 'review'
+                        ? 'Enable Extended Thinking. Include full source. Use Sonnet. Focus on quality findings.'
+                        : id === 'test'
+                        ? 'Enable Computer Use for test execution. Include ARCHITECTURE.md. Use Sonnet.'
+                        : id === 'polish'
+                        ? 'Enable Artifacts for UI preview. Use Haiku for cost efficiency. Focus on specific areas.'
+                        : 'Enable Computer Use. Use Haiku for routine documentation updates.'
+                };
+            });
+        }, []);
+        
+        // === GENERATE PROJECT INSTRUCTIONS ===
+        const generateProjectInstructions = React.useCallback((app) => {
+            const scope = app.lifecycle?.scope || {};
+            const maturity = app.lifecycle?.currentMaturity || 'unknown';
+            const category = scope.category || app.appType || 'tool';
+            
+            let instructions = `# ${app.name} — Claude Project Instructions\n\n`;
+            instructions += `## Project Overview\n`;
+            instructions += `- **App ID:** ${app.id}\n`;
+            instructions += `- **Category:** ${category}\n`;
+            instructions += `- **Maturity:** ${maturity}\n`;
+            if (scope.description) instructions += `- **Description:** ${scope.description}\n`;
+            instructions += `\n`;
+            
+            instructions += `## Session Protocol\n`;
+            instructions += `When starting a session for ${app.name}:\n`;
+            instructions += `1. Read the SESSION_BRIEF.md (uploaded each session) for current state\n`;
+            instructions += `2. Review any work items or issues being targeted\n`;
+            instructions += `3. Confirm the session type (Build/Fix/Design/etc.) and scope\n`;
+            instructions += `4. Before finishing, always:\n`;
+            instructions += `   - Increment the version number in ALL locations\n`;
+            instructions += `   - Update RELEASE_NOTES.txt with what changed\n`;
+            instructions += `   - Update CHANGELOG.md with structured entries\n`;
+            if (app.hasServiceWorker) {
+                instructions += `   - Update sw.js CACHE_VERSION to match the new version\n`;
+                instructions += `   - Create a FULL deploy package (index.html + sw.js + manifest.json + icons/)\n`;
+            } else {
+                instructions += `   - Produce the updated index.html file\n`;
+            }
+            instructions += `\n`;
+            
+            instructions += `## Architecture Constraints\n`;
+            instructions += `- Single HTML file — all CSS, JS inline (no external files except CDN)\n`;
+            instructions += `- React via CDN (no build step)\n`;
+            instructions += `- Runs from file:// and GitHub Pages\n`;
+            if (app.hasServiceWorker) {
+                instructions += `- PWA with service worker — CACHE_VERSION must match app version\n`;
+            }
+            instructions += `- Dark mode default with CSS variables\n`;
+            instructions += `- Mobile-first responsive design\n`;
+            instructions += `\n`;
+            
+            instructions += `## Version Format\n`;
+            instructions += `MAJOR.MINOR.PATCH — Patch for fixes, Minor for features, Major for breaking changes.\n`;
+            instructions += `Version appears in: <meta name="version">, const APP_VERSION, UI display, sw.js CACHE_VERSION.\n`;
+            instructions += `\n`;
+            
+            if (scope.startingStandards && scope.startingStandards.length > 0) {
+                instructions += `## Starting Standards\n`;
+                scope.startingStandards.forEach(std => {
+                    const stdDesc = STANDARD_DESCRIPTIONS?.[std] || std;
+                    instructions += `- ${stdDesc}\n`;
+                });
+                instructions += `\n`;
+            }
+            
+            instructions += `## What NOT to Do\n`;
+            instructions += `- Do not use native alert(), confirm(), or prompt() — use toast notifications\n`;
+            instructions += `- Do not hardcode colors — use CSS variables\n`;
+            instructions += `- Do not forget to update ALL version locations\n`;
+            if (app.hasServiceWorker) {
+                instructions += `- Do not output just index.html for PWA — always include sw.js, manifest, icons\n`;
+            }
+            instructions += `- Do not refactor code outside the scope of the current session\n`;
+            
+            return instructions;
+        }, []);
+        
+        // === COPY HELPER ===
+        const copyToClipboard = React.useCallback((text, section) => {
+            navigator.clipboard.writeText(text).then(() => {
+                setCopiedSection(section);
+                setTimeout(() => setCopiedSection(null), 2000);
+            }).catch(() => showAlert('Failed to copy to clipboard', 'error'));
+        }, [showAlert]);
+        
+        // Helper: colored badge
+        const RelevanceBadge = ({ level }) => {
+            const colors = { high: 'bg-green-600/20 text-green-400 border-green-600/30', medium: 'bg-blue-600/20 text-blue-400 border-blue-600/30', low: 'bg-slate-600/20 text-slate-400 border-slate-600/30' };
+            return <span className={`text-xs px-2 py-0.5 rounded border ${colors[level] || colors.low}`}>{level}</span>;
+        };
+        
+        const StatusBadge = ({ status }) => {
+            const colors = { 
+                recommended: 'bg-green-600/20 text-green-400', 
+                enabled: 'bg-blue-600/20 text-blue-400', 
+                optional: 'bg-slate-600/20 text-slate-400',
+                'for design sessions': 'bg-purple-600/20 text-purple-400',
+                'for build sessions': 'bg-amber-600/20 text-amber-400',
+                'for research sessions': 'bg-cyan-600/20 text-cyan-400'
+            };
+            return <span className={`text-xs px-2 py-0.5 rounded ${colors[status] || colors.optional}`}>{status}</span>;
+        };
+        
+        // Copy button helper
+        const CopyBtn = ({ text, section, label }) => (
+            <button 
+                onClick={() => copyToClipboard(text, section)}
+                className={`text-xs px-3 py-1 rounded transition-colors ${copiedSection === section ? 'bg-green-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            >
+                {copiedSection === section ? '✓ Copied' : (label || '📋 Copy')}
+            </button>
+        );
+        
+        return (
+            <div className="max-w-6xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                        <span className="text-2xl">🎯</span>
+                        <div>
+                            <h1 className="text-2xl font-bold">Environment Optimization</h1>
+                            <p className="text-slate-400 text-sm">Configure Claude Projects, skills, and platform features for maximum efficiency</p>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* App Selector */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-5 mb-6">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2">📦 Select an App</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                        {sortedApps.map(app => {
+                            const sessions = (globalSessions || []).filter(s => s.appId === app.id);
+                            const maturity = app.lifecycle?.currentMaturity;
+                            const matColors = { seed: 'border-slate-600', prototype: 'border-amber-600', alpha: 'border-orange-600', beta: 'border-blue-600', production: 'border-green-600' };
+                            return (
+                                <button key={app.id}
+                                    onClick={() => setSelectedAppId(app.id === selectedAppId ? null : app.id)}
+                                    className={`p-3 rounded-lg border text-left transition-all ${
+                                        app.id === selectedAppId 
+                                            ? 'bg-indigo-600/20 border-indigo-500 ring-1 ring-indigo-500/50' 
+                                            : `bg-slate-900/50 ${matColors[maturity] || 'border-slate-700'} hover:bg-slate-700/50`
+                                    }`}
+                                >
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <AppIcon icon={app.icon} size={18} />
+                                        <span className="font-medium text-sm truncate">{app.name}</span>
+                                    </div>
+                                    <div className="text-xs text-slate-500">{sessions.length} session{sessions.length !== 1 ? 's' : ''}{maturity ? ` · ${maturity}` : ''}</div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+                
+                {/* No app selected — show overview */}
+                {!selectedApp && (
+                    <div className="space-y-6">
+                        {/* Session Type Quick Reference */}
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                            <h3 className="font-semibold mb-4 flex items-center gap-2">⚡ Session Type Quick Reference</h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-slate-700 text-left">
+                                            <th className="py-2 px-3 text-slate-400 font-medium">Type</th>
+                                            <th className="py-2 px-3 text-slate-400 font-medium">Engine</th>
+                                            <th className="py-2 px-3 text-slate-400 font-medium">Platform Tips</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {getSessionTypeAdvice().map(t => (
+                                            <tr key={t.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                                <td className="py-2.5 px-3">
+                                                    <span className="font-medium">{t.icon} {t.label}</span>
+                                                    <div className="text-xs text-slate-500 mt-0.5">{t.description}</div>
+                                                </td>
+                                                <td className="py-2.5 px-3 text-slate-300">{t.recommendedEngine?.name || 'Sonnet'}</td>
+                                                <td className="py-2.5 px-3 text-slate-400 text-xs">{t.platformTips}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        {/* General Platform Recommendations */}
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                            <h3 className="font-semibold mb-4 flex items-center gap-2">🛠️ Platform Feature Guide</h3>
+                            <div className="space-y-3">
+                                {getPlatformRecommendations({ lifecycle: {} }).map((rec, idx) => (
+                                    <div key={idx} className="flex items-start gap-3 p-3 bg-slate-900/50 rounded-lg">
+                                        <span className="text-xl mt-0.5">{rec.icon}</span>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className="font-medium text-sm">{rec.feature}</span>
+                                                <StatusBadge status={rec.status} />
+                                            </div>
+                                            <p className="text-xs text-slate-400 mb-1">{rec.reason}</p>
+                                            <p className="text-xs text-slate-500">{rec.setup}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div className="text-center text-slate-500 text-sm py-4">
+                            👆 Select an app above for a detailed per-app optimization guide
+                        </div>
+                    </div>
+                )}
+                
+                {/* Per-App Optimization Guide */}
+                {selectedApp && (() => {
+                    const savings = getTokenSavings(selectedApp);
+                    const skills = getSkillRecommendations(selectedApp);
+                    const platformRecs = getPlatformRecommendations(selectedApp);
+                    const projectInstructions = generateProjectInstructions(selectedApp);
+                    
+                    return (
+                        <div className="space-y-6">
+                            {/* Token Savings Summary */}
+                            <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 rounded-xl border border-indigo-700/30 p-5">
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">💰 Token Savings with Claude Project</h3>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-slate-800/60 rounded-lg p-3">
+                                        <div className="text-xs text-slate-400 mb-1">Persistent Docs</div>
+                                        <div className="text-xl font-bold text-green-400">{TokenRegistryService.formatTokens(savings.persistentTokens)}</div>
+                                        <div className="text-xs text-slate-500">tokens saved per session</div>
+                                    </div>
+                                    <div className="bg-slate-800/60 rounded-lg p-3">
+                                        <div className="text-xs text-slate-400 mb-1">Sessions/Month</div>
+                                        <div className="text-xl font-bold">{savings.sessionsPerMonth}</div>
+                                        <div className="text-xs text-slate-500">estimated average</div>
+                                    </div>
+                                    <div className="bg-slate-800/60 rounded-lg p-3">
+                                        <div className="text-xs text-slate-400 mb-1">Monthly Savings</div>
+                                        <div className="text-xl font-bold text-green-400">{TokenRegistryService.formatTokens(savings.monthlySavings)}</div>
+                                        <div className="text-xs text-slate-500">tokens/month</div>
+                                    </div>
+                                    <div className="bg-slate-800/60 rounded-lg p-3">
+                                        <div className="text-xs text-slate-400 mb-1">Cost Savings</div>
+                                        <div className="text-xl font-bold text-green-400">${savings.monthlyCostSavings.toFixed(2)}</div>
+                                        <div className="text-xs text-slate-500">est. per month</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Doc Classification */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {/* Persistent Docs → Project Knowledge */}
+                                <div className="bg-slate-800 rounded-xl border border-green-700/30 p-5">
+                                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-green-400">
+                                        📌 Project Knowledge <span className="text-xs font-normal text-slate-500">(add once, rarely update)</span>
+                                    </h3>
+                                    <p className="text-xs text-slate-400 mb-3">
+                                        These docs rarely change and should be added to your Claude Project's Knowledge section. 
+                                        They'll be available automatically in every conversation — no upload needed.
+                                    </p>
+                                    <div className="space-y-2">
+                                        {PERSISTENT_DOCS.map(doc => (
+                                            <div key={doc.name} className="flex items-center gap-3 p-2.5 bg-slate-900/50 rounded-lg">
+                                                <span className="text-green-500">📄</span>
+                                                <div className="flex-1">
+                                                    <div className="font-mono text-sm text-green-300">{doc.name}</div>
+                                                    <div className="text-xs text-slate-500">{doc.desc}</div>
+                                                </div>
+                                                <div className="text-xs text-slate-600 text-right whitespace-nowrap">{doc.changeFreq}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                {/* Session Docs → Upload Each Time */}
+                                <div className="bg-slate-800 rounded-xl border border-amber-700/30 p-5">
+                                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-amber-400">
+                                        📤 Upload Each Session <span className="text-xs font-normal text-slate-500">(changes frequently)</span>
+                                    </h3>
+                                    <p className="text-xs text-slate-400 mb-3">
+                                        These docs change frequently and should be uploaded from your Claude Prep package at the start of each session.
+                                        The Session Wizard bundles these automatically.
+                                    </p>
+                                    <div className="space-y-2">
+                                        {SESSION_DOCS.map(doc => (
+                                            <div key={doc.name} className="flex items-center gap-3 p-2.5 bg-slate-900/50 rounded-lg">
+                                                <span className="text-amber-500">📄</span>
+                                                <div className="flex-1">
+                                                    <div className="font-mono text-sm text-amber-300">{doc.name}</div>
+                                                    <div className="text-xs text-slate-500">{doc.desc}</div>
+                                                </div>
+                                                <div className="text-xs text-slate-600 text-right whitespace-nowrap">{doc.changeFreq}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Recommended Skills */}
+                            <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">🛠️ Recommended Skills</h3>
+                                <p className="text-xs text-slate-400 mb-3">
+                                    Skills are reusable instruction sets that help Claude follow ecosystem conventions. 
+                                    Upload these to your Claude Project for consistent behavior across sessions.
+                                </p>
+                                <div className="space-y-2">
+                                    {skills.map((skill, idx) => (
+                                        <div key={idx} className="flex items-center gap-3 p-2.5 bg-slate-900/50 rounded-lg">
+                                            <span>📦</span>
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-mono text-sm text-slate-200">{skill.name}</span>
+                                                    <RelevanceBadge level={skill.relevance} />
+                                                </div>
+                                                <div className="text-xs text-slate-500">{skill.desc}</div>
+                                            </div>
+                                            <div className="text-xs text-slate-600 text-right">{skill.reason}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            {/* Platform Features */}
+                            <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">⚡ Platform Features for {selectedApp.name}</h3>
+                                <div className="space-y-2">
+                                    {platformRecs.map((rec, idx) => (
+                                        <div key={idx} className="flex items-start gap-3 p-3 bg-slate-900/50 rounded-lg">
+                                            <span className="text-xl mt-0.5">{rec.icon}</span>
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="font-medium text-sm">{rec.feature}</span>
+                                                    <StatusBadge status={rec.status} />
+                                                </div>
+                                                <p className="text-xs text-slate-400 mb-1">{rec.reason}</p>
+                                                <p className="text-xs text-slate-500">{rec.setup}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            {/* Generated Project Instructions */}
+                            <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="font-semibold flex items-center gap-2">📝 Recommended Project Instructions</h3>
+                                    <CopyBtn text={projectInstructions} section="instructions" label="📋 Copy Instructions" />
+                                </div>
+                                <p className="text-xs text-slate-400 mb-3">
+                                    Paste these into your Claude Project's Custom Instructions field. 
+                                    This ensures Claude follows your conventions without including it in the session package.
+                                </p>
+                                <div className="bg-slate-900 rounded-lg border border-slate-700 p-4 max-h-80 overflow-y-auto">
+                                    <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">{projectInstructions}</pre>
+                                </div>
+                            </div>
+                            
+                            {/* Setup Checklist */}
+                            <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">✅ Setup Checklist for {selectedApp.name}</h3>
+                                <div className="space-y-2">
+                                    {[
+                                        { step: `Create a Claude Project named "${selectedApp.name}"`, detail: 'One project per app keeps context focused and organized' },
+                                        { step: 'Paste Project Instructions (above) into Custom Instructions', detail: 'Establishes session protocol, architecture constraints, versioning rules' },
+                                        { step: 'Upload persistent docs as Project Knowledge', detail: `Add: ${PERSISTENT_DOCS.map(d => d.name).join(', ')}` },
+                                        { step: 'Upload recommended skills as Project Knowledge', detail: `Add: ${skills.filter(s => s.relevance === 'high').map(s => s.name + '.md').join(', ')}` },
+                                        { step: 'Use Claude Prep Session Wizard for each session', detail: 'Generates SESSION_BRIEF.md and bundles session docs automatically' },
+                                        { step: 'Upload session docs at the start of each conversation', detail: `Upload the generated zip — includes: ${SESSION_DOCS.map(d => d.name).join(', ')}` },
+                                    ].map((item, idx) => (
+                                        <div key={idx} className="flex items-start gap-3 p-3 bg-slate-900/50 rounded-lg">
+                                            <div className="w-6 h-6 rounded-full bg-indigo-600/30 border border-indigo-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                                <span className="text-xs text-indigo-300 font-bold">{idx + 1}</span>
+                                            </div>
+                                            <div>
+                                                <div className="text-sm font-medium">{item.step}</div>
+                                                <div className="text-xs text-slate-500 mt-0.5">{item.detail}</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
             </div>
         );
     }
@@ -23500,6 +24431,542 @@ The developer uses Claude for iterative development — each session should:
     // FIREBASE ADMIN SETTINGS (v8.9.0)
     // =========================================================================
     
+    // =========================================================================
+    // DOMAIN REGISTRAR SETTINGS (v8.32.0)
+    // =========================================================================
+    
+    function DomainRegistrarSettings() {
+        const [config, setConfig] = React.useState(PorkbunService.getConfig());
+        const [showKeys, setShowKeys] = React.useState(false);
+        const [testing, setTesting] = React.useState(false);
+        const [testResult, setTestResult] = React.useState(null);
+        const [domains, setDomains] = React.useState(null);
+        const [loadingDomains, setLoadingDomains] = React.useState(false);
+        
+        const updateConfig = (field, value) => {
+            const updated = { ...config, [field]: value };
+            setConfig(updated);
+            PorkbunService.saveConfig(updated);
+        };
+        
+        const handleTest = async () => {
+            setTesting(true);
+            setTestResult(null);
+            try {
+                const result = await PorkbunService.ping();
+                setTestResult({ ok: true, msg: `Connected! Your IP: ${result.yourIp}` });
+                // Also fetch domains on successful connection
+                await handleFetchDomains();
+            } catch (e) {
+                setTestResult({ ok: false, msg: e.message });
+            }
+            setTesting(false);
+        };
+        
+        const handleFetchDomains = async () => {
+            setLoadingDomains(true);
+            try {
+                const domainList = await PorkbunService.listDomains();
+                setDomains(domainList);
+            } catch (e) {
+                console.error('Failed to fetch domains:', e);
+            }
+            setLoadingDomains(false);
+        };
+        
+        // Load domains on mount if configured
+        React.useEffect(() => {
+            if (PorkbunService.isConfigured() && !domains) {
+                handleFetchDomains();
+            }
+        }, []);
+        
+        return (
+            <div className="space-y-4">
+                {/* API Key Input */}
+                <div>
+                    <label className="text-xs text-slate-400 block mb-1.5">API Key</label>
+                    <div className="flex gap-2">
+                        <input 
+                            type={showKeys ? 'text' : 'password'}
+                            value={config.apiKey || ''}
+                            onChange={e => updateConfig('apiKey', e.target.value.trim())}
+                            placeholder="pk1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                            className="flex-1 p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono"
+                        />
+                    </div>
+                </div>
+                
+                {/* Secret API Key Input */}
+                <div>
+                    <label className="text-xs text-slate-400 block mb-1.5">Secret API Key</label>
+                    <div className="flex gap-2">
+                        <input 
+                            type={showKeys ? 'text' : 'password'}
+                            value={config.secretApiKey || ''}
+                            onChange={e => updateConfig('secretApiKey', e.target.value.trim())}
+                            placeholder="sk1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                            className="flex-1 p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono"
+                        />
+                    </div>
+                </div>
+                
+                {/* Action Buttons */}
+                <div className="flex items-center gap-3 flex-wrap">
+                    <button onClick={() => setShowKeys(!showKeys)}
+                        className="text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600">
+                        {showKeys ? '🔒 Hide' : '👁️ Show'} Keys
+                    </button>
+                    <button onClick={handleTest} disabled={testing || !config.apiKey || !config.secretApiKey}
+                        className="text-xs px-3 py-1.5 bg-indigo-600 rounded hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600">
+                        {testing ? '⏳ Testing...' : '🔌 Test Connection'}
+                    </button>
+                    {PorkbunService.isConfigured() && (
+                        <button onClick={handleFetchDomains} disabled={loadingDomains}
+                            className="text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-40">
+                            {loadingDomains ? '⏳ Loading...' : '🔄 Refresh Domains'}
+                        </button>
+                    )}
+                </div>
+                
+                {/* Test Result */}
+                {testResult && (
+                    <div className={`p-3 rounded-lg border text-sm ${testResult.ok ? 'bg-green-900/30 border-green-700 text-green-300' : 'bg-red-900/30 border-red-700 text-red-300'}`}>
+                        {testResult.ok ? '✅' : '❌'} {testResult.msg}
+                    </div>
+                )}
+                
+                {/* Domain List */}
+                {domains && domains.length > 0 && (
+                    <div className="mt-4">
+                        <div className="text-xs text-slate-400 mb-2">Domains on Account ({domains.length})</div>
+                        <div className="space-y-1.5">
+                            {domains.map(d => {
+                                const isExpiringSoon = d.expireDate && new Date(d.expireDate) - Date.now() < 60 * 24 * 60 * 60 * 1000;
+                                return (
+                                    <div key={d.domain} className="flex items-center gap-3 p-2.5 bg-slate-900/50 rounded-lg text-sm">
+                                        <span className="text-lg">🌐</span>
+                                        <span className="font-mono text-slate-200 flex-1">{d.domain}</span>
+                                        <span className={`text-xs px-2 py-0.5 rounded ${
+                                            d.status === 'ACTIVE' ? 'bg-green-900/30 text-green-400' : 'bg-amber-900/30 text-amber-400'
+                                        }`}>
+                                            {d.status || 'unknown'}
+                                        </span>
+                                        {d.expireDate && (
+                                            <span className={`text-xs ${isExpiringSoon ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                {isExpiringSoon ? '⚠️ ' : ''}expires {new Date(d.expireDate).toLocaleDateString()}
+                                            </span>
+                                        )}
+                                        <span className={`text-xs ${d.autoRenew ? 'text-green-500' : 'text-slate-600'}`}>
+                                            {d.autoRenew ? '🔄 auto' : '⏸️ manual'}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+                
+                {domains && domains.length === 0 && (
+                    <div className="text-sm text-slate-500 p-4 text-center bg-slate-900/50 rounded-lg">
+                        No domains found on this account. Purchase a domain at <a href="https://porkbun.com" target="_blank" className="text-indigo-400 hover:underline">porkbun.com</a>.
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // DOMAINS VIEW — DNS management and domain health (v8.32.0)
+    // =========================================================================
+    
+    function DomainsView({ apps, config, showAlert, showConfirm }) {
+        const [domains, setDomains] = React.useState(null);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [selectedDomain, setSelectedDomain] = React.useState(null);
+        const [dnsRecords, setDnsRecords] = React.useState(null);
+        const [loadingDNS, setLoadingDNS] = React.useState(false);
+        const [addingRecord, setAddingRecord] = React.useState(false);
+        const [newRecord, setNewRecord] = React.useState({ type: 'A', name: '', content: '', ttl: '600' });
+        const [wiringDomain, setWiringDomain] = React.useState(null);
+        const [wireLog, setWireLog] = React.useState([]);
+        const [wireProgress, setWireProgress] = React.useState(false);
+        
+        // Load domains
+        const fetchDomains = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const domainList = await PorkbunService.listDomains();
+                setDomains(domainList);
+                if (domainList.length > 0 && !selectedDomain) {
+                    setSelectedDomain(domainList[0].domain);
+                }
+            } catch (e) {
+                setError(e.message);
+            }
+            setLoading(false);
+        };
+        
+        // Load DNS records for selected domain
+        const fetchDNS = async (domain) => {
+            setLoadingDNS(true);
+            try {
+                const records = await PorkbunService.listDNSRecords(domain);
+                setDnsRecords(records);
+            } catch (e) {
+                showAlert(`Failed to load DNS: ${e.message}`, 'error');
+            }
+            setLoadingDNS(false);
+        };
+        
+        // Fetch on mount
+        React.useEffect(() => {
+            if (PorkbunService.isConfigured()) fetchDomains();
+        }, []);
+        
+        // Fetch DNS when domain changes
+        React.useEffect(() => {
+            if (selectedDomain) fetchDNS(selectedDomain);
+        }, [selectedDomain]);
+        
+        // Add DNS record
+        const handleAddRecord = async () => {
+            if (!newRecord.type || !newRecord.content) return;
+            setAddingRecord(true);
+            try {
+                await PorkbunService.createDNSRecord(
+                    selectedDomain, newRecord.type, newRecord.name, 
+                    newRecord.content, parseInt(newRecord.ttl) || 600,
+                    newRecord.type === 'MX' ? parseInt(newRecord.prio) || 10 : null
+                );
+                showAlert('DNS record created', 'success');
+                setNewRecord({ type: 'A', name: '', content: '', ttl: '600' });
+                await fetchDNS(selectedDomain);
+            } catch (e) {
+                showAlert(`Failed to create record: ${e.message}`, 'error');
+            }
+            setAddingRecord(false);
+        };
+        
+        // Delete DNS record
+        const handleDeleteRecord = async (recordId, recordDesc) => {
+            const confirmed = await showConfirm(`Delete ${recordDesc}?`, 'Delete DNS Record');
+            if (!confirmed) return;
+            try {
+                await PorkbunService.deleteDNSRecord(selectedDomain, recordId);
+                showAlert('Record deleted', 'success');
+                await fetchDNS(selectedDomain);
+            } catch (e) {
+                showAlert(`Failed to delete: ${e.message}`, 'error');
+            }
+        };
+        
+        // Wire domain for GitHub Pages
+        const handleWireForGitHubPages = async (domain, repo) => {
+            setWireProgress(true);
+            setWireLog(['🚀 Starting GitHub Pages configuration...']);
+            
+            try {
+                // Step 1: Configure DNS at Porkbun
+                setWireLog(prev => [...prev, '📡 Configuring DNS records at Porkbun...']);
+                const githubUsername = repo.split('/')[0];
+                const dnsResult = await PorkbunService.configureForGitHubPages(domain, githubUsername);
+                dnsResult.log.forEach(l => setWireLog(prev => [...prev, `  ${l}`]));
+                setWireLog(prev => [...prev, `✅ ${dnsResult.recordsCreated} DNS records created`]);
+                
+                // Step 2: Create CNAME file in repo
+                setWireLog(prev => [...prev, '📄 Committing CNAME file to repo...']);
+                const github = new GitHubAPI(localStorage.getItem('cc_github_token'));
+                await github.createOrUpdateFile(repo, 'CNAME', domain, `Add custom domain CNAME for ${domain}`);
+                setWireLog(prev => [...prev, '✅ CNAME file committed']);
+                
+                // Step 3: Update GitHub Pages config
+                setWireLog(prev => [...prev, '⚙️ Updating GitHub Pages configuration...']);
+                await github.updatePagesConfig(repo, domain, false);
+                setWireLog(prev => [...prev, '✅ Custom domain set on GitHub Pages']);
+                
+                setWireLog(prev => [...prev, '', '🎉 Domain configuration complete!', `🌐 ${domain} will be live once DNS propagates (5-30 minutes)`, '🔒 HTTPS will auto-enable after DNS propagation']);
+                
+                showAlert(`${domain} configured for GitHub Pages! DNS may take 5-30 minutes to propagate.`, 'success');
+                
+                // Refresh DNS records view
+                await fetchDNS(domain);
+            } catch (e) {
+                setWireLog(prev => [...prev, `❌ Error: ${e.message}`]);
+                showAlert(`Wiring failed: ${e.message}`, 'error');
+            }
+            setWireProgress(false);
+        };
+        
+        // Not configured
+        if (!PorkbunService.isConfigured()) {
+            return (
+                <div className="max-w-4xl mx-auto">
+                    <div className="flex items-center gap-3 mb-6">
+                        <span className="text-2xl">🌐</span>
+                        <h1 className="text-2xl font-bold">Domains</h1>
+                    </div>
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-8 text-center">
+                        <span className="text-4xl block mb-4">🔑</span>
+                        <h3 className="text-lg font-semibold mb-2">Domain Registrar Not Configured</h3>
+                        <p className="text-slate-400 text-sm mb-4">Add your Porkbun API keys in Settings to manage domains from Command Center.</p>
+                        <p className="text-slate-500 text-xs">Configure → Settings → 🌐 Domain Registrar</p>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Record type colors
+        const typeColors = {
+            A: 'bg-blue-600/20 text-blue-400',
+            AAAA: 'bg-cyan-600/20 text-cyan-400',
+            CNAME: 'bg-green-600/20 text-green-400',
+            MX: 'bg-purple-600/20 text-purple-400',
+            TXT: 'bg-amber-600/20 text-amber-400',
+            NS: 'bg-slate-600/20 text-slate-400',
+            SRV: 'bg-pink-600/20 text-pink-400',
+            ALIAS: 'bg-emerald-600/20 text-emerald-400',
+            CAA: 'bg-orange-600/20 text-orange-400',
+        };
+        
+        // Check if domain is already wired for GitHub Pages
+        const isGitHubPagesWired = (records) => {
+            if (!records) return false;
+            const aRecords = records.filter(r => r.type === 'A').map(r => r.content);
+            const hasGHIPs = PorkbunService.GITHUB_PAGES_IPS.every(ip => aRecords.includes(ip));
+            const hasCNAME = records.some(r => r.type === 'CNAME' && r.content.includes('.github.io'));
+            return hasGHIPs && hasCNAME;
+        };
+        
+        // Find which apps could use this domain (have repos assigned)
+        const getAppsWithRepos = () => {
+            return Object.entries(apps)
+                .filter(([_, a]) => a.testRepo || a.prodRepo)
+                .map(([id, a]) => ({ id, ...a }));
+        };
+        
+        return (
+            <div className="max-w-6xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                        <span className="text-2xl">🌐</span>
+                        <div>
+                            <h1 className="text-2xl font-bold">Domains</h1>
+                            <p className="text-slate-400 text-sm">DNS management and GitHub Pages domain wiring</p>
+                        </div>
+                    </div>
+                    <button onClick={fetchDomains} disabled={loading}
+                        className="px-3 py-1.5 text-sm bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-40">
+                        {loading ? '⏳' : '🔄'} Refresh
+                    </button>
+                </div>
+                
+                {error && (
+                    <div className="bg-red-900/30 border border-red-700 text-red-300 rounded-xl p-4 mb-6 text-sm">
+                        ❌ {error}
+                    </div>
+                )}
+                
+                {/* Domain Selector */}
+                {domains && domains.length > 0 && (
+                    <div className="flex gap-2 mb-6 flex-wrap">
+                        {domains.map(d => (
+                            <button key={d.domain}
+                                onClick={() => setSelectedDomain(d.domain)}
+                                className={`px-4 py-2 rounded-lg text-sm font-mono transition-all ${
+                                    selectedDomain === d.domain 
+                                        ? 'bg-indigo-600 text-white ring-1 ring-indigo-400' 
+                                        : 'bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700'
+                                }`}>
+                                🌐 {d.domain}
+                            </button>
+                        ))}
+                    </div>
+                )}
+                
+                {loading && <div className="text-center text-slate-400 py-12">⏳ Loading domains...</div>}
+                
+                {/* DNS Records Panel */}
+                {selectedDomain && !loading && (
+                    <div className="space-y-6">
+                        {/* Domain Info + Quick Actions */}
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="font-semibold flex items-center gap-2">
+                                    📡 DNS Records — <span className="font-mono text-indigo-300">{selectedDomain}</span>
+                                </h3>
+                                <div className="flex gap-2">
+                                    {!isGitHubPagesWired(dnsRecords) && (
+                                        <button onClick={() => setWiringDomain(selectedDomain)}
+                                            className="text-xs px-3 py-1.5 bg-green-600 rounded hover:bg-green-500 font-medium">
+                                            ⚡ Wire for GitHub Pages
+                                        </button>
+                                    )}
+                                    {isGitHubPagesWired(dnsRecords) && (
+                                        <span className="text-xs px-3 py-1.5 bg-green-900/30 text-green-400 rounded border border-green-700/30">
+                                            ✅ GitHub Pages configured
+                                        </span>
+                                    )}
+                                    <button onClick={() => fetchDNS(selectedDomain)} disabled={loadingDNS}
+                                        className="text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-40">
+                                        {loadingDNS ? '⏳' : '🔄'}
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* DNS Records Table */}
+                            {loadingDNS && <div className="text-center text-slate-400 py-8">⏳ Loading DNS records...</div>}
+                            
+                            {dnsRecords && !loadingDNS && (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-slate-700 text-left">
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-20">Type</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium">Name</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium">Content</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-16">TTL</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-16">Prio</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-12"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {dnsRecords.map(record => (
+                                                <tr key={record.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                                    <td className="py-2 px-3">
+                                                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${typeColors[record.type] || 'bg-slate-600/20 text-slate-400'}`}>
+                                                            {record.type}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-2 px-3 font-mono text-slate-300 text-xs">{record.name || '@'}</td>
+                                                    <td className="py-2 px-3 font-mono text-slate-200 text-xs break-all max-w-xs">{record.content}</td>
+                                                    <td className="py-2 px-3 text-xs text-slate-500">{record.ttl}</td>
+                                                    <td className="py-2 px-3 text-xs text-slate-500">{record.prio || '—'}</td>
+                                                    <td className="py-2 px-3">
+                                                        <button onClick={() => handleDeleteRecord(record.id, `${record.type} ${record.name}`)}
+                                                            className="text-red-500 hover:text-red-400 text-xs" title="Delete record">
+                                                            🗑️
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {dnsRecords.length === 0 && (
+                                                <tr><td colSpan="6" className="py-8 text-center text-slate-500">No DNS records found</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Add DNS Record */}
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                            <h3 className="font-semibold mb-4 flex items-center gap-2">➕ Add DNS Record</h3>
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Type</label>
+                                    <select value={newRecord.type} onChange={e => setNewRecord({...newRecord, type: e.target.value})}
+                                        className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm">
+                                        {['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA', 'ALIAS'].map(t => (
+                                            <option key={t} value={t}>{t}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Name <span className="text-slate-600">(subdomain)</span></label>
+                                    <input value={newRecord.name} onChange={e => setNewRecord({...newRecord, name: e.target.value})}
+                                        placeholder="@ or www" className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono" />
+                                </div>
+                                <div className="sm:col-span-2">
+                                    <label className="text-xs text-slate-400 block mb-1">Content</label>
+                                    <input value={newRecord.content} onChange={e => setNewRecord({...newRecord, content: e.target.value})}
+                                        placeholder="1.2.3.4 or target.example.com" className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono" />
+                                </div>
+                                <div className="flex items-end gap-2">
+                                    <div className="flex-1">
+                                        <label className="text-xs text-slate-400 block mb-1">TTL</label>
+                                        <input value={newRecord.ttl} onChange={e => setNewRecord({...newRecord, ttl: e.target.value})}
+                                            className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono" />
+                                    </div>
+                                    <button onClick={handleAddRecord} disabled={addingRecord || !newRecord.content}
+                                        className="px-4 py-2 bg-indigo-600 rounded text-sm hover:bg-indigo-500 disabled:opacity-40 whitespace-nowrap">
+                                        {addingRecord ? '⏳' : '➕'} Add
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Wire for GitHub Pages Modal */}
+                        {wiringDomain && (
+                            <div className="bg-slate-800 rounded-xl border border-indigo-700/50 p-5">
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">⚡ Wire {wiringDomain} for GitHub Pages</h3>
+                                
+                                {!wireProgress && wireLog.length === 0 && (
+                                    <div>
+                                        <p className="text-sm text-slate-400 mb-4">
+                                            This will configure DNS records and GitHub Pages to serve your app from <strong className="text-white">{wiringDomain}</strong>. 
+                                            It creates 4 A records + 1 CNAME record, commits a CNAME file, and updates the GitHub Pages settings.
+                                        </p>
+                                        <div className="mb-4">
+                                            <label className="text-xs text-slate-400 block mb-1.5">Select Repository to Wire</label>
+                                            <div className="space-y-1.5">
+                                                {getAppsWithRepos().map(app => (
+                                                    <div key={app.id} className="flex items-center gap-3">
+                                                        {app.prodRepo && (
+                                                            <button onClick={() => handleWireForGitHubPages(wiringDomain, app.prodRepo)}
+                                                                className="flex items-center gap-2 px-3 py-2 bg-slate-900/50 rounded-lg hover:bg-slate-700/50 text-sm border border-slate-700 w-full text-left">
+                                                                <AppIcon icon={app.icon} size={16} />
+                                                                <span className="font-medium">{app.name}</span>
+                                                                <span className="text-xs text-slate-500 font-mono ml-auto">{app.prodRepo}</span>
+                                                                <span className="text-xs px-1.5 py-0.5 bg-green-900/30 text-green-400 rounded">prod</span>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => { setWiringDomain(null); setWireLog([]); }}
+                                            className="text-xs text-slate-400 hover:text-white">Cancel</button>
+                                    </div>
+                                )}
+                                
+                                {/* Wire Progress Log */}
+                                {wireLog.length > 0 && (
+                                    <div>
+                                        <div className="bg-slate-900 rounded-lg p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
+                                            {wireLog.map((line, i) => (
+                                                <div key={i} className={`${line.startsWith('❌') ? 'text-red-400' : line.startsWith('✅') ? 'text-green-400' : line.startsWith('🎉') ? 'text-yellow-400 font-bold' : 'text-slate-300'}`}>
+                                                    {line}
+                                                </div>
+                                            ))}
+                                            {wireProgress && <div className="text-indigo-400 animate-pulse">⏳ Working...</div>}
+                                        </div>
+                                        {!wireProgress && (
+                                            <button onClick={() => { setWiringDomain(null); setWireLog([]); }}
+                                                className="mt-3 text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600">
+                                                ✓ Done
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {!loading && domains && domains.length === 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-8 text-center">
+                        <span className="text-4xl block mb-4">🌐</span>
+                        <h3 className="text-lg font-semibold mb-2">No Domains Found</h3>
+                        <p className="text-slate-400 text-sm">Purchase a domain at <a href="https://porkbun.com" target="_blank" className="text-indigo-400 hover:underline">porkbun.com</a>, then manage it here.</p>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
     function FirebaseAdminSettings() {
         const [showKeyInput, setShowKeyInput] = React.useState(false);
         const [keyInput, setKeyInput] = React.useState('');
@@ -23921,6 +25388,20 @@ The developer uses Claude for iterative development — each session should:
                     </p>
                     
                     <FirebaseAdminSettings />
+                </div>
+                
+                {/* Domain Registrar (v8.32.0) */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🌐 Domain Registrar
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Porkbun API credentials enable domain management, DNS configuration, and automated GitHub Pages domain wiring from Command Center. 
+                        Generate API keys at <a href="https://porkbun.com/account/api" target="_blank" className="text-indigo-400 hover:underline">porkbun.com/account/api</a>. 
+                        Don't forget to <strong className="text-slate-300">enable API access</strong> for each domain in Domain Management → Details.
+                    </p>
+                    
+                    <DomainRegistrarSettings />
                 </div>
                 
                 {/* Firebase Config Sync (v8.18.0) */}
