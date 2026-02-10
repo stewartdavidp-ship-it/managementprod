@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.22.0] — 2026-02-09
+
+### Added
+- **BacklogView** — New top-level navigation tab (📋 Backlog) with full work item management: create, edit, delete, status transitions, grouping by app/status/type, filtering by status/type/app, search, sort, bulk select + bulk status update
+- **WorkItemEditModal** — Full-featured create/edit modal with app selector, title, description, type (feature/bugfix/enhancement/chore/research), priority (core/nice-to-have/out-of-scope), status, effort, acceptance criteria list (add/remove), tags (add/remove), and collapsible context section (files affected, sections, dependencies, notes)
+- **Dashboard Backlog summary widget** — Status distribution grid (ideas/ready/in-progress/done) + recent active items list with "View All →" link
+- **Dashboard work item badges** — App cards show 📋 N badge with count of active work items per app
+- **WorkItemService.createBatch(uid, items)** — Bulk create work items via single Firebase update (for future scoping flow)
+- **WorkItemService.delete(uid, itemId)** — Delete individual work items
+- **`source` field on work items** — manual | scoped | imported | promoted, added to both create() and createBatch()
+- **Global work items state** — App component subscribes to WorkItemService (globalWorkItems), passed to DashboardView for badges and summary widget
+- **Copy for Claude** — Each work item has a "Copy for Claude" action generating formatted context with acceptance criteria, files affected, and notes
+- **Quick status transitions** — Context-aware status buttons on each item (e.g., idea shows →Ready, →Deferred; in-progress shows →Done, →Ready, →Deferred)
+- **Orchestrator Phase 1.1** — Backlog View + Work Item CRUD
+
+### Changed
+- **Navigation** — Added 'backlog' as single-view section between Projects and Monitor in consolidated nav
+- **DashboardView props** — Now receives globalWorkItems for badge and summary rendering
+
+---
+
 ## [8.21.1] — 2026-02-09
 
 ### Added
