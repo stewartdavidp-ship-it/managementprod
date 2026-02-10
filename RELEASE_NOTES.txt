@@ -1,6 +1,52 @@
 Command Center — Release Notes
 ================================
 
+v8.29.0 — Smart Artifact Generation (Phase 3.2)
+-------------------------------------------------
+Date: February 9, 2026
+
+Generated artifacts now start the project at v0.7 instead of v0.1. When you create a new
+app with scoping, CC generates a full set of project docs, commits them to the repo, and
+deploys the seed to test — so the first Claude session can start building immediately.
+
+GENERATED DOCS (5 artifacts):
+• CLAUDE_INSTRUCTIONS.md — Full standards profile, V1 features, architecture constraints
+  (already existed in 8.28.0, now committed to repo)
+• CONTEXT.md — Pre-populated with architecture, data schema stubs, deploy info,
+  conventions. No TODO placeholders for fields captured during scoping.
+• PROJECT_PLAN.md — Mission, Phase 1 features as checkbox list, architecture decisions
+  from category answers, open questions from unresolved decisions
+• CHANGELOG.md — Skeleton with v0.1.0 seed entry
+• RELEASE_NOTES.txt — Skeleton with v0.1.0 seed entry
+
+REPO COMMITS:
+• All 5 docs committed to prod repo via GitHub API after generation
+• Respects subPath for consolidated repos (e.g. gameshelf/{app}/docs/)
+• Skips files that already exist (safe for re-runs)
+
+AUTO-DEPLOY SEED TO TEST:
+• For test-prod apps, seed index.html is deployed to test environment
+• Skips if test already has an index.html
+
+TABBED DOC VIEWER:
+• Step 5 Review & Launch now shows all generated docs in a tabbed viewer
+• Copy button works per-tab for each document
+• Status shows docs committed count and seed deploy success
+
+CONTEXT.md GENERATOR:
+• Architecture section: framework, data layer, PWA status, deploy target
+• Data schema: Firebase path stubs from category/answers, localStorage keys
+• Deployment: repos, structure, deploy type, CC integration
+• Conventions: auto-derived from starting standards and category
+
+PROJECT_PLAN.md GENERATOR:
+• Mission from scope description
+• Phase 1 features from V1 core list (as checkboxes)
+• Phase 2 features from nice-to-have list
+• Future/ideas from future features
+• Architecture decisions from category answers and ecosystem conventions
+• Open questions from unresolved key decisions
+
 v8.28.0 — Integrated Setup Flow (Phase 3.1)
 ---------------------------------------------
 Date: February 9, 2026
