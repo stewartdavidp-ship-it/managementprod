@@ -1,6 +1,44 @@
 Command Center — Release Notes
 ================================
 
+v8.28.0 — Integrated Setup Flow (Phase 3.1)
+---------------------------------------------
+Date: February 9, 2026
+
+Enhances the Setup New App wizard so new apps launch with full context from day one.
+Scoping now feeds directly into lifecycle metadata, backlog work items, and Claude
+instructions — closing the gap between "I have an idea" and "Claude can build it."
+
+SETUP WIZARD RESTRUCTURED:
+• Step 5 renamed from "Claude Prompt" to "Review & Launch"
+• Review & Launch shows a complete setup summary: app details, repos, scope category,
+  feature/standards counts, generated artifacts, and created work items
+
+LIFECYCLE METADATA FROM SCOPE:
+• When scope is completed during setup, lifecycle metadata is stored on the app config
+• Includes: currentMaturity (seed), complexity (auto-detected), full scope object
+• Scope data includes description, category, categoryAnswers, features, standards,
+  key decisions, and timestamp
+
+AUTO-CREATE WORK ITEMS FROM SCOPE:
+• V1 features → work items (type: feature, status: ready, source: scoped)
+• Future features → work items (type: feature, status: idea, source: scoped)
+• Unresolved key decisions → work items (type: research, status: ready, source: scoped)
+• Uses WorkItemService.createBatch() for efficient Firebase writes
+• Work items appear immediately in Backlog view
+• Requires Firebase sign-in (graceful skip with warning if not signed in)
+
+REVIEW & LAUNCH STEP:
+• 4-panel summary grid: app identity, repositories, scope overview, generated artifacts
+• Work items table with status, type, title, and priority badges
+• Claude instructions/prompt with copy button
+• "Setup Another App" resets all state including new fields
+
+TECHNICAL:
+• firebaseUid prop now passed to SetupNewAppView
+• New state: workItemsCreated, reviewData
+• setupApp() enhanced with lifecycle storage, batch work item creation, review data build
+
 v8.27.0 — Session Tracking + Deploy Close-the-Loop (Phase 2.3)
 ---------------------------------------------------------------
 Date: February 9, 2026
