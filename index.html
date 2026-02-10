@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.22.0">
+    <meta name="version" content="8.23.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -14188,6 +14188,689 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
     }
 
     // =========================================================================
+    // PROJECT SCOPING — Category-Driven Scoping Flow (v8.23.0 / Phase 1.2)
+    // =========================================================================
+    
+    // Category question definitions — static data, no AI dependency
+    const SCOPE_CATEGORIES = {
+        game: { label: 'Game', icon: '🎮', description: 'Puzzle, word game, or interactive game' },
+        tool: { label: 'Tool', icon: '🔧', description: 'Utility or productivity tool' },
+        dashboard: { label: 'Dashboard', icon: '📊', description: 'Data display or monitoring' },
+        content: { label: 'Content', icon: '📄', description: 'Content site or documentation' },
+        admin: { label: 'Admin', icon: '🔐', description: 'Administration or management panel' }
+    };
+    
+    const CATEGORY_QUESTIONS = {
+        game: [
+            { id: 'dailyReset', label: 'Daily puzzle / reset mechanic?', type: 'toggle', default: true, drives: 'Daily reset logic, streak tracking, puzzle number' },
+            { id: 'difficultyModes', label: 'Difficulty modes?', type: 'select', options: ['none', 'easy-hard', 'multiple'], default: 'easy-hard', drives: 'Mode selector in menu, separate stats' },
+            { id: 'scoringSystem', label: 'Scoring system?', type: 'select', options: ['none', 'points', 'tries', 'time'], default: 'points', drives: 'Score display, personal best tracking' },
+            { id: 'shareResults', label: 'Share results?', type: 'toggle', default: true, drives: 'Share button, navigator.share pattern' },
+            { id: 'multiplayer', label: 'Multiplayer or social features?', type: 'toggle', default: false, drives: 'Firebase auth, friend system, battle infrastructure' },
+            { id: 'streaks', label: 'Streaks?', type: 'toggle', default: true, drives: 'Streak counter, daily check, localStorage persistence' },
+            { id: 'achievements', label: 'Achievements?', type: 'toggle', default: false, drives: 'Achievement definitions, unlock tracking' },
+            { id: 'soundEffects', label: 'Sound effects?', type: 'toggle', default: false, drives: 'Audio manager, mute toggle in settings' },
+            { id: 'tutorial', label: 'Tutorial / onboarding?', type: 'toggle', default: true, drives: 'Welcome modal, guided walkthrough' }
+        ],
+        tool: [
+            { id: 'dataPersistence', label: 'Data persistence?', type: 'select', options: ['none', 'localStorage', 'Firebase'], default: 'localStorage', drives: 'Storage helpers, data migration strategy' },
+            { id: 'primaryDataType', label: 'Primary data type?', type: 'text', placeholder: 'e.g. label sheets, expense records', default: '', drives: 'CRUD scaffolding, data model hints' },
+            { id: 'importExport', label: 'Import/export?', type: 'toggle', default: true, drives: 'File input, export function, format handling' },
+            { id: 'printSupport', label: 'Print support?', type: 'toggle', default: false, drives: 'Print CSS, print preview, page break handling' },
+            { id: 'multiItem', label: 'Multi-item management?', type: 'toggle', default: true, drives: 'List view, item cards, select/bulk actions' },
+            { id: 'searchFilter', label: 'Search/filter?', type: 'toggle', default: true, drives: 'Search input, filter controls' },
+            { id: 'undoRedo', label: 'Undo/redo?', type: 'toggle', default: false, drives: 'State history, undo stack' },
+            { id: 'settingsPersistence', label: 'Settings persistence?', type: 'toggle', default: true, drives: 'Settings object in localStorage' },
+            { id: 'keyboardShortcuts', label: 'Keyboard shortcuts?', type: 'toggle', default: false, drives: 'Keyboard event listeners, shortcut reference' }
+        ],
+        dashboard: [
+            { id: 'dataSources', label: 'Data sources?', type: 'multi-select', options: ['Firebase', 'API', 'localStorage', 'manual'], default: ['Firebase'], drives: 'Data fetching pattern, refresh strategy' },
+            { id: 'layout', label: 'Layout?', type: 'select', options: ['cards', 'table', 'mixed'], default: 'cards', drives: 'Grid vs table CSS, component structure' },
+            { id: 'autoRefresh', label: 'Auto-refresh?', type: 'toggle', default: true, drives: 'Refresh interval, last-updated display' },
+            { id: 'filtering', label: 'Filtering?', type: 'toggle', default: true, drives: 'Filter controls, query params' },
+            { id: 'dateRange', label: 'Date range selector?', type: 'toggle', default: true, drives: 'Date picker, time-scoped queries' },
+            { id: 'exportData', label: 'Export data?', type: 'toggle', default: false, drives: 'CSV/JSON export function' },
+            { id: 'realtime', label: 'Real-time updates?', type: 'toggle', default: false, drives: 'Firebase listeners, live indicators' }
+        ],
+        content: [
+            { id: 'contentType', label: 'Static or dynamic?', type: 'select', options: ['static', 'dynamic'], default: 'static', drives: 'Build vs runtime content strategy' },
+            { id: 'contentSource', label: 'Content source?', type: 'select', options: ['hardcoded', 'Firebase', 'API', 'CMS'], default: 'hardcoded', drives: 'Data loading pattern' },
+            { id: 'seo', label: 'SEO needed?', type: 'toggle', default: false, drives: 'Meta tags, semantic HTML, OG tags' },
+            { id: 'mediaTypes', label: 'Media types?', type: 'multi-select', options: ['text', 'images', 'video', 'audio'], default: ['text'], drives: 'Media handling, CDN considerations' },
+            { id: 'navPattern', label: 'Navigation pattern?', type: 'select', options: ['single-page', 'multi-section', 'paginated'], default: 'single-page', drives: 'Nav structure, scroll behavior' }
+        ],
+        admin: [
+            { id: 'authRequired', label: 'Auth required?', type: 'toggle', default: true, drives: 'Firebase auth, login gate, session management' },
+            { id: 'roleAccess', label: 'Role-based access?', type: 'toggle', default: false, drives: 'Role checking, UI permission gating' },
+            { id: 'crudOps', label: 'CRUD operations?', type: 'toggle', default: true, drives: 'Data tables, edit modals, delete confirmation' },
+            { id: 'auditLog', label: 'Audit logging?', type: 'toggle', default: false, drives: 'Action log, timestamp tracking' },
+            { id: 'bulkOps', label: 'Bulk operations?', type: 'toggle', default: true, drives: 'Multi-select, batch actions' },
+            { id: 'dataViz', label: 'Data visualization?', type: 'toggle', default: false, drives: 'Charts, summary cards' }
+        ]
+    };
+    
+    // Universal starting standards (always on by default)
+    const UNIVERSAL_STANDARDS = [
+        { id: 'css-variables', label: 'CSS variables for all colors — :root and [data-theme="dark"]', group: 'theme' },
+        { id: 'dark-light-toggle', label: 'Dark mode default with light mode toggle', group: 'theme' },
+        { id: 'theme-persistence', label: 'Theme persistence in localStorage', group: 'theme' },
+        { id: 'mobile-first', label: 'Mobile-first responsive design', group: 'layout' },
+        { id: 'safe-areas', label: 'Safe area support for notched devices', group: 'layout' },
+        { id: 'toast-system', label: 'Toast notification system (replaces native alert/confirm/prompt)', group: 'feedback' },
+        { id: 'confirm-dialog', label: 'Custom confirm dialog', group: 'feedback' },
+        { id: 'hamburger-menu', label: 'Hamburger menu (☰) with settings panel', group: 'nav' },
+        { id: 'meta-tags', label: 'Meta tags: version and gs-app-id', group: 'infra' },
+        { id: 'version-display', label: 'Version display in settings/footer', group: 'infra' },
+        { id: 'loading-spinner', label: 'Loading spinner for async operations', group: 'feedback' },
+        { id: 'empty-states', label: 'Empty state pattern (icon + message + action)', group: 'feedback' }
+    ];
+    
+    // Category-driven standards (selected based on answers)
+    const CATEGORY_STANDARDS = {
+        'daily-reset': { label: 'Daily reset at midnight UTC', group: 'game', condition: (cat, ans) => cat === 'game' && ans.dailyReset },
+        'streak-tracking': { label: 'Streak tracking with localStorage persistence', group: 'game', condition: (cat, ans) => cat === 'game' && ans.streaks },
+        'share-results': { label: 'Share results (navigator.share → clipboard fallback)', group: 'game', condition: (cat, ans) => cat === 'game' && ans.shareResults },
+        'difficulty-modes': { label: 'Difficulty mode selector in settings', group: 'game', condition: (cat, ans) => cat === 'game' && ans.difficultyModes !== 'none' },
+        'stats-tracking': { label: 'Stats tracking object in localStorage', group: 'game', condition: (cat, ans) => cat === 'game' && ans.scoringSystem !== 'none' },
+        'celebration-effects': { label: 'Celebration effects on special achievements', group: 'game', condition: (cat, ans) => cat === 'game' && ans.achievements },
+        'tutorial-onboarding': { label: 'Tutorial: welcome modal → guided steps → replay from menu', group: 'game', condition: (cat, ans) => cat === 'game' && ans.tutorial },
+        'sound-manager': { label: 'Audio manager with mute toggle', group: 'game', condition: (cat, ans) => cat === 'game' && ans.soundEffects },
+        'tab-nav': { label: 'Tab navigation pattern', group: 'tool', condition: (cat, ans) => cat === 'tool' && ans.multiItem },
+        'settings-storage': { label: 'Settings persistence (single localStorage key with JSON)', group: 'tool', condition: (cat, ans) => cat === 'tool' && ans.settingsPersistence },
+        'import-export': { label: 'Import/export functions', group: 'tool', condition: (cat, ans) => cat === 'tool' && ans.importExport },
+        'print-css': { label: 'Print-friendly CSS', group: 'tool', condition: (cat, ans) => cat === 'tool' && ans.printSupport },
+        'keyboard-shortcuts': { label: 'Keyboard shortcuts with reference panel', group: 'tool', condition: (cat, ans) => cat === 'tool' && ans.keyboardShortcuts },
+        'undo-redo': { label: 'Undo/redo with state history', group: 'tool', condition: (cat, ans) => cat === 'tool' && ans.undoRedo },
+        'firebase-auth': { label: 'Firebase Auth: Google sign-in flow with auth state listener', group: 'firebase', condition: (cat, ans) => (cat === 'game' && ans.multiplayer) || (cat === 'admin' && ans.authRequired) || (cat === 'dashboard' && ans.dataSources?.includes('Firebase')) },
+        'firebase-rtdb': { label: 'Firebase RTDB: read/write helpers at specified paths', group: 'firebase', condition: (cat, ans) => (cat === 'game' && ans.multiplayer) || (cat === 'admin') || (cat === 'dashboard' && ans.dataSources?.includes('Firebase')) || (cat === 'tool' && ans.dataPersistence === 'Firebase') },
+        'firebase-connection': { label: 'Connection status indicator', group: 'firebase', condition: (cat, ans) => (cat === 'game' && ans.multiplayer) || (cat === 'dashboard' && ans.realtime) },
+        'auto-refresh': { label: 'Auto-refresh with last-updated display', group: 'dashboard', condition: (cat, ans) => cat === 'dashboard' && ans.autoRefresh },
+        'date-range': { label: 'Date range selector for time-scoped queries', group: 'dashboard', condition: (cat, ans) => cat === 'dashboard' && ans.dateRange },
+        'data-export': { label: 'CSV/JSON data export', group: 'dashboard', condition: (cat, ans) => cat === 'dashboard' && ans.exportData },
+        'realtime-updates': { label: 'Real-time Firebase listeners with live indicators', group: 'dashboard', condition: (cat, ans) => cat === 'dashboard' && ans.realtime },
+        'seo-tags': { label: 'SEO meta tags, semantic HTML, OG tags', group: 'content', condition: (cat, ans) => cat === 'content' && ans.seo },
+        'role-access': { label: 'Role-based access control with UI permission gating', group: 'admin', condition: (cat, ans) => cat === 'admin' && ans.roleAccess },
+        'audit-logging': { label: 'Audit logging with timestamps', group: 'admin', condition: (cat, ans) => cat === 'admin' && ans.auditLog },
+        'bulk-actions': { label: 'Multi-select with batch operations', group: 'admin', condition: (cat, ans) => cat === 'admin' && ans.bulkOps },
+        'data-charts': { label: 'Charts and summary cards', group: 'admin', condition: (cat, ans) => cat === 'admin' && ans.dataViz }
+    };
+    
+    // Feature generation from category answers
+    function generateFeaturesFromScope(category, answers) {
+        const features = [];
+        
+        if (category === 'game') {
+            if (answers.dailyReset) features.push({ title: 'Daily puzzle generation with midnight UTC reset', description: 'New puzzle each day, puzzle number tracking, automatic reset at midnight UTC', priority: 'core', effort: 'session' });
+            if (answers.scoringSystem !== 'none') features.push({ title: `${answers.scoringSystem === 'points' ? 'Points-based' : answers.scoringSystem === 'tries' ? 'Attempts-based' : 'Time-based'} scoring with personal best tracking`, description: `Track ${answers.scoringSystem} per game with historical best`, priority: 'core', effort: 'quick' });
+            if (answers.shareResults) features.push({ title: 'Share results with emoji grid', description: 'Navigator.share with clipboard fallback, generates share text with emoji representation', priority: 'core', effort: 'session' });
+            if (answers.difficultyModes !== 'none') features.push({ title: `${answers.difficultyModes === 'easy-hard' ? 'Easy/Hard' : 'Multiple'} difficulty modes with separate stats`, description: 'Mode selector in menu/settings with independent statistics tracking', priority: 'core', effort: 'session' });
+            if (answers.streaks) features.push({ title: 'Streak tracking with daily play detection', description: 'Current streak, max streak, daily check against localStorage', priority: 'core', effort: 'quick' });
+            if (answers.tutorial) features.push({ title: 'Tutorial / onboarding flow', description: 'Welcome modal for first visit, guided walkthrough, replayable from menu', priority: 'nice-to-have', effort: 'session' });
+            if (answers.achievements) features.push({ title: 'Achievement system', description: 'Achievement definitions, unlock tracking, celebration notification', priority: 'nice-to-have', effort: 'multi-session' });
+            if (answers.soundEffects) features.push({ title: 'Sound effects with mute toggle', description: 'Audio manager, sound triggers on key events, mute in settings', priority: 'nice-to-have', effort: 'session' });
+            if (answers.multiplayer) features.push({ title: 'Multiplayer / social features', description: 'Firebase auth, friend connections, battles or shared leaderboard', priority: 'nice-to-have', effort: 'multi-session' });
+        }
+        
+        if (category === 'tool') {
+            if (answers.multiItem) features.push({ title: 'Multi-item list with CRUD', description: 'List view, item cards, create/edit/delete with confirmation', priority: 'core', effort: 'session' });
+            if (answers.searchFilter) features.push({ title: 'Search and filter controls', description: 'Text search, filter dropdowns, clear filters action', priority: 'core', effort: 'quick' });
+            if (answers.importExport) features.push({ title: 'Import/export functionality', description: 'File input for import, export to JSON/CSV, format validation', priority: 'core', effort: 'session' });
+            if (answers.printSupport) features.push({ title: 'Print support with preview', description: 'Print-friendly CSS, print preview, page break handling', priority: 'core', effort: 'session' });
+            if (answers.settingsPersistence) features.push({ title: 'Persistent settings', description: 'Settings object in localStorage, settings UI in menu', priority: 'core', effort: 'quick' });
+            if (answers.undoRedo) features.push({ title: 'Undo/redo system', description: 'State history stack, keyboard shortcuts Ctrl+Z/Y', priority: 'nice-to-have', effort: 'session' });
+            if (answers.keyboardShortcuts) features.push({ title: 'Keyboard shortcuts', description: 'Key bindings for common actions, shortcut reference panel', priority: 'nice-to-have', effort: 'quick' });
+            if (answers.dataPersistence === 'Firebase') features.push({ title: 'Firebase data persistence', description: 'Firebase RTDB storage with auth, sync status indicator', priority: 'core', effort: 'session' });
+        }
+        
+        if (category === 'dashboard') {
+            features.push({ title: `${answers.layout === 'cards' ? 'Card grid' : answers.layout === 'table' ? 'Data table' : 'Mixed'} layout`, description: `Primary data display using ${answers.layout} pattern`, priority: 'core', effort: 'session' });
+            if (answers.filtering) features.push({ title: 'Filter controls', description: 'Filter dropdowns, active filter display, clear all action', priority: 'core', effort: 'quick' });
+            if (answers.autoRefresh) features.push({ title: 'Auto-refresh with interval', description: 'Configurable refresh interval, last-updated timestamp display', priority: 'core', effort: 'quick' });
+            if (answers.dateRange) features.push({ title: 'Date range selector', description: 'Date picker for time-scoped data queries, preset ranges', priority: 'core', effort: 'session' });
+            if (answers.exportData) features.push({ title: 'Data export (CSV/JSON)', description: 'Export current view to CSV or JSON format', priority: 'nice-to-have', effort: 'quick' });
+            if (answers.realtime) features.push({ title: 'Real-time live updates', description: 'Firebase listeners, live update indicators, connection status', priority: 'nice-to-have', effort: 'session' });
+        }
+        
+        if (category === 'content') {
+            features.push({ title: `${answers.contentType === 'static' ? 'Static' : 'Dynamic'} content display`, description: `Content loaded from ${answers.contentSource}`, priority: 'core', effort: 'session' });
+            if (answers.navPattern !== 'single-page') features.push({ title: `${answers.navPattern === 'multi-section' ? 'Section-based' : 'Paginated'} navigation`, description: `${answers.navPattern} navigation with smooth transitions`, priority: 'core', effort: 'session' });
+            if (answers.seo) features.push({ title: 'SEO optimization', description: 'Meta tags, OG tags, semantic HTML, structured data', priority: 'core', effort: 'quick' });
+            if (answers.mediaTypes?.includes('images')) features.push({ title: 'Image handling', description: 'Responsive images, lazy loading, lightbox', priority: 'core', effort: 'session' });
+            if (answers.mediaTypes?.includes('video')) features.push({ title: 'Video embedding', description: 'Video player, responsive embeds', priority: 'core', effort: 'quick' });
+        }
+        
+        if (category === 'admin') {
+            if (answers.authRequired) features.push({ title: 'Authentication gate', description: 'Firebase auth, login/logout flow, session management', priority: 'core', effort: 'session' });
+            if (answers.crudOps) features.push({ title: 'CRUD data management', description: 'Data tables, edit modals, create/update/delete with confirmation', priority: 'core', effort: 'session' });
+            if (answers.bulkOps) features.push({ title: 'Bulk operations', description: 'Multi-select, batch status changes, bulk delete with confirmation', priority: 'core', effort: 'session' });
+            if (answers.roleAccess) features.push({ title: 'Role-based access control', description: 'Role definitions, permission checks, UI gating by role', priority: 'core', effort: 'multi-session' });
+            if (answers.auditLog) features.push({ title: 'Audit logging', description: 'Action log with timestamps, user attribution, log viewer', priority: 'nice-to-have', effort: 'session' });
+            if (answers.dataViz) features.push({ title: 'Data visualization', description: 'Charts, summary cards, trend indicators', priority: 'nice-to-have', effort: 'session' });
+        }
+        
+        return features;
+    }
+    
+    // Assemble starting standards from category + answers
+    function assembleStartingStandards(category, answers) {
+        const standards = UNIVERSAL_STANDARDS.map(s => s.id);
+        Object.entries(CATEGORY_STANDARDS).forEach(([id, spec]) => {
+            if (spec.condition(category, answers)) {
+                standards.push(id);
+            }
+        });
+        return standards;
+    }
+    
+    // ProjectScopeModal — 4-step scoping flow
+    function ProjectScopeModal({ app, apps, onSave, onCancel, showAlert }) {
+        const [step, setStep] = React.useState(1);
+        
+        // Step 1: Describe
+        const [description, setDescription] = React.useState(app?.lifecycle?.scope?.description || '');
+        const [category, setCategory] = React.useState(app?.lifecycle?.scope?.category || '');
+        
+        // Step 2: Category answers
+        const [categoryAnswers, setCategoryAnswers] = React.useState(() => {
+            if (app?.lifecycle?.scope?.categoryAnswers) return { ...app.lifecycle.scope.categoryAnswers };
+            // Initialize defaults from category questions
+            const defaults = {};
+            if (category && CATEGORY_QUESTIONS[category]) {
+                CATEGORY_QUESTIONS[category].forEach(q => {
+                    defaults[q.id] = q.default;
+                });
+            }
+            return defaults;
+        });
+        
+        // Step 3: Features
+        const [v1Features, setV1Features] = React.useState(app?.lifecycle?.scope?.v1Features || []);
+        const [futureFeatures, setFutureFeatures] = React.useState(app?.lifecycle?.scope?.futureFeatures || []);
+        const [keyDecisions, setKeyDecisions] = React.useState(app?.lifecycle?.scope?.keyDecisions || []);
+        const [featuresGenerated, setFeaturesGenerated] = React.useState(false);
+        
+        // Step 4: Standards
+        const [startingStandards, setStartingStandards] = React.useState(app?.lifecycle?.scope?.startingStandards || []);
+        const [standardsAssembled, setStandardsAssembled] = React.useState(false);
+        
+        // New feature/decision forms
+        const [newFeatureTitle, setNewFeatureTitle] = React.useState('');
+        const [newFutureTitle, setNewFutureTitle] = React.useState('');
+        const [newDecisionTitle, setNewDecisionTitle] = React.useState('');
+        
+        // Re-initialize defaults when category changes
+        React.useEffect(() => {
+            if (category && CATEGORY_QUESTIONS[category]) {
+                const existingAnswers = app?.lifecycle?.scope?.categoryAnswers || {};
+                const defaults = {};
+                CATEGORY_QUESTIONS[category].forEach(q => {
+                    defaults[q.id] = existingAnswers[q.id] !== undefined ? existingAnswers[q.id] : q.default;
+                });
+                setCategoryAnswers(defaults);
+            }
+        }, [category]);
+        
+        // Auto-generate features when moving from step 2 → 3
+        const handleStep2Next = () => {
+            if (!featuresGenerated) {
+                const generated = generateFeaturesFromScope(category, categoryAnswers);
+                if (v1Features.length === 0) {
+                    setV1Features(generated);
+                }
+                setFeaturesGenerated(true);
+            }
+            setStep(3);
+        };
+        
+        // Auto-assemble standards when moving from step 3 → 4
+        const handleStep3Next = () => {
+            if (!standardsAssembled) {
+                const assembled = assembleStartingStandards(category, categoryAnswers);
+                if (startingStandards.length === 0) {
+                    setStartingStandards(assembled);
+                }
+                setStandardsAssembled(true);
+            }
+            setStep(4);
+        };
+        
+        // Add feature
+        const addV1Feature = () => {
+            if (!newFeatureTitle.trim()) return;
+            setV1Features(prev => [...prev, { title: newFeatureTitle.trim(), description: '', priority: 'core', effort: 'session' }]);
+            setNewFeatureTitle('');
+        };
+        
+        const addFutureFeature = () => {
+            if (!newFutureTitle.trim()) return;
+            setFutureFeatures(prev => [...prev, { title: newFutureTitle.trim(), description: '' }]);
+            setNewFutureTitle('');
+        };
+        
+        const addKeyDecision = () => {
+            if (!newDecisionTitle.trim()) return;
+            setKeyDecisions(prev => [...prev, { title: newDecisionTitle.trim(), description: '', resolved: false }]);
+            setNewDecisionTitle('');
+        };
+        
+        const removeV1Feature = (idx) => setV1Features(prev => prev.filter((_, i) => i !== idx));
+        const removeFutureFeature = (idx) => setFutureFeatures(prev => prev.filter((_, i) => i !== idx));
+        const removeKeyDecision = (idx) => setKeyDecisions(prev => prev.filter((_, i) => i !== idx));
+        
+        const updateV1Feature = (idx, field, value) => {
+            setV1Features(prev => prev.map((f, i) => i === idx ? { ...f, [field]: value } : f));
+        };
+        
+        // Toggle standard
+        const toggleStandard = (id) => {
+            setStartingStandards(prev => 
+                prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+            );
+        };
+        
+        // Final save
+        const handleSave = () => {
+            const scope = {
+                description,
+                category,
+                categoryAnswers,
+                v1Features,
+                futureFeatures,
+                keyDecisions,
+                startingStandards,
+                scopedAt: new Date().toISOString(),
+                source: 'manual'
+            };
+            onSave(scope);
+        };
+        
+        // Render question input based on type
+        const renderQuestion = (q) => {
+            const value = categoryAnswers[q.id];
+            
+            if (q.type === 'toggle') {
+                return (
+                    <label key={q.id} className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg hover:bg-slate-700 cursor-pointer">
+                        <div className="flex-1 pr-4">
+                            <div className="text-sm font-medium">{q.label}</div>
+                            <div className="text-xs text-slate-400 mt-0.5">{q.drives}</div>
+                        </div>
+                        <div className="relative">
+                            <input type="checkbox" className="sr-only" checked={!!value}
+                                onChange={e => setCategoryAnswers(prev => ({ ...prev, [q.id]: e.target.checked }))} />
+                            <div className={`w-11 h-6 rounded-full transition-colors ${value ? 'bg-indigo-600' : 'bg-slate-600'}`}>
+                                <div className={`w-5 h-5 bg-white rounded-full shadow transform transition-transform mt-0.5 ${value ? 'translate-x-5.5 ml-[22px]' : 'translate-x-0.5 ml-[2px]'}`} />
+                            </div>
+                        </div>
+                    </label>
+                );
+            }
+            
+            if (q.type === 'select') {
+                return (
+                    <div key={q.id} className="p-3 bg-slate-700/50 rounded-lg">
+                        <div className="text-sm font-medium mb-1">{q.label}</div>
+                        <div className="text-xs text-slate-400 mb-2">{q.drives}</div>
+                        <select value={value || q.default}
+                            onChange={e => setCategoryAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm">
+                            {q.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        </select>
+                    </div>
+                );
+            }
+            
+            if (q.type === 'multi-select') {
+                const selected = value || q.default || [];
+                return (
+                    <div key={q.id} className="p-3 bg-slate-700/50 rounded-lg">
+                        <div className="text-sm font-medium mb-1">{q.label}</div>
+                        <div className="text-xs text-slate-400 mb-2">{q.drives}</div>
+                        <div className="flex flex-wrap gap-2">
+                            {q.options.map(opt => (
+                                <button key={opt}
+                                    onClick={() => {
+                                        const next = selected.includes(opt) ? selected.filter(s => s !== opt) : [...selected, opt];
+                                        setCategoryAnswers(prev => ({ ...prev, [q.id]: next }));
+                                    }}
+                                    className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                                        selected.includes(opt) ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-600'
+                                    }`}>
+                                    {opt}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                );
+            }
+            
+            if (q.type === 'text') {
+                return (
+                    <div key={q.id} className="p-3 bg-slate-700/50 rounded-lg">
+                        <div className="text-sm font-medium mb-1">{q.label}</div>
+                        <div className="text-xs text-slate-400 mb-2">{q.drives}</div>
+                        <input value={value || ''}
+                            onChange={e => setCategoryAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+                            placeholder={q.placeholder}
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm" />
+                    </div>
+                );
+            }
+            
+            return null;
+        };
+        
+        return (
+            <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto p-4 pt-8">
+                <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-3xl shadow-2xl">
+                    {/* Header */}
+                    <div className="flex items-center justify-between p-5 border-b border-slate-700">
+                        <div>
+                            <h2 className="text-lg font-bold flex items-center gap-2">
+                                🎯 Project Scoping {app?.name ? `— ${app.icon || ''} ${app.name}` : ''}
+                            </h2>
+                            <p className="text-xs text-slate-400 mt-1">Capture project intent → auto-generate work items & standards</p>
+                        </div>
+                        <button onClick={onCancel} className="text-slate-400 hover:text-white text-xl">✕</button>
+                    </div>
+                    
+                    {/* Progress Steps */}
+                    <div className="flex items-center gap-2 px-5 py-3 bg-slate-900/50">
+                        {[
+                            { n: 1, label: 'Describe' },
+                            { n: 2, label: 'Clarify' },
+                            { n: 3, label: 'Features' },
+                            { n: 4, label: 'Standards' }
+                        ].map((s, i) => (
+                            <React.Fragment key={s.n}>
+                                <button onClick={() => { if (s.n < step) setStep(s.n); }}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                                        step === s.n ? 'bg-indigo-600 text-white' : step > s.n ? 'bg-green-600/20 text-green-400 cursor-pointer hover:bg-green-600/30' : 'bg-slate-800 text-slate-500'
+                                    }`}>
+                                    {step > s.n ? '✓' : s.n} {s.label}
+                                </button>
+                                {i < 3 && <div className={`flex-1 h-px ${step > s.n ? 'bg-green-600' : 'bg-slate-700'}`} />}
+                            </React.Fragment>
+                        ))}
+                    </div>
+                    
+                    {/* Content */}
+                    <div className="p-5 max-h-[60vh] overflow-y-auto">
+                        
+                        {/* Step 1: Describe */}
+                        {step === 1 && (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">What does this app do? Who is it for? What problem does it solve?</label>
+                                    <textarea value={description} onChange={e => setDescription(e.target.value)}
+                                        rows={4} placeholder="A daily word puzzle where players uncover a hidden quote by guessing letters..."
+                                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-sm focus:border-indigo-500 focus:outline-none resize-none" />
+                                    <p className="text-xs text-slate-500 mt-1">3-5 sentences describing purpose, audience, and core concept</p>
+                                </div>
+                                
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">App Category</label>
+                                    <div className="grid grid-cols-5 gap-2">
+                                        {Object.entries(SCOPE_CATEGORIES).map(([id, cat]) => (
+                                            <button key={id}
+                                                onClick={() => setCategory(id)}
+                                                className={`p-3 rounded-lg border text-center transition-all ${
+                                                    category === id 
+                                                        ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/50' 
+                                                        : 'border-slate-600 hover:border-slate-500 bg-slate-700/30'
+                                                }`}>
+                                                <div className="text-2xl mb-1">{cat.icon}</div>
+                                                <div className="text-xs font-medium">{cat.label}</div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Step 2: Clarify */}
+                        {step === 2 && (
+                            <div>
+                                <div className="flex items-center gap-2 mb-4">
+                                    <span className="text-xl">{SCOPE_CATEGORIES[category]?.icon}</span>
+                                    <h3 className="font-semibold">{SCOPE_CATEGORIES[category]?.label} Questions</h3>
+                                    <span className="text-xs text-slate-400">— these drive feature pre-population & starting standards</span>
+                                </div>
+                                <div className="space-y-2">
+                                    {(CATEGORY_QUESTIONS[category] || []).map(q => renderQuestion(q))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Step 3: Features */}
+                        {step === 3 && (
+                            <div className="space-y-6">
+                                {/* V1 Features */}
+                                <div>
+                                    <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                                        🎯 V1 Features <span className="text-xs font-normal text-slate-400">core — must ship</span>
+                                        <span className="text-xs px-2 py-0.5 bg-slate-700 rounded-full">{v1Features.length}</span>
+                                    </h3>
+                                    <div className="space-y-2 mb-3">
+                                        {v1Features.map((f, idx) => (
+                                            <div key={idx} className="bg-slate-700/50 rounded-lg p-3">
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div className="flex-1">
+                                                        <input value={f.title} onChange={e => updateV1Feature(idx, 'title', e.target.value)}
+                                                            className="w-full bg-transparent text-sm font-medium border-none outline-none" />
+                                                        <input value={f.description || ''} onChange={e => updateV1Feature(idx, 'description', e.target.value)}
+                                                            placeholder="Brief description..."
+                                                            className="w-full bg-transparent text-xs text-slate-400 border-none outline-none mt-1" />
+                                                    </div>
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        <select value={f.priority} onChange={e => updateV1Feature(idx, 'priority', e.target.value)}
+                                                            className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs">
+                                                            <option value="core">Core</option>
+                                                            <option value="nice-to-have">Nice to have</option>
+                                                            <option value="out-of-scope">Out of scope</option>
+                                                        </select>
+                                                        <select value={f.effort} onChange={e => updateV1Feature(idx, 'effort', e.target.value)}
+                                                            className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs">
+                                                            <option value="quick">Quick</option>
+                                                            <option value="session">Session</option>
+                                                            <option value="multi-session">Multi-session</option>
+                                                            <option value="epic">Epic</option>
+                                                        </select>
+                                                        <button onClick={() => removeV1Feature(idx)} className="text-slate-500 hover:text-red-400 text-xs">✕</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <input value={newFeatureTitle} onChange={e => setNewFeatureTitle(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && addV1Feature()}
+                                            placeholder="Add a V1 feature..."
+                                            className="flex-1 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm" />
+                                        <button onClick={addV1Feature} disabled={!newFeatureTitle.trim()}
+                                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 rounded text-sm">
+                                            Add
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {/* Future Features */}
+                                <div>
+                                    <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                                        🔮 Future Features <span className="text-xs font-normal text-slate-400">V2+ — inform architecture, don't build yet</span>
+                                        <span className="text-xs px-2 py-0.5 bg-slate-700 rounded-full">{futureFeatures.length}</span>
+                                    </h3>
+                                    <div className="space-y-1 mb-3">
+                                        {futureFeatures.map((f, idx) => (
+                                            <div key={idx} className="flex items-center gap-2 bg-slate-700/30 rounded px-3 py-2">
+                                                <span className="flex-1 text-sm text-slate-300">{f.title}</span>
+                                                <button onClick={() => removeFutureFeature(idx)} className="text-slate-500 hover:text-red-400 text-xs">✕</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <input value={newFutureTitle} onChange={e => setNewFutureTitle(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && addFutureFeature()}
+                                            placeholder="Add a future feature idea..."
+                                            className="flex-1 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm" />
+                                        <button onClick={addFutureFeature} disabled={!newFutureTitle.trim()}
+                                            className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-slate-500 rounded text-sm">
+                                            Add
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {/* Key Decisions */}
+                                <div>
+                                    <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                                        🤔 Key Decisions <span className="text-xs font-normal text-slate-400">resolve before or during Session 1</span>
+                                        <span className="text-xs px-2 py-0.5 bg-slate-700 rounded-full">{keyDecisions.length}</span>
+                                    </h3>
+                                    <div className="space-y-1 mb-3">
+                                        {keyDecisions.map((d, idx) => (
+                                            <div key={idx} className="flex items-center gap-2 bg-amber-900/10 border border-amber-800/30 rounded px-3 py-2">
+                                                <span className="text-amber-400 text-xs">❓</span>
+                                                <span className="flex-1 text-sm text-slate-300">{d.title}</span>
+                                                <button onClick={() => removeKeyDecision(idx)} className="text-slate-500 hover:text-red-400 text-xs">✕</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <input value={newDecisionTitle} onChange={e => setNewDecisionTitle(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && addKeyDecision()}
+                                            placeholder="Add a key decision to resolve..."
+                                            className="flex-1 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm" />
+                                        <button onClick={addKeyDecision} disabled={!newDecisionTitle.trim()}
+                                            className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 disabled:bg-slate-700 disabled:text-slate-500 rounded text-sm">
+                                            Add
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Step 4: Starting Standards */}
+                        {step === 4 && (
+                            <div className="space-y-5">
+                                {/* Universal Standards */}
+                                <div>
+                                    <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                                        🌐 Universal Standards <span className="text-xs font-normal text-slate-400">always recommended</span>
+                                    </h3>
+                                    <div className="space-y-1">
+                                        {UNIVERSAL_STANDARDS.map(s => (
+                                            <label key={s.id} className="flex items-center gap-3 p-2 rounded hover:bg-slate-700/50 cursor-pointer">
+                                                <input type="checkbox" checked={startingStandards.includes(s.id)}
+                                                    onChange={() => toggleStandard(s.id)} className="rounded" />
+                                                <span className="text-sm">{s.label}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                {/* Category Standards */}
+                                {(() => {
+                                    const applicableStandards = Object.entries(CATEGORY_STANDARDS)
+                                        .filter(([_, spec]) => spec.condition(category, categoryAnswers));
+                                    
+                                    if (applicableStandards.length === 0) return null;
+                                    
+                                    // Group by group
+                                    const groups = {};
+                                    applicableStandards.forEach(([id, spec]) => {
+                                        const g = spec.group;
+                                        if (!groups[g]) groups[g] = [];
+                                        groups[g].push({ id, ...spec });
+                                    });
+                                    
+                                    const groupLabels = {
+                                        game: '🎮 Game', tool: '🔧 Tool', dashboard: '📊 Dashboard', 
+                                        content: '📄 Content', admin: '🔐 Admin', firebase: '🔥 Firebase'
+                                    };
+                                    
+                                    return Object.entries(groups).map(([groupId, items]) => (
+                                        <div key={groupId}>
+                                            <h3 className="font-semibold text-sm mb-2">
+                                                {groupLabels[groupId] || groupId} Standards
+                                            </h3>
+                                            <div className="space-y-1">
+                                                {items.map(s => (
+                                                    <label key={s.id} className="flex items-center gap-3 p-2 rounded hover:bg-slate-700/50 cursor-pointer">
+                                                        <input type="checkbox" checked={startingStandards.includes(s.id)}
+                                                            onChange={() => toggleStandard(s.id)} className="rounded" />
+                                                        <span className="text-sm">{s.label}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ));
+                                })()}
+                                
+                                {/* Summary */}
+                                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                                    <div className="text-sm font-medium mb-2">📊 Scope Summary</div>
+                                    <div className="grid grid-cols-3 gap-4 text-xs">
+                                        <div>
+                                            <div className="text-slate-400">Category</div>
+                                            <div className="font-medium">{SCOPE_CATEGORIES[category]?.icon} {SCOPE_CATEGORIES[category]?.label}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-slate-400">V1 Features</div>
+                                            <div className="font-medium">{v1Features.filter(f => f.priority === 'core').length} core, {v1Features.filter(f => f.priority === 'nice-to-have').length} nice-to-have</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-slate-400">Standards</div>
+                                            <div className="font-medium">{startingStandards.length} selected</div>
+                                        </div>
+                                    </div>
+                                    {keyDecisions.length > 0 && (
+                                        <div className="mt-2 text-xs text-amber-400">
+                                            ⚠️ {keyDecisions.filter(d => !d.resolved).length} unresolved decisions
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {/* Footer */}
+                    <div className="flex items-center justify-between p-5 border-t border-slate-700">
+                        <button onClick={() => step > 1 ? setStep(step - 1) : onCancel()}
+                            className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">
+                            {step > 1 ? '← Back' : 'Cancel'}
+                        </button>
+                        
+                        <div className="flex items-center gap-3">
+                            {step === 4 && (
+                                <span className="text-xs text-slate-400">
+                                    Will generate {v1Features.length + futureFeatures.length + keyDecisions.length} work items
+                                </span>
+                            )}
+                            
+                            {step < 4 ? (
+                                <button onClick={() => {
+                                        if (step === 1) { if (!description.trim() || !category) return; setStep(2); }
+                                        else if (step === 2) handleStep2Next();
+                                        else if (step === 3) handleStep3Next();
+                                    }}
+                                    disabled={step === 1 && (!description.trim() || !category)}
+                                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg text-sm font-medium transition-colors">
+                                    Next →
+                                </button>
+                            ) : (
+                                <button onClick={handleSave}
+                                    className="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors flex items-center gap-2">
+                                    ✅ Save Scope & Generate Work Items
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    // =========================================================================
     // BACKLOG VIEW - Work Item Tracking & Project Planning (v8.22.0)
     // =========================================================================
     
@@ -14461,6 +15144,7 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         const [loading, setLoading] = React.useState(true);
         const [showEditModal, setShowEditModal] = React.useState(null); // null | { item, isNew }
+        const [showScopeModal, setShowScopeModal] = React.useState(null); // null | { app }
         const [statusFilter, setStatusFilter] = React.useState('active'); // 'all', 'active', 'idea', 'ready', 'in-progress', 'done', 'deferred'
         const [typeFilter, setTypeFilter] = React.useState('all');
         const [appFilter, setAppFilter] = React.useState('all');
@@ -14553,6 +15237,82 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
             
             navigator.clipboard.writeText(text);
             showAlert(`Copied ${item.id} for Claude`, 'success');
+        };
+        
+        // Handle scope save — store scope on app and generate work items
+        const handleScopeSave = async (scope) => {
+            if (!firebaseUser || !showScopeModal?.app) return;
+            const appId = showScopeModal.app.id;
+            
+            try {
+                // Store scope data at app.lifecycle.scope in Firebase
+                const scopeRef = firebaseDb.ref(`command-center/${firebaseUser.uid}/appScopes/${appId}`);
+                await scopeRef.set(scope);
+                
+                // Generate work items from scope
+                const itemsToCreate = [];
+                const existingIds = workItems.map(i => parseInt(i.id?.replace('WI-', '') || '0'));
+                let nextNum = Math.max(0, ...existingIds) + 1;
+                
+                // V1 features → work items
+                scope.v1Features.forEach(f => {
+                    itemsToCreate.push({
+                        id: `WI-${String(nextNum++).padStart(3, '0')}`,
+                        appId: appId,
+                        title: f.title,
+                        description: f.description || '',
+                        type: 'feature',
+                        priority: f.priority || 'core',
+                        status: f.priority === 'out-of-scope' ? 'deferred' : 'ready',
+                        effort: f.effort || 'session',
+                        source: 'scoped',
+                        tags: ['scoped', `v1-${f.priority}`]
+                    });
+                });
+                
+                // Future features → idea work items
+                scope.futureFeatures.forEach(f => {
+                    itemsToCreate.push({
+                        id: `WI-${String(nextNum++).padStart(3, '0')}`,
+                        appId: appId,
+                        title: f.title,
+                        description: f.description || '',
+                        type: 'feature',
+                        priority: 'nice-to-have',
+                        status: 'idea',
+                        effort: 'multi-session',
+                        source: 'scoped',
+                        tags: ['scoped', 'v2-future']
+                    });
+                });
+                
+                // Key decisions → research work items
+                scope.keyDecisions.forEach(d => {
+                    if (!d.resolved) {
+                        itemsToCreate.push({
+                            id: `WI-${String(nextNum++).padStart(3, '0')}`,
+                            appId: appId,
+                            title: `Decision: ${d.title}`,
+                            description: d.description || 'Resolve before or during Session 1',
+                            type: 'research',
+                            priority: 'core',
+                            status: 'ready',
+                            effort: 'quick',
+                            source: 'scoped',
+                            tags: ['scoped', 'decision']
+                        });
+                    }
+                });
+                
+                if (itemsToCreate.length > 0) {
+                    await WorkItemService.createBatch(firebaseUser.uid, itemsToCreate);
+                }
+                
+                setShowScopeModal(null);
+                showAlert(`Scope saved for ${showScopeModal.app.name} — created ${itemsToCreate.length} work items`, 'success');
+            } catch (e) {
+                showAlert(`Error saving scope: ${e.message}`, 'error');
+            }
         };
         
         // Filtering & sorting
@@ -14741,10 +15501,28 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
                             {stats.total} items — {stats.inProgress} in progress, {stats.ready} ready, {stats.idea} ideas
                         </p>
                     </div>
-                    <button onClick={() => setShowEditModal({ item: null, isNew: true })}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium flex items-center gap-2">
-                        ➕ New Work Item
-                    </button>
+                    <div className="flex gap-2">
+                        <div className="relative group">
+                            <button className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium flex items-center gap-2">
+                                🎯 Scope Work ▾
+                            </button>
+                            <div className="absolute right-0 top-full mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[200px]">
+                                {configuredApps.map(a => (
+                                    <button key={a.id} onClick={() => setShowScopeModal({ app: a })}
+                                        className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 first:rounded-t-lg last:rounded-b-lg flex items-center gap-2">
+                                        <span>{a.icon || '📦'}</span> {a.name}
+                                    </button>
+                                ))}
+                                {configuredApps.length === 0 && (
+                                    <div className="px-4 py-2 text-xs text-slate-500">No apps configured</div>
+                                )}
+                            </div>
+                        </div>
+                        <button onClick={() => setShowEditModal({ item: null, isNew: true })}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium flex items-center gap-2">
+                            ➕ New Work Item
+                        </button>
+                    </div>
                 </div>
                 
                 {/* Stats Bar */}
@@ -14953,6 +15731,17 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
                         isNew={showEditModal.isNew}
                         onSave={showEditModal.isNew ? createItem : updateItem}
                         onCancel={() => setShowEditModal(null)}
+                    />
+                )}
+                
+                {/* Scope Modal */}
+                {showScopeModal && (
+                    <ProjectScopeModal
+                        app={showScopeModal.app}
+                        apps={apps}
+                        onSave={handleScopeSave}
+                        onCancel={() => setShowScopeModal(null)}
+                        showAlert={showAlert}
                     />
                 )}
             </div>
@@ -19462,6 +20251,9 @@ ${repoStr || '- *No repos configured*'}
             adminSubPath: 'admin',
             customDomain: ''
         });
+        const [scopeData, setScopeData] = React.useState(null); // v8.23.0: Project scope
+        const [skipScope, setSkipScope] = React.useState(false); // v8.23.0: Quick setup option
+        const [showScopeInline, setShowScopeInline] = React.useState(false); // v8.23.0: Inline scope modal
         const [repoStatus, setRepoStatus] = React.useState({ checking: false, prodExists: null, testExists: null });
         const [creating, setCreating] = React.useState(false);
         const [creationLog, setCreationLog] = React.useState([]);
@@ -19823,9 +20615,10 @@ The developer uses Claude for iterative development — each session should:
                 <div className="flex items-center gap-2 mb-8">
                     {[
                         { n: 1, label: 'Define' },
-                        { n: 2, label: 'Check Repos' },
-                        { n: 3, label: 'Create & Configure' },
-                        { n: 4, label: 'Claude Prompt' }
+                        { n: 2, label: 'Scope' },
+                        { n: 3, label: 'Check Repos' },
+                        { n: 4, label: 'Create & Configure' },
+                        { n: 5, label: 'Claude Prompt' }
                     ].map(s => (
                         <React.Fragment key={s.n}>
                             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
@@ -19833,7 +20626,7 @@ The developer uses Claude for iterative development — each session should:
                             }`}>
                                 {step > s.n ? '✓' : s.n} {s.label}
                             </div>
-                            {s.n < 4 && <div className={`flex-1 h-px ${step > s.n ? 'bg-green-600' : 'bg-slate-700'}`} />}
+                            {s.n < 5 && <div className={`flex-1 h-px ${step > s.n ? 'bg-green-600' : 'bg-slate-700'}`} />}
                         </React.Fragment>
                     ))}
                 </div>
@@ -19950,17 +20743,90 @@ The developer uses Claude for iterative development — each session should:
                         )}
 
                         <div className="mt-6 flex justify-end">
-                            <button onClick={() => { if (!appData.name) return; setStep(2); checkRepos(); }}
+                            <button onClick={() => { if (!appData.name) return; setStep(2); }}
                                 disabled={!appData.name}
                                 className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg font-medium transition-colors">
-                                Next: Check Repos →
+                                Next: Scope →
                             </button>
                         </div>
                     </div>
                 )}
 
-                {/* Step 2: Repo Check */}
+                {/* Step 2: Scope (v8.23.0) */}
                 {step === 2 && (
+                    <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+                        <h2 className="text-lg font-semibold mb-4">🎯 Project Scope</h2>
+                        <p className="text-sm text-slate-400 mb-4">
+                            Define what this app does and how it should be built. This generates work items and starting standards for Claude.
+                        </p>
+                        
+                        {!skipScope && !scopeData ? (
+                            <div className="space-y-4">
+                                <button onClick={() => {
+                                        // Create a temporary app object for the scope modal
+                                        const tempApp = { id: appData.id, name: appData.name, icon: appData.icon, lifecycle: {} };
+                                        // Open inline scope flow
+                                        setShowScopeInline(true);
+                                    }}
+                                    className="w-full p-6 bg-indigo-600/10 border-2 border-dashed border-indigo-500/50 rounded-xl hover:bg-indigo-600/20 transition-colors text-center">
+                                    <div className="text-3xl mb-2">🎯</div>
+                                    <div className="font-medium">Start Scoping Flow</div>
+                                    <div className="text-xs text-slate-400 mt-1">Category-driven questions → features → standards (~2 min)</div>
+                                </button>
+                                <button onClick={() => { setSkipScope(true); }}
+                                    className="w-full p-3 text-slate-400 hover:text-white text-sm transition-colors">
+                                    Skip scope — I'll add details later
+                                </button>
+                            </div>
+                        ) : scopeData ? (
+                            <div className="space-y-3">
+                                <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className="text-green-400">✅</span>
+                                        <span className="font-medium text-green-300">Scope captured</span>
+                                    </div>
+                                    <div className="text-sm text-slate-300 grid grid-cols-3 gap-3">
+                                        <div><span className="text-slate-500">Category:</span> {SCOPE_CATEGORIES[scopeData.category]?.icon} {SCOPE_CATEGORIES[scopeData.category]?.label}</div>
+                                        <div><span className="text-slate-500">Features:</span> {scopeData.v1Features?.length || 0} V1</div>
+                                        <div><span className="text-slate-500">Standards:</span> {scopeData.startingStandards?.length || 0}</div>
+                                    </div>
+                                </div>
+                                <button onClick={() => { setScopeData(null); setSkipScope(false); }}
+                                    className="text-xs text-slate-400 hover:text-white">Edit scope</button>
+                            </div>
+                        ) : (
+                            <div className="bg-slate-700/30 rounded-lg p-4 text-center text-sm text-slate-400">
+                                <p>Scope skipped — you can add one later from the Backlog view.</p>
+                                <button onClick={() => setSkipScope(false)} className="mt-2 text-xs text-indigo-400 hover:text-indigo-300">
+                                    Actually, let me scope this
+                                </button>
+                            </div>
+                        )}
+                        
+                        <div className="mt-6 flex justify-between">
+                            <button onClick={() => setStep(1)} className="px-4 py-2 text-slate-400 hover:text-white transition-colors">← Back</button>
+                            <button onClick={() => { setStep(3); checkRepos(); }}
+                                disabled={!skipScope && !scopeData}
+                                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg font-medium transition-colors">
+                                Next: Check Repos →
+                            </button>
+                        </div>
+                        
+                        {/* Inline Scope Modal */}
+                        {showScopeInline && (
+                            <ProjectScopeModal
+                                app={{ id: appData.id, name: appData.name, icon: appData.icon, lifecycle: {} }}
+                                apps={apps}
+                                onSave={(scope) => { setScopeData(scope); setShowScopeInline(false); }}
+                                onCancel={() => setShowScopeInline(false)}
+                                showAlert={showAlert}
+                            />
+                        )}
+                    </div>
+                )}
+
+                {/* Step 3: Repo Check */}
+                {step === 3 && (
                     <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
                         <h2 className="text-lg font-semibold mb-4">🔍 Repository Check</h2>
                         {repoStatus.checking ? (
@@ -19990,8 +20856,8 @@ The developer uses Claude for iterative development — each session should:
                             </div>
                         )}
                         <div className="mt-6 flex justify-between">
-                            <button onClick={() => setStep(1)} className="px-4 py-2 text-slate-400 hover:text-white transition-colors">← Back</button>
-                            <button onClick={() => setStep(3)} disabled={repoStatus.checking}
+                            <button onClick={() => setStep(2)} className="px-4 py-2 text-slate-400 hover:text-white transition-colors">← Back</button>
+                            <button onClick={() => setStep(4)} disabled={repoStatus.checking}
                                 className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 rounded-lg font-medium transition-colors">
                                 Next: Create & Configure →
                             </button>
@@ -19999,8 +20865,8 @@ The developer uses Claude for iterative development — each session should:
                     </div>
                 )}
 
-                {/* Step 3: Create & Configure */}
-                {step === 3 && (
+                {/* Step 4: Create & Configure */}
+                {step === 4 && (
                     <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
                         <h2 className="text-lg font-semibold mb-4">⚡ Create & Configure</h2>
                         {creationLog.length === 0 && !creating ? (
@@ -20036,7 +20902,7 @@ The developer uses Claude for iterative development — each session should:
                                 </div>
                                 {!creating && promptGenerated && (
                                     <div className="mt-4 flex justify-end">
-                                        <button onClick={() => setStep(4)} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium transition-colors">
+                                        <button onClick={() => setStep(5)} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium transition-colors">
                                             View Claude Prompt →
                                         </button>
                                     </div>
@@ -20046,8 +20912,8 @@ The developer uses Claude for iterative development — each session should:
                     </div>
                 )}
 
-                {/* Step 4: Claude Prompt */}
-                {step === 4 && (
+                {/* Step 5: Claude Prompt */}
+                {step === 5 && (
                     <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
                         <h2 className="text-lg font-semibold mb-2">🤖 Claude Project Prompt</h2>
                         <p className="text-slate-400 text-sm mb-4">Copy this into a Claude Project or use as a session starter. It contains everything Claude needs to build and deploy your app.</p>
@@ -20061,7 +20927,7 @@ The developer uses Claude for iterative development — each session should:
                             </button>
                         </div>
                         <div className="mt-6 flex justify-between items-center">
-                            <button onClick={() => { setStep(1); setAppData({ name:'',id:'',description:'',structure:'prod-only',isPWA:false,appType:'other',project:'',icon:'📦',hasAdmin:false,adminSubPath:'admin',customDomain:'' }); setCreationLog([]); setPromptGenerated(''); setRepoStatus({checking:false,prodExists:null,testExists:null}); }}
+                            <button onClick={() => { setStep(1); setAppData({ name:'',id:'',description:'',structure:'prod-only',isPWA:false,appType:'other',project:'',icon:'📦',hasAdmin:false,adminSubPath:'admin',customDomain:'' }); setScopeData(null); setSkipScope(false); setCreationLog([]); setPromptGenerated(''); setRepoStatus({checking:false,prodExists:null,testExists:null}); }}
                                 className="px-4 py-2 text-slate-400 hover:text-white transition-colors">
                                 🆕 Setup Another App
                             </button>
