@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.29.1">
+    <meta name="version" content="8.29.2">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -20558,6 +20558,10 @@ const pushIssueToCommandCenter = async (testResult) => {
         
         // If no deploy files at all, skip validation (pure doc push is fine)
         if (deployFiles.length === 0 && docFiles.length === 0) return null;
+        
+        // If only deploy files and no docs, skip validation — user just picked an HTML to deploy
+        // Package validation only applies when multiple files are staged (i.e. a full package)
+        if (docFiles.length === 0 && deployFiles.length <= 2) return null;
         
         const result = {
             isValid: true,
