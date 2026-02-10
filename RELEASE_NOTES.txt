@@ -1,6 +1,19 @@
 Command Center — Release Notes
 ================================
 
+v8.39.0 — Phase 3: Close the Loop, Session 1
+-------------------------------------------------
+Post-Session Review Flow: After returning from a Claude session, you can now 
+review what was built through a guided 4-step flow — summarize deliverables, 
+verify acceptance criteria, make a deploy decision, and close work items. 
+Accessible from the Session History tab via "Review Session" buttons.
+
+Activity Logging: All meaningful actions (deploys, session creation, reviews, 
+work item transitions) now write to a persistent activity log. Foundation for 
+the Phase 5 activity feed.
+
+Session pipeline now shows: Prep → Review → Deploy instead of just Prep → Deploy.
+
 v8.38.0 — Phase 2: Rewrite (PM-First Language), Session 1
 -------------------------------------------------
 Rewrites what Command Center says without changing what it does.
