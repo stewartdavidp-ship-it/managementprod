@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.30.0] — 2026-02-09
+
+### Added
+- **Portfolio View** — New top-level view under Monitor with cross-app metrics and analytics (Phase 4.1)
+- **Maturity Distribution** — Horizontal bar chart showing app distribution across seed/prototype/alpha/beta/production stages
+- **Backlog Health** — Status breakdown, aging items alert (7+ days in-progress), open items by app with mini bar charts
+- **Session Velocity** — Total sessions, sessions per week, session type mix (build/fix/design/test/research), sessions by app with cost
+- **Deploy Activity** — Deploy count by target (test/prod), weekly deploy volume sparkline chart, deploys by app
+- **Cost Breakdown Table** — Per-app estimated cost from package token counts × engine pricing, with sessions, tokens, cost, and $/session columns
+- **App Status Overview** — Full table showing maturity, target, open work items, sessions, deploys, and prod version per app
+- **Time Range Filter** — 7d/30d/90d/All Time toggle on Portfolio view, filters sessions and deploys
+- **Maturity Badges on Dashboard** — App cards now show colored maturity badge (seed/prototype/alpha/beta/production) inline with app name
+- **Portfolio nav entry** — Added under Monitor group (first position)
+
+### Changed
+- **Monitor nav group** — Now includes portfolio as first sub-view
+
 ## [8.29.3] — 2026-02-09
 
 ### Fixed
