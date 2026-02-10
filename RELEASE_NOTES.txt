@@ -1,6 +1,49 @@
 Command Center — Release Notes
 ================================
 
+v8.22.0 — 2026-02-09
+--------------------
+Orchestrator Phase 1.1: Backlog View + Work Item CRUD.
+
+BACKLOG VIEW (NEW TOP-LEVEL NAV):
+• New 📋 Backlog tab in main navigation (between Projects and Monitor)
+• Full work item CRUD: create, edit, delete
+• Status transitions: idea → ready → in-progress → done → deferred
+• Quick one-click status transition buttons on each item row
+• Group items by: app, status, type, or no grouping
+• Filter by: status (active/idea/ready/in-progress/done/deferred), type, app
+• Search by title, description, ID, or tags
+• Sort by: priority, status, effort, type, or creation date
+• Stats bar: clickable status counts for quick filtering
+• Bulk select + bulk status update (select multiple → change status)
+• Empty state with guided first-item creation
+
+WORK ITEM EDIT MODAL:
+• Full-featured modal for creating/editing work items
+• Fields: app selector, title, description, type (feature/bugfix/
+  enhancement/chore/research), priority (core/nice-to-have/out-of-scope),
+  status, effort (quick/session/multi-session/epic)
+• Acceptance criteria: add/remove with Enter key support
+• Tags: add/remove
+• Collapsible context section: files affected, sections, dependencies, notes
+
+DASHBOARD INTEGRATION:
+• Work item count badges (📋 N) on app cards — shows active items per app
+• Backlog summary widget — 4-column status grid + recent active items
+• "View All →" link navigates to Backlog view
+
+WORKITEMSERVICE ENHANCEMENTS:
+• createBatch(uid, items) — bulk create for future scoping flow
+• delete(uid, itemId) — delete individual items
+• source field: manual | scoped | imported | promoted
+• Global subscription in App component (like globalIssues)
+
+COPY FOR CLAUDE:
+• Each work item has a 📋 copy action
+• Generates formatted markdown context with title, description,
+  acceptance criteria, files affected, and notes
+• Ready to paste into Claude session or Claude Prep package
+
 v8.21.1 — 2026-02-09
 --------------------
 Orchestrator Phase 0.3: Engine Registry UI + Token Integration in Claude Prep.
