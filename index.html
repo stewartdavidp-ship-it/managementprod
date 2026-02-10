@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.29.2">
+    <meta name="version" content="8.29.3">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -223,6 +223,7 @@
         
         // Exchange signed JWT for a Google OAuth2 access token
         async getAccessToken(scopes = [
+            'https://www.googleapis.com/auth/userinfo.email',
             'https://www.googleapis.com/auth/firebase.database',
             'https://www.googleapis.com/auth/cloud-platform'
         ]) {
