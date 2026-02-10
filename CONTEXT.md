@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.21.0** — Released 2026-02-09
+**v8.22.0** — Released 2026-02-09
 
 ## What Command Center Is
 
@@ -22,7 +22,7 @@ Command Center is an internal tool for managing the Game Shelf ecosystem of web 
 
 ## Architecture
 
-- **Single HTML file** — All CSS, JS, React inline (~830KB, ~15,200 lines)
+- **Single HTML file** — All CSS, JS, React inline (~870KB, ~20,700 lines)
 - **React via CDN** — React 18 + ReactDOM loaded from unpkg
 - **No build step** — Runs directly from file:// or GitHub Pages
 - **GitHub API** — All repo/deploy operations use personal access token
@@ -129,6 +129,10 @@ Deploy
 ├── Smart Deploy     — Upload gs-active zip, batch deploy
 └── Deploy History   — Log of all deployments
 
+Projects             — Project & app management
+
+Backlog              — Work item tracking & project planning (NEW v8.22.0)
+
 Monitor
 ├── Users            — Player stats
 ├── Beta Program     — Beta tester management
@@ -158,7 +162,9 @@ Configure
 | `SmartDeployView` | Batch deploy from gs-active archives |
 | `ProjectsTab` | Project & app management |
 | `ClaudePrepModal` | Fetch source+docs from repo, generate session brief, build zip for Claude sessions (NEW v8.13.0) |
-| `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, milestone filtering (NEW v8.20.0) |
+| `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, batch create, milestone filtering (NEW v8.20.0, enhanced v8.22.0) |
+| `BacklogView` | Work item list with grouping, filtering, search, sort, bulk actions, status transitions (NEW v8.22.0) |
+| `WorkItemEditModal` | Create/edit work items — all fields including acceptance criteria, tags, context (NEW v8.22.0) |
 | `SessionService` | Claude session tracking via Firebase, deploy linking (NEW v8.20.0) |
 | `TokenRegistryService` | Heuristic token estimation, content type detection, localStorage cache (NEW v8.20.0) |
 | `EngineRegistryService` | AI engine profiles, session type recommendations, budget checking (NEW v8.20.0) |
@@ -175,6 +181,23 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.22.0 — Backlog View + Work Item CRUD (Phase 1.1)
+- **BacklogView** — New top-level navigation tab with full work item management: create, edit, delete, status transitions (idea→ready→in-progress→done→deferred)
+- **WorkItemEditModal** — Full-featured modal for all WorkItemService fields: app, title, description, type, priority, status, effort, acceptance criteria, tags, and context (files affected, sections, dependencies, notes)
+- **Grouping & filtering** — Group by app/status/type, filter by status/type/app, search by title/description/ID/tags, sort by priority/status/effort/type/creation date
+- **Bulk operations** — Multi-select with bulk status update
+- **Quick status transitions** — One-click status buttons on each item row
+- **Copy for Claude** — Generates formatted work item context for AI sessions
+- **Dashboard integration** — Work item count badges (📋 N) on app cards, Backlog summary widget with status distribution and recent active items
+- **WorkItemService.createBatch()** — Bulk create method for future scoping flow
+- **WorkItemService.delete()** — Delete individual work items
+- **`source` field** — Added to work item schema: manual | scoped | imported | promoted
+- **Global work items state** — App component subscribes to WorkItemService alongside global issues
+
+### v8.21.1 — AI Engines + Token Integration (Phase 0.3)
+- AI Engines settings section with default engine selector and comparison table
+- Token estimation integrated into Claude Prep (per-file counts, budget bar, over-budget recommendations, file manifest table)
 
 ### v8.18.6 — Fix: Firebase Overlay Deleting Local-Only Apps
 - **Full merge overlay** — local-only apps, repos, versions, and projects are preserved during Firebase overlay and pushed back to Firebase automatically
