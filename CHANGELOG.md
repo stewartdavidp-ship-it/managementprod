@@ -6,6 +6,32 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.28.0] — 2026-02-09
+
+### Added
+- **Lifecycle metadata from scope** — Setup wizard stores `lifecycle.scope` on app config when scoping is completed, including maturity, complexity, and full scope data (Phase 3.1)
+- **Auto-create work items from scope** — V1 features create `ready` work items, future features create `idea` items, unresolved decisions create `research` items via `WorkItemService.createBatch()` (Phase 3.1)
+- **Review & Launch step** — Step 5 enhanced with 4-panel summary grid, work items table with badges, and Claude instructions viewer (Phase 3.1)
+- `workItemsCreated` state tracking in SetupNewAppView
+- `reviewData` state for comprehensive setup summary
+- `firebaseUid` prop passed to SetupNewAppView for work item creation
+
+### Changed
+- **Step 5 renamed** — "Claude Prompt" → "Review & Launch" for clarity
+- **Setup Another App reset** — Now also clears `workItemsCreated` and `reviewData` state
+- **setupApp()** enhanced with lifecycle metadata storage, batch work item creation, prompt type tracking, and review data compilation
+
+## [8.27.0] — 2026-02-09
+
+### Added
+- **Deploy work item completion** — After successful deploy, shows dialog to mark in-progress work items as done (Phase 2.3)
+- **Session → deploy linking** — Active sessions auto-linked to deploys, status transitions from prep to completed (Phase 2.3)
+- **Session History panel** — New sub-tab on Session Log with stats, filters, expandable session cards showing prep→deploy flow (Phase 2.3)
+- `globalSessions` state with `SessionService.listen()` in App component
+- Deploy records enriched with sessionId, sessionType, workItemsCompleted
+
+---
+
 ## [8.26.0] — 2026-02-09
 
 ### Added
