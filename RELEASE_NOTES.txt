@@ -1,6 +1,40 @@
 Command Center — Release Notes
 ================================
 
+v8.36.0 — Unified Package Validation Engine
+-------------------------------------------------
+Complete overhaul of deploy-time validation. Replaces 4 separate
+validation mechanisms (post-extraction alerts, doc validation banner,
+deploy-time confirms, version warning modal) with a single
+selection-driven system.
+
+Key changes:
+- Intent detection: CC analyzes what you selected (quick deploy,
+  targeted update, full package, etc.) and only runs relevant checks
+- Inline validation panel: grey/amber/red severity tiers inside deploy
+  controls. No more modal popups interrupting the flow
+- Version bump in CC: code-only deploys get a bump button right in the
+  panel. One click updates all version strings in index.html + sw.js
+- Full packages with docs: sends everything back to Claude via copyable
+  fix prompt. Claude bumps version AND updates docs together
+- Deploy button state: disabled on errors (with override checkbox),
+  amber on warnings, normal when clean
+- Removed: validateDocPackage, extraction-time showAlerts, deploy-time
+  showConfirm dialogs, VersionWarningModal trigger, per-file doc
+  version indicators
+
+v8.35.0 — App Files Improvements
+-------------------------------------------------
+Maintain → Files view reworked for app-centric browsing:
+
+- App-based dropdown: shows apps by name with PROD/TEST, not raw repo names
+- SubPath-aware: Game Shelf shows app/ contents, Landing shows root
+- Expandable folders: click 📁 to expand and see files inside
+- Download Package: correctly scoped to app subPath with clean zip paths
+- Version Audit: finds correct index.html per app subPath
+- Shared repo support: apps on same repo (Game Shelf, Quotle, Slate, etc.)
+  are each individually selectable
+
 v8.34.0 — Cleanup Guardrails
 -------------------------------------------------
 Prevents stale file cleanup from deleting critical CI/CD files:
