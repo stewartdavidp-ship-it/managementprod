@@ -1,6 +1,24 @@
 Command Center — Release Notes
 ================================
 
+v8.36.4 — Storage Management
+-------------------------------------------------
+Adds intelligent localStorage cleanup to prevent QuotaExceededError
+that was spamming the console on every state update.
+
+Key additions:
+- StorageManager with priority-based cleanup: caches first, then old
+  rollback snapshots, then trim deploy history (100→30), session logs
+- Auto-cleanup on quota error: services now use safeSet() which
+  triggers smart cleanup, then aggressive cleanup if still full
+- Rollback snapshots pruned by age (7 days default, 24h aggressive),
+  then content stripped from old entries keeping metadata
+- Settings > Local Storage panel: usage bar, per-key breakdown sorted
+  by size, Smart Cleanup and Aggressive Cleanup buttons
+- Protected keys (token, config, app state) never pruned
+
+---
+
 v8.36.3 — Deploy Safety & Smart Targeting
 -------------------------------------------------
 Fixes critical gap where version validation was skipped for single-file
