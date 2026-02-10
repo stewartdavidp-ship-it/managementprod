@@ -2,7 +2,7 @@
 
 ## Overview
 
-Single-file React application (~15,200 lines) that manages web app deployments via the GitHub API. Everything is inline — HTML, CSS (Tailwind via CDN), and JavaScript (React 18 via CDN).
+Single-file React application (~20,700 lines) that manages web app deployments via the GitHub API. Everything is inline — HTML, CSS (Tailwind via CDN), and JavaScript (React 18 via CDN).
 
 ---
 
@@ -34,6 +34,8 @@ Single-file React application (~15,200 lines) that manages web app deployments v
 ├── <UsersView>                          Player management
 ├── <BetaProgramView>                    Beta tester management
 ├── <IssuesView>                         Issue tracker
+├── <BacklogView>                        Work item tracking & planning (NEW v8.22.0)
+│   └── <WorkItemEditModal>              Create/edit work items
 ├── <SessionLogView>                     Activity log
 ├── <CleanupView>                        Orphan detection
 └── <FilesView>                          Repo browser
