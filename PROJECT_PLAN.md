@@ -138,11 +138,25 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] Session-type-aware file filtering (skip/include per context strategy)
 - [x] Quick skip path for fast builds
 
+### Orchestrator Phase 2.3: Session Tracking + Deploy Close-the-Loop (v8.27.0)
+- [x] Deploy triggers work item completion dialog for in-progress items
+- [x] Session → deploy linking with status transition (prep → completed)
+- [x] Deploy records enriched with sessionId, sessionType, workItemsCompleted
+- [x] Session History panel with stats, filters, expandable cards
+- [x] globalSessions state with SessionService.listen()
+
+### Phase 3.1: Integrated Setup Flow (v8.28.0)
+- [x] Setup wizard Step 5 renamed to "Review & Launch"
+- [x] Scoping pre-populates lifecycle metadata on app config (maturity, complexity, scope)
+- [x] Auto-create work items from scope via WorkItemService.createBatch()
+- [x] Review & Launch step with summary grid, work items table, Claude instructions
+- [x] Quick setup option preserved (skip scope)
+
 ---
 
 ## In Progress
 
-_(Phase 2.2 complete — next: Phase 2.3 Session Tracking + Deploy Close-the-Loop)_
+_(Phase 3.1 complete — next: Phase 3.2 Smart Artifact Generation)_
 
 ---
 
