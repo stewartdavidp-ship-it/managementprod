@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [8.36.4] — 2026-02-10
+## [8.36.5] — 2026-02-10
 
 ### Added
 - **StorageManager** — intelligent localStorage cleanup system with auto-pruning on QuotaExceededError
