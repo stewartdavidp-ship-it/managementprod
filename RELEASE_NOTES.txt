@@ -1,7 +1,7 @@
 Command Center — Release Notes
 ================================
 
-v8.36.4 — Storage Management
+v8.36.5 — Storage Management
 -------------------------------------------------
 Adds intelligent localStorage cleanup to prevent QuotaExceededError
 that was spamming the console on every state update.
