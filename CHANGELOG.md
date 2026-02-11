@@ -1,5 +1,31 @@
 # Command Center — Changelog
 
+## [8.48.1] — 2026-02-11
+
+### Added
+- **SESSION_RETURN.json Phase A** — All 8 session types include return manifest in delivery requirements; SessionBriefGenerator embeds full JSON schema with pre-filled sessionType and sessionId
+- **SESSION_RETURN.json Phase B** — Auto-review processing: detection in ZIP and single-file drop, `validateSessionReturn()` schema validation, `matchSessionReturn()` 3-tier confidence matching, `AutoReviewModal` component with editable statuses and toggleable issue/idea creation
+- **SESSION_RETURN.json Phase C** — Integration polish: session ID embedding in brief, `⚡ Auto-Reviewed` badge in session history, return manifest details in expanded sessions, pending return banner in Sessions view
+- `SESSION_RETURN_SCHEMA` constant with valid values for all enum fields
+- `validateSessionReturn()` function — JSON parsing, required field checks, enum validation
+- `matchSessionReturn()` function — session ID → work item overlap → type + recency matching
+- `AutoReviewModal` component — parsed manifest viewer with apply handler
+- Return manifest metadata stored on session records (`session.returnManifest`)
+- `pendingSessionReturn` state threaded App → SessionLogView
+
+### Changed
+- Session record creation moved before brief generation for session ID embedding
+- `SessionBriefGenerator.generate()` accepts `sessionId` in options
+- `classifyFileAction()` captures SESSION_RETURN.json content before skipping
+
+## [8.47.0] — 2026-02-10
+
+### Added
+- **Domain Management** — FirebaseAdmin methods: getAuthConfig, getAuthorizedDomains, updateAuthorizedDomains, addAuthorizedDomain, removeAuthorizedDomain
+- AuthorizedDomainsManager component in Settings
+- GitHubPagesDomainManager component with DNS health checks
+- testConnection() 4th check for auth config
+
 ## [8.46.0] — 2026-02-11
 
 ### Added
