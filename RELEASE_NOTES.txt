@@ -1,6 +1,52 @@
 Command Center — Release Notes
 ================================
 
+v8.42.0 — Unified Plan Phase 4.4–4.5: Release Coordination + Test Checklist
+--------------------------------------------------------------
+Completes Phase 4 of the Unified Development Plan. Command Center 
+now answers "Is this version ready to ship?" with per-app release 
+readiness tracking and auto-generated test checklists.
+
+RELEASE COORDINATION VIEW: New "Releases" view under the Backlog 
+navigation group. Shows every configured app with a readiness 
+assessment — Ready to Ship, Almost Ready, Blocked, In Progress — 
+based on work item pipeline status, stale items, and pending 
+sessions. Summary cards show counts across all apps.
+
+PER-APP RELEASE CARDS: Each app shows current test/prod versions 
+with drift detection ("Test ahead of Prod"), a pipeline completion 
+bar with item counts per stage, and a blockers panel highlighting 
+what's preventing a ship decision. Milestone breakdown and recent 
+deploys are available via expandable sections.
+
+GO/NO-GO SUMMARY: Apps at 100% completion show a green "Ready to 
+ship" banner with a direct link to Smart Deploy. Apps above 80% 
+show an "Almost ready" amber indicator with remaining item count.
+
+RELEASE TEST CHECKLIST (Phase 4.5): Click "Test Checklist" on any 
+app to get an auto-generated manual testing guide built from:
+- Recently shipped work items with their acceptance criteria
+- Items pending review with verification prompts
+- Standard user journeys based on app category (game, tool, 
+  dashboard, content, admin)
+- Regression checks from recent session deliverables
+- Deploy verification including PWA-specific service worker checks
+
+Interactive checklist with progress tracking — check off items as 
+you test, see completion percentage, and get a deploy prompt when 
+all checks pass. Designed for 10-15 minutes per release.
+
+Phase 4 complete. All sub-phases delivered:
+  4.1 ✅ Dashboard Redesign — Product Health metrics (v8.41.0)
+  4.2 ✅ Quick Actions Alignment (v8.41.0)
+  4.3 ✅ Progressive Disclosure (v8.41.0)
+  4.4 ✅ Release Coordination View (v8.42.0)
+  4.5 ✅ Release Test Checklist (v8.42.0)
+
+Next: Phase 5 — Generalize (Work Streams, Dependencies, 
+Multi-Person). CC becomes a coordination platform for AI-native 
+product development.
+
 v8.41.0 — Unified Plan Phase 4: Dashboard Polish (4.1–4.3)
 --------------------------------------------------------------
 The dashboard now answers "How is my product doing?" instead of 
