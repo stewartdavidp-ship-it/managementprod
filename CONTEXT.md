@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.44.0** — Released 2026-02-10
+**v8.45.0** — Released 2026-02-10
 
 ## What Command Center Is
 
@@ -22,7 +22,7 @@ Command Center is an internal tool for managing the Game Shelf ecosystem of web 
 
 ## Architecture
 
-- **Single HTML file** — All CSS, JS, React inline (~870KB, ~29,000 lines)
+- **Single HTML file** — All CSS, JS, React inline (~880KB, ~29,900 lines)
 - **React via CDN** — React 18 + ReactDOM loaded from unpkg
 - **No build step** — Runs directly from file:// or GitHub Pages
 - **GitHub API** — All repo/deploy operations use personal access token
@@ -171,6 +171,8 @@ Configure
 | `StreamInterfaceService` | Stream-provided interface contracts — behavior, output, data, naming, timing categories (NEW v8.43.0) |
 | `DependencyService` | Cross-stream dependency declarations with active/changed/verified status tracking (NEW v8.43.0) |
 | `DependencyAlertService` | Auto-remediation alerts — triggers work items in dependent streams when interfaces change, prompt chaining (NEW v8.44.0) |
+| `ProductBriefGenerator` | Auto-generates PRODUCT_BRIEF.md from scope, work items, deploys, streams — PM-language product context for cross-stream sharing (NEW v8.45.0) |
+| `ProductBriefModal` | Lightweight viewer for auto-generated Product Brief with copy-to-clipboard (NEW v8.45.0) |
 | `WorkStreamsView` | Work streams board view — stream cards with completion, items, interfaces, dependencies per app (NEW v8.43.0) |
 | `StreamEditModal` | Create/edit work streams with full metadata (NEW v8.43.0) |
 | `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, batch create, milestone filtering (NEW v8.20.0, enhanced v8.22.0, streamId added v8.43.0) |
@@ -193,6 +195,15 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.45.0 — Unified Plan Phase 5.5: Product Brief Auto-Generation
+- **ProductBriefGenerator** — New service that auto-generates `PRODUCT_BRIEF.md` from existing CC data sources: scope answers (from `appScopes/{appId}`), work items, deploy history, streams, and lifecycle metadata. Assembles a PM-language product description with sections for Product Identity, Key Product Decisions, Feature Inventory (shipped/in-progress/planned/ideas), Work Streams overview, Recent Releases, and Open Decisions.
+- **PRODUCT_BRIEF.md in Claude Prep packages** — Auto-generated after CLAUDE_INSTRUCTIONS.md during package build. Included per session type context strategy: `alwaysInclude` for design and research sessions (product context critical), `preferInclude` for build, fix, test, review, polish, and document sessions.
+- **ProductBriefModal** — 📄 button on each app row in ProjectsTab. Lightweight modal renders the generated brief as formatted markdown with copy-to-clipboard. Regenerates on open (always reflects current state, not cached).
+- **Key Product Decisions formatting** — `_formatProductDecisions()` translates scoping category answers from technical values to PM language (e.g. `dataPersistence: 'firebase'` → "Saves to cloud (syncs across devices)"). Covers game, tool, dashboard, content, and admin categories.
+- **Feature Inventory** — `_generateFeatureInventory()` organizes work items by status (✅ Shipped, 🔄 In Progress, 📋 Planned, 💡 Ideas, 🐛 Known Issues). Falls back to scope `v1Features` for apps without work items yet.
+- **classifyFileAction** updated — PRODUCT_BRIEF.md treated as 'skip' (auto-generated, don't push to repo)
+- **Environment Optimization** — PRODUCT_BRIEF.md added to doc listing and token estimation (~3,000 tokens)
 
 ### v8.44.0 — Unified Plan Phase 5.4: Dependencies Auto-Remediation & Prompt Chaining
 - **DependencyAlertService** — New Firebase service (`command-center/{uid}/dependencyAlerts`) for dependency alert lifecycle management (pending → updated/no_impact)
