@@ -1,6 +1,46 @@
 Command Center — Release Notes
 ================================
 
+v8.43.0 — Unified Plan Phase 5.1–5.3: Work Streams, Decoupling, Unified Model
+--------------------------------------------------------------------------------
+Phase 5 begins! Command Center gains work streams — named, owned, parallel
+tracks of work that let different people run AI sessions against different
+parts of a product without stepping on each other.
+
+WORK STREAMS (Phase 5.2):
+- Create named streams per app (e.g. "Core Gameplay", "Help & Onboarding")
+- Each stream has an owner, goal, status, and target release
+- Stream board view shows completion bars, active items, and dependencies
+- Streams can be blocked by other streams for coordination
+- Stream filter in Claude Prep lets you focus session packages on one stream
+
+UNIFIED WORK ITEM MODEL (Phase 5.3):
+- Work items can now be assigned to streams via new streamId field
+- Stream selector appears in the work item edit modal when app has streams
+- Backlog supports "Group by Stream" view
+- Stream badges appear on items in backlog list
+- Session briefs include stream context when items share a stream
+
+DECOUPLE FROM GAME SHELF (Phase 5.1):
+- Skills recommendations now project-aware — gs-active and gs-logos only
+  recommended for Game Shelf project apps, not universally
+- Categories are extensible via config.customCategories
+- Platform recommendation text genericized
+
+DEPENDENCY INFRASTRUCTURE (Phase 5.4 foundation):
+- StreamInterfaceService: streams declare what they PROVIDE
+- DependencyService: streams declare what they CONSUME
+- Interfaces and dependencies shown on stream cards
+- Full auto-remediation flow coming in next session
+
+REMAINING Phase 5 work (5.4–5.7):
+- Dependencies auto-remediation with prompt chaining
+- Product Brief auto-generation
+- Activity Feed multi-person view
+- Multi-Person Access via Firebase Auth
+
+---
+
 v8.42.0 — Unified Plan Phase 4.4–4.5: Release Coordination + Test Checklist
 --------------------------------------------------------------
 Completes Phase 4 of the Unified Development Plan. Command Center 
