@@ -221,11 +221,26 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] Interactive checklist — progress tracking with completion % and deploy prompt
 - [x] Navigation — Releases view added under Backlog dropdown
 
+### Unified Plan Phase 5.1–5.3: Work Streams, Decoupling, Unified Model (v8.43.0)
+- [x] WorkStreamService — Firebase CRUD for work streams (name, owner, goal, status, target release, blockedBy)
+- [x] StreamInterfaceService — Stream-provided interface contracts (behavior/output/data/naming/timing)
+- [x] DependencyService — Cross-stream dependency declarations with status tracking
+- [x] WorkStreamsView — Stream board view with cards, completion bars, item summaries, interfaces, dependencies
+- [x] StreamEditModal — Create/edit streams with full metadata
+- [x] Unified Work Item Model — streamId field on work items for stream assignment
+- [x] WorkItemEditModal stream selector — assign items to streams per app
+- [x] BacklogView stream grouping — group by stream, stream badges on items
+- [x] ClaudePrepModal stream filter — filter Step 1 work items by stream
+- [x] SessionBriefGenerator stream context — stream details in generated briefs
+- [x] Phase 5.1 decoupling — skills/logos recommendations now project-aware, not hardcoded GS
+- [x] Extensible categories — getAllCategories() merges built-in + config.customCategories
+- [x] Global state — globalStreams, globalInterfaces, globalDependencies in App component
+
 ---
 
 ## In Progress
 
-_(Unified Plan Phases 1–4 complete — Phase 5: Generalize next)_
+_(Unified Plan Phases 1–4 complete, Phase 5.1–5.3 complete — Phase 5.4–5.7 next: Dependencies auto-remediation, Product Brief, Activity Feed, Multi-Person Access)_
 
 ---
 
