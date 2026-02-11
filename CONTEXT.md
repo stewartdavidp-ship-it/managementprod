@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.43.0** — Released 2026-02-10
+**v8.44.0** — Released 2026-02-10
 
 ## What Command Center Is
 
@@ -170,6 +170,7 @@ Configure
 | `WorkStreamService` | Work stream CRUD via Firebase — named, owned, parallel tracks of work. Supports status transitions, completion tracking, blocked-by relationships (NEW v8.43.0) |
 | `StreamInterfaceService` | Stream-provided interface contracts — behavior, output, data, naming, timing categories (NEW v8.43.0) |
 | `DependencyService` | Cross-stream dependency declarations with active/changed/verified status tracking (NEW v8.43.0) |
+| `DependencyAlertService` | Auto-remediation alerts — triggers work items in dependent streams when interfaces change, prompt chaining (NEW v8.44.0) |
 | `WorkStreamsView` | Work streams board view — stream cards with completion, items, interfaces, dependencies per app (NEW v8.43.0) |
 | `StreamEditModal` | Create/edit work streams with full metadata (NEW v8.43.0) |
 | `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, batch create, milestone filtering (NEW v8.20.0, enhanced v8.22.0, streamId added v8.43.0) |
@@ -192,6 +193,16 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.44.0 — Unified Plan Phase 5.4: Dependencies Auto-Remediation & Prompt Chaining
+- **DependencyAlertService** — New Firebase service (`command-center/{uid}/dependencyAlerts`) for dependency alert lifecycle management (pending → updated/no_impact)
+- **triggerAlerts()** — Orchestrated auto-remediation flow: finds dependencies consuming a changed interface → creates dependency_update work items in dependent streams with full change context → creates alert records → marks dependencies as 'changed' → logs to activity feed
+- **Post-Session Review interface change detection** — Step 1 (Overview) shows checklist of provided interfaces that have dependents; user checks changed interfaces, describes changes, and triggers alerts. Results panel shows auto-created work items in dependent streams.
+- **Prompt chaining in SessionBriefGenerator** — When a session targets dependency_update work items, the brief includes a "Dependency Changes — Context from Source Session" section with change description, affected interfaces, source work item, and notes from the triggering session. This is the core prompt chain: previous session's output becomes this session's input.
+- **WorkStreamsView alert visibility** — Stream cards show pending dependency alerts (amber badge), summary stats include Pending Alerts count, handleResolveAlert() resolves alerts as 'updated' or 'no_impact'
+- **Dependency status tracking** — Dependencies gain 'changed' status when alert fires, move back to 'verified' when resolved as 'updated'
+- **globalDependencyAlerts** state added to App component with Firebase listener
+- **Props threading** — SessionLogView and PostSessionReviewModal receive streams/interfaces/dependencies/alerts; WorkStreamsView receives globalDependencyAlerts
 
 ### v8.43.0 — Unified Plan Phase 5.1–5.3: Work Streams, Decoupling, Unified Model
 - **WorkStreamService** — New Firebase service (`command-center/{uid}/streams`) for creating, managing, and tracking named work streams with owner, goal, status (active/paused/blocked/complete), target release, and blockedBy relationships
