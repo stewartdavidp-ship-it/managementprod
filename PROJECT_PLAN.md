@@ -236,11 +236,21 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] Extensible categories — getAllCategories() merges built-in + config.customCategories
 - [x] Global state — globalStreams, globalInterfaces, globalDependencies in App component
 
+### Unified Plan Phase 5.4: Dependencies Auto-Remediation & Prompt Chaining (v8.44.0)
+- [x] DependencyAlertService — Firebase CRUD for alerts with lifecycle (pending → updated/no_impact)
+- [x] triggerAlerts() — Orchestrated flow: changed interface → find dependents → create work items → create alerts → mark deps changed → log activity
+- [x] Post-Session Review interface detection — Checklist of provided interfaces with dependents, change description fields, trigger button, results panel
+- [x] Prompt chaining in SessionBriefGenerator — dependency_update items inject "Dependency Changes — Context from Source Session" section
+- [x] WorkStreamsView pending alerts — Amber badge on stream cards, summary stat, resolve handler
+- [x] Dependency status tracking — changed on alert trigger, verified on resolution
+- [x] globalDependencyAlerts state with Firebase listener
+- [x] Props threading — SessionLogView → PostSessionReviewModal, App → WorkStreamsView
+
 ---
 
 ## In Progress
 
-_(Unified Plan Phases 1–4 complete, Phase 5.1–5.3 complete — Phase 5.4–5.7 next: Dependencies auto-remediation, Product Brief, Activity Feed, Multi-Person Access)_
+_(Unified Plan Phases 1–4 complete, Phase 5.1–5.4 complete — Phase 5.5–5.7 next: Product Brief, Activity Feed, Multi-Person Access)_
 
 ---
 
