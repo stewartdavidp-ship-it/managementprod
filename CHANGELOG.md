@@ -6,6 +6,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [8.43.0] — 2026-02-10
+
+### Added
+- **WorkStreamService** — New Firebase service for work stream CRUD with status management, completion tracking, and blockedBy relationships
+- **StreamInterfaceService** — Firebase service for stream-provided interface contracts (behavior/output/data/naming/timing)
+- **DependencyService** — Firebase service for cross-stream dependency declarations with active/changed/verified status
+- **WorkStreamsView** — New view (📋 Backlog → 🔀 Streams) with per-app stream cards showing completion bars, work items, interfaces, and dependencies
+- **StreamEditModal** — Full-featured modal for creating/editing work streams
+- **`streamId` on work items** — WorkItemService create/batch create now supports optional stream assignment (Phase 5.3 Unified Work Item Model)
+- **Stream selector in WorkItemEditModal** — Dropdown to assign work items to streams when app has streams
+- **"Group: Stream" in BacklogView** — New grouping option, plus stream badges on individual items
+- **Stream filter in ClaudePrepModal** — Step 1 dropdown filters work items by stream for focused session prep
+- **Stream context in session briefs** — SessionBriefGenerator includes stream name/owner/goal when targeted items share a stream
+- **`globalStreams`, `globalInterfaces`, `globalDependencies`** — New global state in App component with Firebase listeners
+- **🔀 Streams navigation** — Added to Backlog dropdown menu
+- **`getAllCategories()` helper** — Merges built-in categories with `config.customCategories` for extensibility
+
+### Changed
+- **Skills recommendations** — Now project-aware: gs-active only recommended for Game Shelf project apps (was universal)
+- **gs-logos skill** — Only recommended for Game Shelf apps (was universal)
+- **Platform recommendations** — Genericized text (removed hardcoded "gs-active, firebase-patterns" reference)
+- **WorkItemEditModal** — Now accepts `globalStreams` prop for stream assignment UI
+- **BacklogView** — Now accepts `globalStreams` prop for stream grouping
+- **ClaudePrepModal** — Now accepts `globalStreams` prop for stream filtering
+- **ProjectsTab** — Now accepts and passes `globalStreams` prop
+- **App selector in WorkItemEditModal** — Resets streamId when app changes
+
 ## [8.42.0] — 2026-02-10
 
 ### Added
