@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.44.0">
+    <meta name="version" content="8.46.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -2247,6 +2247,185 @@
     };
     
     /**
+     * TeamService — Multi-person access management (Phase 5.7)
+     * Wraps: Firebase RTDB `command-center/{uid}/team` path
+     * 
+     * Enables shared workspace access. The owner's UID remains the canonical
+     * data path — team members read/write to the owner's path with role-based
+     * permissions enforced in UI (Firebase rules lock down in production).
+     * 
+     * Roles:
+     *   owner — full access, can manage team members
+     *   editor — can create/edit work items, sessions, deploys, streams
+     *   viewer — read-only access to all data
+     * 
+     * Data model:
+     *   command-center/{ownerUid}/team/{memberUid} = { email, name, photoURL, role, invitedAt, joinedAt }
+     *   command-center/{memberUid}/teamMembership = { ownerUid, role, workspaceName }
+     */
+    const TeamService = {
+        BASE_PATH: 'command-center',
+        
+        _teamRef(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/team`);
+        },
+        
+        _membershipRef(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/teamMembership`);
+        },
+        
+        // Listen for team members (owner's perspective)
+        listen(uid, callback) {
+            const ref = this._teamRef(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([memberId, member]) => ({ uid: memberId, ...member }));
+                    callback(list.sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || '')));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        // Listen for workspaces this user belongs to (member's perspective)
+        listenMemberships(uid, callback) {
+            const ref = this._membershipRef(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                callback(data || null);
+            });
+            
+            return () => ref.off();
+        },
+        
+        // Invite a team member (by email)
+        async invite(ownerUid, email, role = 'editor', invitedBy = 'Owner') {
+            const ref = this._teamRef(ownerUid);
+            if (!ref) return null;
+            
+            const tempKey = `pending-${btoa(email).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20)}`;
+            
+            const member = {
+                email: email.toLowerCase().trim(),
+                name: null,
+                photoURL: null,
+                role: role,
+                status: 'invited',
+                invitedAt: new Date().toISOString(),
+                invitedBy: invitedBy,
+                joinedAt: null
+            };
+            
+            await ref.child(tempKey).set(member);
+            console.log(`[TeamService] Invited ${email} as ${role}`);
+            return { uid: tempKey, ...member };
+        },
+        
+        // Accept invite — called when invited user signs in
+        async acceptInvite(ownerUid, memberUid, memberProfile) {
+            const ref = this._teamRef(ownerUid);
+            if (!ref) return;
+            
+            const snap = await ref.once('value');
+            const team = snap.val() || {};
+            const pendingKey = Object.keys(team).find(k => 
+                k.startsWith('pending-') && team[k].email === memberProfile.email?.toLowerCase()
+            );
+            
+            if (!pendingKey) {
+                console.warn(`[TeamService] No pending invite for ${memberProfile.email}`);
+                return null;
+            }
+            
+            const invite = team[pendingKey];
+            
+            await ref.child(pendingKey).remove();
+            await ref.child(memberUid).set({
+                email: memberProfile.email,
+                name: memberProfile.displayName || memberProfile.email.split('@')[0],
+                photoURL: memberProfile.photoURL || null,
+                role: invite.role,
+                status: 'active',
+                invitedAt: invite.invitedAt,
+                invitedBy: invite.invitedBy,
+                joinedAt: new Date().toISOString()
+            });
+            
+            // Write membership pointer on the member's node
+            await this._membershipRef(memberUid)?.set({
+                ownerUid: ownerUid,
+                role: invite.role,
+                workspaceName: 'Command Center'
+            });
+            
+            console.log(`[TeamService] ${memberProfile.email} joined as ${invite.role}`);
+            return { uid: memberUid, role: invite.role };
+        },
+        
+        // Update member role
+        async updateRole(ownerUid, memberUid, newRole) {
+            const ref = this._teamRef(ownerUid);
+            if (!ref) return;
+            await ref.child(memberUid).update({ role: newRole });
+            await this._membershipRef(memberUid)?.update({ role: newRole });
+        },
+        
+        // Remove team member
+        async remove(ownerUid, memberUid) {
+            const ref = this._teamRef(ownerUid);
+            if (!ref) return;
+            await ref.child(memberUid).remove();
+            await this._membershipRef(memberUid)?.remove();
+        },
+        
+        // Get the effective workspace UID (owner's UID if member, own UID if owner)
+        getWorkspaceUid(currentUid, membership) {
+            if (membership?.ownerUid) return membership.ownerUid;
+            return currentUid;
+        },
+        
+        canEdit(membership) {
+            if (!membership) return true; // Owner
+            return membership.role === 'owner' || membership.role === 'editor';
+        },
+        
+        canManageTeam(membership) {
+            if (!membership) return true; // Owner
+            return membership.role === 'owner';
+        },
+        
+        // Generate Firebase security rules template
+        generateRulesTemplate(ownerUid) {
+            return JSON.stringify({
+                rules: {
+                    "command-center": {
+                        [ownerUid]: {
+                            ".read": `auth.uid === '${ownerUid}' || root.child('command-center/${ownerUid}/team/' + auth.uid).exists()`,
+                            ".write": `auth.uid === '${ownerUid}' || (root.child('command-center/${ownerUid}/team/' + auth.uid).exists() && root.child('command-center/${ownerUid}/team/' + auth.uid + '/role').val() !== 'viewer')`,
+                            "team": { ".write": `auth.uid === '${ownerUid}'` }
+                        },
+                        "$uid": {
+                            "teamMembership": {
+                                ".read": "auth.uid === $uid",
+                                ".write": "auth != null"
+                            }
+                        }
+                    }
+                }
+            }, null, 2);
+        }
+    };
+    
+    /**
      * TokenRegistryService — Token estimation and caching
      * Provides heuristic token counting for context budget management.
      * Cache stored in localStorage for instant access during Claude Prep.
@@ -3235,7 +3414,7 @@
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md', 'CLAUDE-PREP-STANDARD.md'],
-                preferInclude: ['PROJECT_PLAN.md', 'ARCHITECTURE.md'],
+                preferInclude: ['PROJECT_PLAN.md', 'ARCHITECTURE.md', 'PRODUCT_BRIEF.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt'],
                 includeSource: true
             },
@@ -3262,7 +3441,7 @@
                 'Key decisions with rationale'
             ],
             contextStrategy: {
-                alwaysInclude: ['CONTEXT.md', 'ARCHITECTURE.md', 'PROJECT_PLAN.md'],
+                alwaysInclude: ['CONTEXT.md', 'ARCHITECTURE.md', 'PROJECT_PLAN.md', 'PRODUCT_BRIEF.md'],
                 preferInclude: ['CLAUDE_INSTRUCTIONS.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt', 'CLAUDE-PREP-STANDARD.md'],
                 includeSource: true
@@ -3292,7 +3471,7 @@
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE-PREP-STANDARD.md'],
-                preferInclude: ['CLAUDE_INSTRUCTIONS.md'],
+                preferInclude: ['CLAUDE_INSTRUCTIONS.md', 'PRODUCT_BRIEF.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt', 'PROJECT_PLAN.md', 'ARCHITECTURE.md'],
                 includeSource: true
             },
@@ -3320,7 +3499,7 @@
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md'],
-                preferInclude: ['ARCHITECTURE.md', 'PROJECT_PLAN.md'],
+                preferInclude: ['ARCHITECTURE.md', 'PROJECT_PLAN.md', 'PRODUCT_BRIEF.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt', 'CLAUDE-PREP-STANDARD.md'],
                 includeSource: true
             },
@@ -3347,7 +3526,7 @@
                 'Next steps or implementation plan'
             ],
             contextStrategy: {
-                alwaysInclude: ['CONTEXT.md'],
+                alwaysInclude: ['CONTEXT.md', 'PRODUCT_BRIEF.md'],
                 preferInclude: ['ARCHITECTURE.md', 'PROJECT_PLAN.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt', 'CLAUDE-PREP-STANDARD.md', 'CLAUDE_INSTRUCTIONS.md'],
                 includeSource: false
@@ -3376,7 +3555,7 @@
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md', 'CLAUDE-PREP-STANDARD.md'],
-                preferInclude: ['ARCHITECTURE.md'],
+                preferInclude: ['ARCHITECTURE.md', 'PRODUCT_BRIEF.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt', 'PROJECT_PLAN.md'],
                 includeSource: true
             },
@@ -3405,7 +3584,7 @@
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md'],
-                preferInclude: ['CLAUDE-PREP-STANDARD.md'],
+                preferInclude: ['CLAUDE-PREP-STANDARD.md', 'PRODUCT_BRIEF.md'],
                 skipWhenTight: ['CHANGELOG.md', 'RELEASE_NOTES.txt', 'PROJECT_PLAN.md', 'ARCHITECTURE.md'],
                 includeSource: true
             },
@@ -3433,7 +3612,7 @@
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md'],
-                preferInclude: ['PROJECT_PLAN.md', 'CHANGELOG.md', 'RELEASE_NOTES.txt', 'ARCHITECTURE.md'],
+                preferInclude: ['PROJECT_PLAN.md', 'CHANGELOG.md', 'RELEASE_NOTES.txt', 'ARCHITECTURE.md', 'PRODUCT_BRIEF.md'],
                 skipWhenTight: ['CLAUDE-PREP-STANDARD.md', 'CLAUDE_INSTRUCTIONS.md'],
                 includeSource: true
             },
@@ -5961,6 +6140,8 @@
         const [globalInterfaces, setGlobalInterfaces] = React.useState([]); // Phase 5.4: Stream interfaces
         const [globalDependencies, setGlobalDependencies] = React.useState([]); // Phase 5.4: Dependencies
         const [globalDependencyAlerts, setGlobalDependencyAlerts] = React.useState([]); // Phase 5.4: Dependency alerts
+        const [teamMembers, setTeamMembers] = React.useState([]); // Phase 5.7: Team members
+        const [teamMembership, setTeamMembership] = React.useState(null); // Phase 5.7: Current user's membership (null = owner)
         const [firebaseUid, setFirebaseUid] = React.useState(null);
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         
@@ -5976,6 +6157,8 @@
             let unsubscribeInterfaces = () => {};
             let unsubscribeDependencies = () => {};
             let unsubscribeDependencyAlerts = () => {};
+            let unsubscribeTeam = () => {};
+            let unsubscribeTeamMembership = () => {};
             
             const unsubscribe = firebaseAuth.onAuthStateChanged((u) => {
                 setFirebaseUser(u);
@@ -5997,6 +6180,9 @@
                     unsubscribeDependencies = DependencyService.listen(u.uid, setGlobalDependencies);
                     // Listen for dependency alerts via DependencyAlertService (v8.44.0 — Phase 5.4)
                     unsubscribeDependencyAlerts = DependencyAlertService.listen(u.uid, setGlobalDependencyAlerts);
+                    // Listen for team members via TeamService (v8.46.0 — Phase 5.7)
+                    unsubscribeTeam = TeamService.listen(u.uid, setTeamMembers);
+                    unsubscribeTeamMembership = TeamService.listenMemberships(u.uid, setTeamMembership);
                 } else {
                     setFirebaseUid(null);
                     setGlobalIssues([]);
@@ -6006,6 +6192,8 @@
                     setGlobalStreams([]);
                     setGlobalInterfaces([]);
                     setGlobalDependencies([]);
+                    setTeamMembers([]);
+                    setTeamMembership(null);
                 }
             });
             
@@ -6019,10 +6207,20 @@
                 unsubscribeInterfaces();
                 unsubscribeDependencies();
                 unsubscribeDependencyAlerts();
+                unsubscribeTeam();
+                unsubscribeTeamMembership();
             };
         }, []);
         
         // Link issues to a deployed version
+        // Phase 5.7: Effective workspace UID — if user is a team member, use owner's UID for data access
+        const workspaceUid = React.useMemo(() => {
+            return TeamService.getWorkspaceUid(firebaseUid, teamMembership);
+        }, [firebaseUid, teamMembership]);
+        
+        // Phase 5.7: Permission check — editors and owners can write, viewers are read-only
+        const canEdit = React.useMemo(() => TeamService.canEdit(teamMembership), [teamMembership]);
+        
         const linkIssuesToVersion = async (issueIds, version, appId) => {
             if (!firebaseUid || !issueIds.length) return;
             await IssueService.linkToVersion(firebaseUid, issueIds, version, appId);
@@ -8039,14 +8237,27 @@
                                 {/* Google Auth */}
                                 {firebaseAuth && (
                                     firebaseUser ? (
-                                        <button onClick={async () => { try { await firebaseAuth.signOut(); } catch {} }}
-                                            className="flex items-center gap-1.5 text-green-400 hover:text-green-300 transition-colors"
-                                            title={`Signed in as ${firebaseUser.email}\nClick to sign out`}>
-                                            <img src={firebaseUser.photoURL || ''} className="w-5 h-5 rounded-full" 
-                                                onError={(e) => { e.target.style.display = 'none'; }}
-                                            />
-                                            <span className="max-w-[100px] truncate">{firebaseUser.displayName?.split(' ')[0] || firebaseUser.email?.split('@')[0]}</span>
-                                        </button>
+                                        <React.Fragment>
+                                            {teamMembership && (
+                                                <span className="text-xs text-cyan-400 bg-cyan-900/30 border border-cyan-700/30 px-2 py-0.5 rounded-full"
+                                                    title={`Viewing ${teamMembership.workspaceName || 'shared workspace'} as ${teamMembership.role}`}>
+                                                    👥 {teamMembership.role}
+                                                </span>
+                                            )}
+                                            {!teamMembership && (teamMembers || []).filter(m => m.status === 'active').length > 0 && (
+                                                <span className="text-xs text-slate-400" title="Active team members">
+                                                    👥 {(teamMembers || []).filter(m => m.status === 'active').length + 1}
+                                                </span>
+                                            )}
+                                            <button onClick={async () => { try { await firebaseAuth.signOut(); } catch {} }}
+                                                className="flex items-center gap-1.5 text-green-400 hover:text-green-300 transition-colors"
+                                                title={`Signed in as ${firebaseUser.email}\nClick to sign out`}>
+                                                <img src={firebaseUser.photoURL || ''} className="w-5 h-5 rounded-full" 
+                                                    onError={(e) => { e.target.style.display = 'none'; }}
+                                                />
+                                                <span className="max-w-[100px] truncate">{firebaseUser.displayName?.split(' ')[0] || firebaseUser.email?.split('@')[0]}</span>
+                                            </button>
+                                        </React.Fragment>
                                     ) : (
                                         <button onClick={async () => {
                                                 if (isFileProtocol) return;
@@ -8356,6 +8567,8 @@
                             globalInterfaces={globalInterfaces}
                             globalDependencies={globalDependencies}
                             globalDependencyAlerts={globalDependencyAlerts}
+                            globalActivity={globalActivity}
+                            teamMembers={teamMembers}
                         />
                     )}
                     
@@ -8388,7 +8601,7 @@
                     )}
                     
                     {view === 'settings' && (
-                        <SettingsView token={githubToken} setToken={setGithubToken} settings={settings} setSettings={setSettings} repoCount={availableRepos.length} syncStatus={syncStatus} onForceSync={handleForceSync} config={config} onConfigChange={handleConfigChange} />
+                        <SettingsView token={githubToken} setToken={setGithubToken} settings={settings} setSettings={setSettings} repoCount={availableRepos.length} syncStatus={syncStatus} onForceSync={handleForceSync} config={config} onConfigChange={handleConfigChange} firebaseUid={firebaseUid} firebaseUser={firebaseUser} teamMembers={teamMembers} teamMembership={teamMembership} />
                     )}
                     
                     {view === 'setup' && (
@@ -11824,6 +12037,7 @@
         // Session docs: change often, upload each time
         const SESSION_DOCS = [
             { name: 'SESSION_BRIEF.md', desc: 'Auto-generated session context with current state', changeFreq: 'Every session — auto-generated' },
+            { name: 'PRODUCT_BRIEF.md', desc: 'Auto-generated product description in PM language', changeFreq: 'Every session — auto-generated' },
             { name: 'CHANGELOG.md', desc: 'Full version history', changeFreq: 'Every deploy — new entries added' },
             { name: 'RELEASE_NOTES.txt', desc: 'Human-readable release notes', changeFreq: 'Every deploy — new entries added' },
             { name: 'PROJECT_PLAN.md', desc: 'Roadmap and planned features', changeFreq: 'Moderate — updated as scope evolves' },
@@ -11836,6 +12050,7 @@
             const persistentTokenEstimates = {
                 'CONTEXT.md': 12000,       // ~35KB typical
                 'CLAUDE_INSTRUCTIONS.md': 4000,  // ~12KB typical
+                'PRODUCT_BRIEF.md': 3000,  // ~8KB typical (Phase 5.5)
                 'ARCHITECTURE.md': 6000,    // ~18KB typical
                 'CLAUDE-PREP-STANDARD.md': 3500,  // ~10KB typical
             };
@@ -17338,7 +17553,7 @@
     // SESSION LOG VIEW
     // =========================================================================
     
-    function SessionLogView({ apps, sessionLog, setSessionLog, deployments, github, onFileDrop, showAlert, globalSessions, globalWorkItems, firebaseUid, config, globalStreams, globalInterfaces, globalDependencies, globalDependencyAlerts }) {
+    function SessionLogView({ apps, sessionLog, setSessionLog, deployments, github, onFileDrop, showAlert, globalSessions, globalWorkItems, firebaseUid, config, globalStreams, globalInterfaces, globalDependencies, globalDependencyAlerts, globalActivity, teamMembers }) {
         const [newEntry, setNewEntry] = React.useState('');
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         const [syncStatus, setSyncStatus] = React.useState('local');
@@ -17684,7 +17899,8 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
                 <div className="flex gap-1 bg-slate-800/50 rounded-lg p-1">
                     {[
                         { id: 'log', label: '📝 Session Log', count: null },
-                        { id: 'history', label: '🔄 Session History', count: (globalSessions || []).length || null }
+                        { id: 'history', label: '🔄 Session History', count: (globalSessions || []).length || null },
+                        { id: 'activity', label: '📡 Activity Feed', count: (globalActivity || []).length || null }
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -17993,6 +18209,195 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
                         onStartReview={(session) => setReviewingSession(session)}
                     />
                 )}
+                
+                {activeSubTab === 'activity' && (() => {
+                    const activities = globalActivity || [];
+                    const [actFilter, setActFilter] = React.useState({ actor: '', app: '', action: '', stream: '' });
+                    
+                    // Get unique values for filters
+                    const actors = [...new Set(activities.map(a => a.actor).filter(Boolean))];
+                    const actApps = [...new Set(activities.map(a => a.appId).filter(Boolean))];
+                    const actions = [...new Set(activities.map(a => a.action).filter(Boolean))];
+                    const actStreams = [...new Set(activities.map(a => a.streamId).filter(Boolean))];
+                    
+                    // Apply filters
+                    const filtered = activities.filter(evt => {
+                        if (actFilter.actor && evt.actor !== actFilter.actor) return false;
+                        if (actFilter.app && evt.appId !== actFilter.app) return false;
+                        if (actFilter.action && evt.action !== actFilter.action) return false;
+                        if (actFilter.stream && evt.streamId !== actFilter.stream) return false;
+                        return true;
+                    });
+                    
+                    // Group by day
+                    const grouped = {};
+                    filtered.forEach(evt => {
+                        const day = new Date(evt.timestamp).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                        if (!grouped[day]) grouped[day] = [];
+                        grouped[day].push(evt);
+                    });
+                    
+                    const actionIcons = {
+                        deploy: '🚀', session_create: '🤖', session_complete: '✅',
+                        item_transition: '📋', review: '📝', scope: '🎯',
+                        dependency_alert: '⚠️', stream_update: '🔀'
+                    };
+                    
+                    const actionColors = {
+                        deploy: 'text-green-400', session_create: 'text-indigo-400', session_complete: 'text-emerald-400',
+                        item_transition: 'text-slate-300', review: 'text-amber-400', scope: 'text-purple-400',
+                        dependency_alert: 'text-orange-400', stream_update: 'text-cyan-400'
+                    };
+                    
+                    // Per-actor stats
+                    const actorStats = {};
+                    activities.forEach(evt => {
+                        const a = evt.actor || 'Unknown';
+                        if (!actorStats[a]) actorStats[a] = { deploys: 0, sessions: 0, items: 0, total: 0 };
+                        actorStats[a].total++;
+                        if (evt.action === 'deploy') actorStats[a].deploys++;
+                        if (evt.action === 'session_create' || evt.action === 'session_complete') actorStats[a].sessions++;
+                        if (evt.action === 'item_transition') actorStats[a].items++;
+                    });
+                    
+                    // Team member lookup
+                    const memberLookup = {};
+                    (teamMembers || []).forEach(m => { memberLookup[m.name || m.email] = m; });
+                    
+                    return (
+                        <div className="space-y-4">
+                            {/* Stats Row */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold text-white">{activities.length}</div>
+                                    <div className="text-xs text-slate-400">Total Events</div>
+                                </div>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold text-white">{actors.length}</div>
+                                    <div className="text-xs text-slate-400">Contributors</div>
+                                </div>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold text-green-400">{activities.filter(a => a.action === 'deploy').length}</div>
+                                    <div className="text-xs text-slate-400">Deploys</div>
+                                </div>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold text-indigo-400">{activities.filter(a => a.action === 'session_create').length}</div>
+                                    <div className="text-xs text-slate-400">Sessions</div>
+                                </div>
+                            </div>
+                            
+                            {/* Per-Actor Summary (multi-person view) */}
+                            {actors.length > 1 && (
+                                <div className="bg-slate-800 rounded-xl border border-slate-700 p-4">
+                                    <h3 className="font-semibold mb-3 text-sm">👥 Team Activity</h3>
+                                    <div className="space-y-2">
+                                        {Object.entries(actorStats).sort((a, b) => b[1].total - a[1].total).map(([name, stats]) => {
+                                            const member = memberLookup[name];
+                                            return (
+                                                <div key={name} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-700/50">
+                                                    {member?.photoURL ? (
+                                                        <img src={member.photoURL} className="w-6 h-6 rounded-full" alt="" />
+                                                    ) : (
+                                                        <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold">{name[0]}</div>
+                                                    )}
+                                                    <span className="text-sm font-medium flex-1">{name}</span>
+                                                    <span className="text-xs text-green-400">{stats.deploys}🚀</span>
+                                                    <span className="text-xs text-indigo-400">{stats.sessions}🤖</span>
+                                                    <span className="text-xs text-slate-400">{stats.items}📋</span>
+                                                    <span className="text-xs text-slate-500">{stats.total} total</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Filters */}
+                            <div className="flex flex-wrap gap-2">
+                                {actors.length > 1 && (
+                                    <select value={actFilter.actor} onChange={e => setActFilter(f => ({...f, actor: e.target.value}))}
+                                        className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs">
+                                        <option value="">All people</option>
+                                        {actors.map(a => <option key={a} value={a}>{a}</option>)}
+                                    </select>
+                                )}
+                                <select value={actFilter.app} onChange={e => setActFilter(f => ({...f, app: e.target.value}))}
+                                    className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs">
+                                    <option value="">All apps</option>
+                                    {actApps.map(a => <option key={a} value={a}>{a}</option>)}
+                                </select>
+                                <select value={actFilter.action} onChange={e => setActFilter(f => ({...f, action: e.target.value}))}
+                                    className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs">
+                                    <option value="">All actions</option>
+                                    {actions.map(a => <option key={a} value={a}>{actionIcons[a] || '•'} {a.replace(/_/g, ' ')}</option>)}
+                                </select>
+                                {actStreams.length > 0 && (
+                                    <select value={actFilter.stream} onChange={e => setActFilter(f => ({...f, stream: e.target.value}))}
+                                        className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-xs">
+                                        <option value="">All streams</option>
+                                        {actStreams.map(s => {
+                                            const stream = (globalStreams || []).find(st => st.id === s);
+                                            return <option key={s} value={s}>{stream?.name || s}</option>;
+                                        })}
+                                    </select>
+                                )}
+                                {(actFilter.actor || actFilter.app || actFilter.action || actFilter.stream) && (
+                                    <button onClick={() => setActFilter({ actor: '', app: '', action: '', stream: '' })}
+                                        className="px-2 py-1 text-xs text-red-400 hover:text-red-300">✕ Clear</button>
+                                )}
+                                <span className="text-xs text-slate-500 self-center ml-auto">{filtered.length} events</span>
+                            </div>
+                            
+                            {/* Timeline grouped by day */}
+                            {Object.entries(grouped).length === 0 ? (
+                                <div className="text-center py-12 text-slate-500">
+                                    <div className="text-4xl mb-2">📡</div>
+                                    <div>No activity events{actFilter.actor || actFilter.app || actFilter.action ? ' matching filters' : ' yet'}</div>
+                                    <div className="text-xs mt-1">Events appear when you deploy, start sessions, transition work items, or review</div>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {Object.entries(grouped).map(([day, events]) => (
+                                        <div key={day}>
+                                            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 sticky top-0 bg-slate-900/80 backdrop-blur-sm py-1 z-10">{day}</div>
+                                            <div className="space-y-1 border-l-2 border-slate-700 ml-2 pl-4">
+                                                {events.map(evt => {
+                                                    const time = new Date(evt.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                                                    const member = memberLookup[evt.actor];
+                                                    return (
+                                                        <div key={evt.id} className="flex items-start gap-2 py-1.5 group">
+                                                            <span className="text-sm mt-0.5">{actionIcons[evt.action] || '•'}</span>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className={`text-sm leading-relaxed ${actionColors[evt.action] || 'text-slate-300'}`}>
+                                                                    {evt.summary}
+                                                                </div>
+                                                                {evt.metadata && Object.keys(evt.metadata).length > 0 && (
+                                                                    <div className="text-xs text-slate-500 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                        {evt.metadata.version && `v${evt.metadata.version}`}
+                                                                        {evt.metadata.sessionType && ` · ${evt.metadata.sessionType}`}
+                                                                        {evt.metadata.environment && ` → ${evt.metadata.environment}`}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5 shrink-0">
+                                                                {member?.photoURL ? (
+                                                                    <img src={member.photoURL} className="w-4 h-4 rounded-full" alt="" title={evt.actor} />
+                                                                ) : actors.length > 1 ? (
+                                                                    <div className="w-4 h-4 rounded-full bg-slate-600 flex items-center justify-center text-[10px] font-bold" title={evt.actor}>{(evt.actor || '?')[0]}</div>
+                                                                ) : null}
+                                                                <span className="text-xs text-slate-500 tabular-nums">{time}</span>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
                 
                 {/* Phase 3: Post-Session Review Modal */}
                 {reviewingSession && (
@@ -19387,6 +19792,275 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
         
         return md;
     }
+    
+    // =========================================================================
+    // PRODUCT BRIEF GENERATOR (Phase 5.5)
+    // Auto-generated living document in PM language describing the product.
+    // Included in Claude Prep packages so any stream owner gets product context
+    // without needing another stream's source code.
+    // =========================================================================
+    
+    const ProductBriefGenerator = {
+        
+        /**
+         * Generate PRODUCT_BRIEF.md from existing CC data sources.
+         * @param {Object} app - App definition from CC config
+         * @param {Object} scopeData - Scope data from Firebase appScopes/{appId} (nullable)
+         * @param {Object} config - CC config (for project info)
+         * @param {Array} workItems - All work items (will be filtered to this app)
+         * @param {Array} deployments - Deploy history
+         * @param {Array} streams - Work streams (nullable)
+         * @returns {string} Markdown content for PRODUCT_BRIEF.md
+         */
+        generate(app, scopeData, config, workItems, deployments, streams) {
+            const now = new Date();
+            const projectDef = config?.projects?.[app.project] || {};
+            const appItems = (workItems || []).filter(wi => wi.appId === app.id);
+            const appStreams = (streams || []).filter(s => s.appId === app.id);
+            const appDeploys = (deployments || []).filter(d => d.appId === app.id && d.status === 'success');
+            const cat = scopeData?.category ? (SCOPE_CATEGORIES[scopeData.category] || {}) : {};
+            
+            let md = '';
+            
+            // === Header ===
+            md += `# ${app.name} — Product Brief\n\n`;
+            md += `> Living document auto-generated from Command Center project data.\n`;
+            md += `> Describes what the product does in PM language — not how it's built.\n`;
+            md += `> Updated: ${now.toLocaleDateString()}\n\n`;
+            
+            // === Product Identity ===
+            md += `## Product Identity\n\n`;
+            const description = scopeData?.description || app.lifecycle?.problemStatement || '';
+            if (description) {
+                md += `${description}\n\n`;
+            }
+            md += `- **Category:** ${cat.icon || app.icon || '📦'} ${cat.label || scopeData?.category || app.lifecycle?.category || 'Application'}\n`;
+            if (projectDef.name) md += `- **Project:** ${projectDef.name}\n`;
+            md += `- **Maturity:** ${app.lifecycle?.currentMaturity || 'unknown'}`;
+            if (app.lifecycle?.maturityTarget && app.lifecycle.maturityTarget !== app.lifecycle.currentMaturity) {
+                md += ` → ${app.lifecycle.maturityTarget}`;
+            }
+            md += `\n`;
+            if (app.lifecycle?.targetAudience) md += `- **Audience:** ${app.lifecycle.targetAudience}\n`;
+            if (app.lifecycle?.userGoal) md += `- **User Goal:** ${app.lifecycle.userGoal}\n`;
+            if (app.lifecycle?.successMetric) md += `- **Success Metric:** ${app.lifecycle.successMetric}\n`;
+            
+            const prodVer = app.versions?.prod || app.versions?.test || '—';
+            const lastDeploy = appDeploys[0];
+            md += `- **Current Version:** ${prodVer}`;
+            if (lastDeploy) {
+                md += ` (deployed ${new Date(lastDeploy.completedAt || lastDeploy.startedAt).toLocaleDateString()})`;
+            }
+            md += `\n\n`;
+            
+            // === Key Product Decisions ===
+            if (scopeData?.categoryAnswers && Object.keys(scopeData.categoryAnswers).length > 0) {
+                md += `## Key Product Decisions\n\n`;
+                md += this._formatProductDecisions(scopeData, cat);
+                md += '\n';
+            }
+            
+            // === Feature Inventory ===
+            md += this._generateFeatureInventory(appItems, scopeData);
+            
+            // === Work Streams (if any) ===
+            if (appStreams.length > 0) {
+                md += this._generateStreamOverview(appStreams, appItems);
+            }
+            
+            // === Recent Activity ===
+            if (appDeploys.length > 0) {
+                md += `## Recent Releases\n\n`;
+                const recent = appDeploys.slice(0, 5);
+                recent.forEach(d => {
+                    const date = new Date(d.completedAt || d.startedAt).toLocaleDateString();
+                    const env = (d.target || 'prod').toUpperCase();
+                    md += `- **v${d.version || '?'}** (${date}, ${env})`;
+                    if (d.workItemsCompleted) md += ` — ${d.workItemsCompleted} item${d.workItemsCompleted !== 1 ? 's' : ''} shipped`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            // === Decisions from Scoping ===
+            if (scopeData?.decisions && scopeData.decisions.length > 0) {
+                md += `## Open Decisions\n\n`;
+                scopeData.decisions.forEach(d => {
+                    md += `- ${d.title || d}`;
+                    if (d.status === 'resolved') md += ` ✅`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            md += `---\n`;
+            md += `*Generated ${now.toLocaleDateString()} by Command Center v${document.querySelector('meta[name="version"]')?.content || '?'}*\n`;
+            
+            return md;
+        },
+        
+        /**
+         * Format scoping category answers as human-readable product decisions.
+         */
+        _formatProductDecisions(scopeData, cat) {
+            const answers = scopeData.categoryAnswers || {};
+            let md = '';
+            
+            // Map technical scope answers to PM-language decisions
+            const decisionMap = {
+                // Game
+                difficulty: { label: 'Difficulty', format: v => v === 'easy-hard' ? 'Two modes (Easy & Hard)' : v === 'multiple' ? 'Multiple levels' : 'No difficulty modes' },
+                scoring: { label: 'Scoring', format: v => v === 'points' ? 'Point-based scoring' : v === 'stars' ? 'Star rating' : v === 'streaks' ? 'Streak-based' : v || 'None' },
+                dailyPuzzle: { label: 'Daily Content', format: v => v ? 'Yes — daily puzzle/challenge' : 'No — play anytime' },
+                multiplayer: { label: 'Multiplayer', format: v => v ? 'Yes' : 'No — single player' },
+                sharing: { label: 'Share Results', format: v => v ? 'Yes — shareable results' : 'No sharing' },
+                
+                // Tool
+                multiItem: { label: 'Item Model', format: v => v === 'list' ? 'Works with a list of items' : v === 'single' ? 'Single item at a time' : v || 'Unknown' },
+                dataPersistence: { label: 'Data Persistence', format: v => v === 'firebase' ? 'Saves to cloud (syncs across devices)' : v === 'localStorage' ? 'Saves locally (this device only)' : v === 'none' ? 'No save — session only' : v || 'Unknown' },
+                exportImport: { label: 'Import/Export', format: v => v ? 'Yes' : 'No' },
+                
+                // Dashboard
+                dataSource: { label: 'Data Source', format: v => v === 'firebase' ? 'Database' : v === 'api' ? 'External service' : v === 'manual' ? 'User input' : v || 'Unknown' },
+                dataUpdates: { label: 'Data Updates', format: v => v === 'realtime' ? 'Instant (real-time)' : v === 'periodic' ? 'Periodic auto-refresh' : 'Manual refresh' },
+                
+                // Content
+                contentType: { label: 'Content Updates', format: v => v === 'dynamic' ? 'Updates regularly' : 'Same every time' },
+                navigation: { label: 'Content Size', format: v => v === 'paginated' ? 'Many pages' : v === 'multi-section' ? 'Multiple sections' : 'Single page' },
+                
+                // Admin
+                crudOperations: { label: 'CRUD', format: v => v ? 'Create, edit, and delete records' : 'Read-only' },
+                authRequired: { label: 'Authentication', format: v => v ? 'Login required' : 'No auth' }
+            };
+            
+            for (const [key, value] of Object.entries(answers)) {
+                const mapper = decisionMap[key];
+                if (mapper && value !== undefined && value !== null && value !== '') {
+                    md += `- **${mapper.label}:** ${mapper.format(value)}\n`;
+                }
+            }
+            
+            return md;
+        },
+        
+        /**
+         * Generate the feature inventory section from work items and scope data.
+         */
+        _generateFeatureInventory(appItems, scopeData) {
+            let md = `## Feature Inventory\n\n`;
+            
+            // Shipped features (done work items)
+            const shipped = appItems.filter(wi => wi.status === 'done' && (wi.type === 'feature' || wi.type === 'enhancement'));
+            // In-progress
+            const inProgress = appItems.filter(wi => (wi.status === 'in-progress' || wi.status === 'review') && (wi.type === 'feature' || wi.type === 'enhancement'));
+            // Planned (ready)
+            const planned = appItems.filter(wi => wi.status === 'ready' && (wi.type === 'feature' || wi.type === 'enhancement'));
+            // Ideas
+            const ideas = appItems.filter(wi => wi.status === 'idea' && (wi.type === 'feature' || wi.type === 'enhancement'));
+            
+            if (shipped.length > 0) {
+                md += `### Shipped (${shipped.length})\n`;
+                shipped.forEach(wi => {
+                    md += `- ✅ ${wi.title}`;
+                    if (wi.milestone) md += ` (${wi.milestone})`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            if (inProgress.length > 0) {
+                md += `### In Progress (${inProgress.length})\n`;
+                inProgress.forEach(wi => {
+                    md += `- 🔄 ${wi.title}`;
+                    if (wi.status === 'review') md += ` — in review`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            if (planned.length > 0) {
+                md += `### Planned (${planned.length})\n`;
+                planned.forEach(wi => {
+                    md += `- 📋 ${wi.title}`;
+                    if (wi.priority === 'must-have' || wi.priority === 'core') md += ` ⭐`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            if (ideas.length > 0) {
+                md += `### Ideas (${ideas.length})\n`;
+                ideas.slice(0, 10).forEach(wi => {
+                    md += `- 💡 ${wi.title}\n`;
+                });
+                if (ideas.length > 10) md += `- *...and ${ideas.length - 10} more ideas*\n`;
+                md += '\n';
+            }
+            
+            // Also pull from scope's future features if no work items exist yet
+            if (shipped.length === 0 && inProgress.length === 0 && planned.length === 0 && scopeData?.v1Features) {
+                md += `### Launch Features (from scope)\n`;
+                (scopeData.v1Features || []).filter(f => f.priority !== 'out-of-scope').forEach(f => {
+                    md += `- ${f.title}`;
+                    if (f.priority === 'core' || f.priority === 'must-have') md += ` ⭐`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            if (shipped.length === 0 && inProgress.length === 0 && planned.length === 0 && !scopeData?.v1Features) {
+                md += `*No features tracked yet. Use the Scoping flow or Backlog to define features.*\n\n`;
+            }
+            
+            // Known bugs count
+            const bugs = appItems.filter(wi => wi.type === 'bugfix' && wi.status !== 'done' && wi.status !== 'deferred');
+            if (bugs.length > 0) {
+                md += `### Known Issues (${bugs.length})\n`;
+                bugs.forEach(wi => {
+                    md += `- 🐛 ${wi.title}`;
+                    if (wi.priority === 'must-have' || wi.priority === 'critical') md += ` ❗`;
+                    md += `\n`;
+                });
+                md += '\n';
+            }
+            
+            return md;
+        },
+        
+        /**
+         * Generate stream overview section.
+         */
+        _generateStreamOverview(appStreams, appItems) {
+            let md = `## Work Streams\n\n`;
+            
+            appStreams.forEach(stream => {
+                const streamItems = appItems.filter(wi => wi.streamId === stream.id);
+                const done = streamItems.filter(wi => wi.status === 'done').length;
+                const total = streamItems.length;
+                const pct = total > 0 ? Math.round(done / total * 100) : 0;
+                
+                md += `### ${stream.name}`;
+                if (stream.status === 'complete') md += ` ✅`;
+                else if (stream.status === 'blocked') md += ` 🚫`;
+                md += `\n`;
+                if (stream.owner) md += `- **Owner:** ${stream.owner}\n`;
+                if (stream.goal) md += `- **Goal:** ${stream.goal}\n`;
+                md += `- **Progress:** ${done}/${total} items (${pct}%)\n`;
+                if (stream.status !== 'active' && stream.status !== 'complete') md += `- **Status:** ${stream.status}\n`;
+                md += '\n';
+            });
+            
+            return md;
+        },
+        
+        /**
+         * Check if enough data exists to generate a useful brief.
+         */
+        hasData(app, scopeData, workItems) {
+            const appItems = (workItems || []).filter(wi => wi.appId === app.id);
+            return !!(scopeData || appItems.length > 0 || app.lifecycle?.problemStatement || app.lifecycle?.category);
+        }
+    };
     
     // =========================================================================
     // CONTEXT.md GENERATOR (Phase 3.2)
@@ -25017,6 +25691,7 @@ const pushIssueToCommandCenter = async (testResult) => {
         const [newProjectForm, setNewProjectForm] = React.useState(null);
         const [newAppForm, setNewAppForm] = React.useState(null);
         const [prepApp, setPrepApp] = React.useState(null);
+        const [viewBriefApp, setViewBriefApp] = React.useState(null); // Phase 5.5: Product Brief viewer
         
         const formatDate = (ts) => {
             if (!ts) return '—';
@@ -25352,6 +26027,10 @@ const pushIssueToCommandCenter = async (testResult) => {
                                                     
                                                     {/* Actions */}
                                                     <div className="col-span-1 flex gap-1 justify-end">
+                                                        <button onClick={() => setViewBriefApp(app)}
+                                                            className="p-1.5 text-slate-500 hover:text-blue-400 hover:bg-slate-700 rounded" title="Product Brief">
+                                                            📄
+                                                        </button>
                                                         <button onClick={() => setPrepApp(app)}
                                                             className="p-1.5 text-slate-500 hover:text-purple-400 hover:bg-slate-700 rounded" title="Claude Prep">
                                                             🤖
@@ -25417,7 +26096,122 @@ const pushIssueToCommandCenter = async (testResult) => {
                         globalStreams={globalStreams}
                     />
                 )}
+                
+                {/* Product Brief Modal (Phase 5.5) */}
+                {viewBriefApp && (
+                    <ProductBriefModal
+                        app={viewBriefApp}
+                        config={config}
+                        globalWorkItems={globalWorkItems}
+                        deployments={deployments || []}
+                        globalStreams={globalStreams}
+                        firebaseUid={firebaseUid}
+                        onClose={() => setViewBriefApp(null)}
+                        showAlert={showAlert}
+                    />
+                )}
             </div>
+        );
+    }
+
+    // =========================================================================
+    // PRODUCT BRIEF MODAL (Phase 5.5)
+    // Lightweight viewer for auto-generated Product Brief
+    // =========================================================================
+    function ProductBriefModal({ app, config, globalWorkItems, deployments, globalStreams, firebaseUid, onClose, showAlert }) {
+        const [briefContent, setBriefContent] = React.useState(null);
+        const [loading, setLoading] = React.useState(true);
+        
+        React.useEffect(() => {
+            async function loadBrief() {
+                try {
+                    let scopeData = null;
+                    if (firebaseUid && typeof firebaseDb !== 'undefined' && firebaseDb) {
+                        try {
+                            const snap = await firebaseDb.ref(`command-center/${firebaseUid}/appScopes/${app.id}`).once('value');
+                            scopeData = snap.val();
+                        } catch (e) { /* scope data optional */ }
+                    }
+                    
+                    const brief = ProductBriefGenerator.generate(app, scopeData, config, globalWorkItems, deployments, globalStreams);
+                    setBriefContent(brief);
+                } catch (e) {
+                    setBriefContent(`# Error\n\nCould not generate product brief: ${e.message}`);
+                }
+                setLoading(false);
+            }
+            loadBrief();
+        }, [app.id]);
+        
+        const copyBrief = () => {
+            if (briefContent) {
+                navigator.clipboard.writeText(briefContent);
+                showAlert('Product brief copied to clipboard', 'success');
+            }
+        };
+        
+        // Simple markdown renderer (reuse pattern from elsewhere in CC)
+        const renderMarkdown = (md) => {
+            if (!md) return null;
+            const lines = md.split('\n');
+            const elements = [];
+            let i = 0;
+            
+            while (i < lines.length) {
+                const line = lines[i];
+                
+                if (line.startsWith('# ')) {
+                    elements.push(React.createElement('h1', { key: i, className: 'text-xl font-bold text-white mb-2 mt-4' }, line.slice(2)));
+                } else if (line.startsWith('## ')) {
+                    elements.push(React.createElement('h2', { key: i, className: 'text-lg font-semibold text-slate-200 mb-2 mt-4 border-b border-slate-700 pb-1' }, line.slice(3)));
+                } else if (line.startsWith('### ')) {
+                    elements.push(React.createElement('h3', { key: i, className: 'text-base font-medium text-slate-300 mb-1 mt-3' }, line.slice(4)));
+                } else if (line.startsWith('> ')) {
+                    elements.push(React.createElement('blockquote', { key: i, className: 'text-xs text-slate-500 italic border-l-2 border-slate-700 pl-2 mb-1' }, line.slice(2)));
+                } else if (line.startsWith('- ')) {
+                    elements.push(React.createElement('div', { key: i, className: 'text-sm text-slate-300 ml-3 mb-0.5' }, '• ' + line.slice(2).replace(/\*\*([^*]+)\*\*/g, (_, t) => t)));
+                } else if (line.startsWith('---')) {
+                    elements.push(React.createElement('hr', { key: i, className: 'border-slate-700 my-3' }));
+                } else if (line.startsWith('*') && line.endsWith('*') && !line.startsWith('**')) {
+                    elements.push(React.createElement('p', { key: i, className: 'text-xs text-slate-600 italic' }, line.replace(/\*/g, '')));
+                } else if (line.trim()) {
+                    elements.push(React.createElement('p', { key: i, className: 'text-sm text-slate-300 mb-1' }, line.replace(/\*\*([^*]+)\*\*/g, (_, t) => t)));
+                }
+                i++;
+            }
+            return elements;
+        };
+        
+        return React.createElement('div', {
+            className: 'fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4',
+            onClick: (e) => e.target === e.currentTarget && onClose()
+        },
+            React.createElement('div', { className: 'bg-slate-800 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-slate-700 shadow-2xl' },
+                // Header
+                React.createElement('div', { className: 'flex items-center justify-between p-4 border-b border-slate-700' },
+                    React.createElement('div', { className: 'flex items-center gap-2' },
+                        React.createElement('span', { className: 'text-lg' }, '📄'),
+                        React.createElement('h2', { className: 'text-lg font-semibold text-white' }, `Product Brief — ${app.name}`),
+                    ),
+                    React.createElement('div', { className: 'flex gap-2' },
+                        React.createElement('button', {
+                            onClick: copyBrief,
+                            className: 'px-3 py-1.5 text-sm bg-slate-700 text-slate-300 rounded hover:bg-slate-600 transition-colors',
+                            title: 'Copy markdown to clipboard'
+                        }, '📋 Copy'),
+                        React.createElement('button', {
+                            onClick: onClose,
+                            className: 'p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors'
+                        }, '✕')
+                    )
+                ),
+                // Content
+                React.createElement('div', { className: 'flex-1 overflow-y-auto p-4' },
+                    loading
+                        ? React.createElement('div', { className: 'flex items-center justify-center py-12 text-slate-400' }, '⏳ Generating brief...')
+                        : renderMarkdown(briefContent)
+                )
+            )
         );
     }
 
@@ -25588,6 +26382,7 @@ const pushIssueToCommandCenter = async (testResult) => {
         // Known doc files always push to repo
         if (CLAUDE_PREP_DOCS.includes(fileName)) return 'push-doc';
         if (fileName === 'SESSION_BRIEF.md') return 'skip'; // Auto-generated, don't push
+        if (fileName === 'PRODUCT_BRIEF.md') return 'skip'; // Auto-generated, don't push (Phase 5.5)
         // .md and .txt files → push to repo
         if (DOC_FILE_EXTENSIONS.test(fileName)) return 'push-doc';
         // Everything else → deploy to GitHub Pages
@@ -26353,11 +27148,35 @@ ${repoStr || '- *No repos configured*'}
                     }
                 }
                 
+                // === Generate PRODUCT_BRIEF.md (Phase 5.5) ===
+                const hasProductBrief = files.some(f => f.name === 'PRODUCT_BRIEF.md');
+                if (!hasProductBrief && firebaseDb && firebaseAuth?.currentUser) {
+                    try {
+                        // Fetch scope data if not already fetched for CLAUDE_INSTRUCTIONS
+                        let briefScopeData = null;
+                        try {
+                            const scopeSnap = await firebaseDb.ref(`command-center/${firebaseAuth.currentUser.uid}/appScopes/${app.id}`).once('value');
+                            briefScopeData = scopeSnap.val();
+                        } catch (e) { /* scope data optional */ }
+                        
+                        if (ProductBriefGenerator.hasData(app, briefScopeData, globalWorkItems)) {
+                            const brief = ProductBriefGenerator.generate(app, briefScopeData, config, globalWorkItems, deployments, globalStreams);
+                            if (brief) {
+                                appFolder.file('PRODUCT_BRIEF.md', brief);
+                                files.push({ name: 'PRODUCT_BRIEF.md', size: brief.length, generated: true, tokens: TokenRegistryService.estimateTokens(brief, 'PRODUCT_BRIEF.md') });
+                                addLog('📄 Generated PRODUCT_BRIEF.md — product context for all streams');
+                            }
+                        }
+                    } catch (e) {
+                        addLog('\u26a0\ufe0f Could not generate PRODUCT_BRIEF.md: ' + e.message, 'warn');
+                    }
+                }
+                
                 // === Scan for extra docs ===
                 addLog('\ud83d\udd0d Scanning for extra reference docs...');
                 setProgress({ current: 6, total: 9 });
                 
-                const alreadyFetched = new Set([...CLAUDE_PREP_DOCS, ...files.map(f => f.name), 'SESSION_BRIEF.md']);
+                const alreadyFetched = new Set([...CLAUDE_PREP_DOCS, ...files.map(f => f.name), 'SESSION_BRIEF.md', 'PRODUCT_BRIEF.md']);
                 const scanPath = subPath || '';
                 
                 try {
@@ -28985,7 +29804,7 @@ The developer uses Claude for iterative development — each session should:
     // SETTINGS VIEW
     // =========================================================================
     
-    function SettingsView({ token, setToken, settings, setSettings, repoCount, syncStatus, onForceSync, config, onConfigChange }) {
+    function SettingsView({ token, setToken, settings, setSettings, repoCount, syncStatus, onForceSync, config, onConfigChange, firebaseUid, firebaseUser, teamMembers, teamMembership }) {
         const [show, setShow] = React.useState(false);
         const [testing, setTesting] = React.useState(false);
         const [result, setResult] = React.useState(null);
@@ -29124,6 +29943,133 @@ The developer uses Claude for iterative development — each session should:
                     {config?.ownerName && (
                         <div className="mt-2 text-xs text-green-400">✓ Records will be attributed to "{config.ownerName}"</div>
                     )}
+                </div>
+                
+                {/* Team Management (v8.46.0 — Phase 5.7) */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                        👥 Team
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Invite collaborators to share your Command Center workspace. Team members see your apps, work items, streams, and activity.
+                    </p>
+                    
+                    {!firebaseUid ? (
+                        <div className="text-sm text-amber-400 bg-amber-900/20 border border-amber-700/30 rounded-lg p-3">
+                            ⚠️ Sign in with Google to manage team members
+                        </div>
+                    ) : teamMembership ? (
+                        <div className="text-sm text-slate-300 bg-slate-700/50 rounded-lg p-3">
+                            You're a <span className="font-semibold text-indigo-400">{teamMembership.role}</span> in{' '}
+                            <span className="font-semibold">{teamMembership.workspaceName || 'a shared workspace'}</span>.
+                            Team management is handled by the workspace owner.
+                        </div>
+                    ) : (() => {
+                        const [inviteEmail, setInviteEmail] = React.useState('');
+                        const [inviteRole, setInviteRole] = React.useState('editor');
+                        const [inviting, setInviting] = React.useState(false);
+                        const [showRules, setShowRules] = React.useState(false);
+                        
+                        const handleInvite = async () => {
+                            if (!inviteEmail.trim() || !inviteEmail.includes('@')) return;
+                            setInviting(true);
+                            try {
+                                await TeamService.invite(firebaseUid, inviteEmail.trim(), inviteRole, config?.ownerName || 'Owner');
+                                setInviteEmail('');
+                            } catch (e) {
+                                console.error('[Team] Invite failed:', e);
+                            }
+                            setInviting(false);
+                        };
+                        
+                        return (
+                            <div className="space-y-4">
+                                {/* Current owner */}
+                                <div className="flex items-center gap-3 p-3 bg-slate-700/30 rounded-lg">
+                                    {firebaseUser?.photoURL ? (
+                                        <img src={firebaseUser.photoURL} className="w-8 h-8 rounded-full" alt="" />
+                                    ) : (
+                                        <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-sm font-bold">
+                                            {(config?.ownerName || 'O')[0]}
+                                        </div>
+                                    )}
+                                    <div className="flex-1">
+                                        <div className="text-sm font-medium">{config?.ownerName || firebaseUser?.displayName || 'Owner'}</div>
+                                        <div className="text-xs text-slate-400">{firebaseUser?.email}</div>
+                                    </div>
+                                    <span className="px-2 py-0.5 bg-indigo-600/30 text-indigo-300 text-xs rounded-full font-medium">Owner</span>
+                                </div>
+                                
+                                {/* Team members list */}
+                                {(teamMembers || []).length > 0 && (
+                                    <div className="space-y-2">
+                                        {(teamMembers || []).map(member => (
+                                            <div key={member.uid} className="flex items-center gap-3 p-3 bg-slate-700/30 rounded-lg">
+                                                {member.photoURL ? (
+                                                    <img src={member.photoURL} className="w-8 h-8 rounded-full" alt="" />
+                                                ) : (
+                                                    <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-sm font-bold">
+                                                        {(member.name || member.email || '?')[0]}
+                                                    </div>
+                                                )}
+                                                <div className="flex-1">
+                                                    <div className="text-sm font-medium">{member.name || member.email}</div>
+                                                    <div className="text-xs text-slate-400">{member.email}</div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    {member.status === 'invited' && (
+                                                        <span className="px-2 py-0.5 bg-amber-600/20 text-amber-400 text-xs rounded-full">Pending</span>
+                                                    )}
+                                                    <select value={member.role} onChange={async (e) => {
+                                                        try { await TeamService.updateRole(firebaseUid, member.uid, e.target.value); }
+                                                        catch (err) { console.error('[Team] Role update failed:', err); }
+                                                    }} className="px-2 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs">
+                                                        <option value="editor">Editor</option>
+                                                        <option value="viewer">Viewer</option>
+                                                    </select>
+                                                    <button onClick={async () => {
+                                                        if (window.confirm(`Remove ${member.name || member.email} from team?`)) {
+                                                            try { await TeamService.remove(firebaseUid, member.uid); }
+                                                            catch (err) { console.error('[Team] Remove failed:', err); }
+                                                        }
+                                                    }} className="text-red-400 hover:text-red-300 text-xs px-1" title="Remove">✕</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {/* Invite form */}
+                                <div className="flex gap-2">
+                                    <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+                                        placeholder="email@example.com"
+                                        onKeyDown={e => e.key === 'Enter' && handleInvite()}
+                                        className="flex-1 p-2 bg-slate-700 border border-slate-600 rounded text-sm focus:border-indigo-500 focus:outline-none" />
+                                    <select value={inviteRole} onChange={e => setInviteRole(e.target.value)}
+                                        className="px-2 bg-slate-700 border border-slate-600 rounded text-xs">
+                                        <option value="editor">Editor</option>
+                                        <option value="viewer">Viewer</option>
+                                    </select>
+                                    <button onClick={handleInvite} disabled={inviting || !inviteEmail.includes('@')}
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded text-sm font-medium">
+                                        {inviting ? '...' : 'Invite'}
+                                    </button>
+                                </div>
+                                
+                                {/* Security rules template */}
+                                <details className="text-xs">
+                                    <summary className="text-slate-500 cursor-pointer hover:text-slate-400">
+                                        🔒 Firebase Security Rules Template
+                                    </summary>
+                                    <div className="mt-2 bg-slate-900 rounded p-3 font-mono text-slate-400 overflow-x-auto whitespace-pre text-[11px]">
+                                        {TeamService.generateRulesTemplate(firebaseUid)}
+                                    </div>
+                                    <button onClick={() => navigator.clipboard.writeText(TeamService.generateRulesTemplate(firebaseUid))}
+                                        className="mt-1 text-indigo-400 hover:text-indigo-300 text-xs">📋 Copy Rules</button>
+                                </details>
+                            </div>
+                        );
+                    })()}
                 </div>
                 
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
