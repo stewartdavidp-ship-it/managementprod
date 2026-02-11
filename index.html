@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.47.0">
+    <meta name="version" content="8.48.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -3489,7 +3489,8 @@
                 'Working implementation of specified features',
                 'Updated version number in all locations',
                 'RELEASE_NOTES.txt entry describing what was built',
-                'Deploy package (if PWA: include sw.js, manifest, icons)'
+                'Deploy package (if PWA: include sw.js, manifest, icons)',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md', 'CLAUDE-PREP-STANDARD.md'],
@@ -3517,7 +3518,8 @@
                 'Design document or specification',
                 'Architecture diagrams (described in text/markdown)',
                 'List of work items for implementation',
-                'Key decisions with rationale'
+                'Key decisions with rationale',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'ARCHITECTURE.md', 'PROJECT_PLAN.md', 'PRODUCT_BRIEF.md'],
@@ -3546,7 +3548,8 @@
                 'Targeted fix with minimal code changes',
                 'Updated version number (patch bump)',
                 'RELEASE_NOTES.txt entry describing what was fixed',
-                'Deploy package'
+                'Deploy package',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE-PREP-STANDARD.md'],
@@ -3574,7 +3577,8 @@
                 'Test cases or test plan document',
                 'Automated tests if test framework is available',
                 'Manual testing checklist for areas that cannot be automated',
-                'Coverage assessment'
+                'Coverage assessment',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md'],
@@ -3602,7 +3606,8 @@
                 'Research findings document',
                 'Comparison of alternatives (if applicable)',
                 'Concrete recommendation with rationale',
-                'Next steps or implementation plan'
+                'Next steps or implementation plan',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'PRODUCT_BRIEF.md'],
@@ -3630,7 +3635,8 @@
                 'Review findings organized by severity',
                 'Specific line/function references for each finding',
                 'Suggested fixes (described, not implemented)',
-                'Overall quality assessment'
+                'Overall quality assessment',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md', 'CLAUDE-PREP-STANDARD.md'],
@@ -3659,7 +3665,8 @@
                 'Polished code with UI/UX improvements',
                 'Updated version number (patch bump)',
                 'RELEASE_NOTES.txt entry describing improvements',
-                'Deploy package'
+                'Deploy package',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md', 'CLAUDE_INSTRUCTIONS.md'],
@@ -3687,7 +3694,8 @@
                 'Updated documentation files',
                 'No TODO placeholders remaining (where possible)',
                 'Accurate version references',
-                'CHANGELOG.md updated if documenting a release'
+                'CHANGELOG.md updated if documenting a release',
+                'SESSION_RETURN.json — structured session return manifest (see schema below)'
             ],
             contextStrategy: {
                 alwaysInclude: ['CONTEXT.md'],
@@ -3731,7 +3739,68 @@
                 brief += '\n';
             }
             
-            // === Target Work Items (if specified) ===
+            // === SESSION_RETURN.json Instructions (Phase A) ===
+            // Always included when a session type is specified — this is the structured handoff contract
+            if (typeInfo) {
+                brief += `### SESSION_RETURN.json — Return Manifest\n\n`;
+                brief += `**IMPORTANT:** When you finish this session, include a \`SESSION_RETURN.json\` file in your deploy package. `;
+                brief += `This structured manifest allows Command Center to auto-process your session results instead of requiring manual post-session review.\n\n`;
+                brief += `**Schema:**\n`;
+                brief += '```json\n';
+                brief += `{
+  "version": "1.0",
+  "sessionType": "${typeInfo.id}",
+  "timestamp": "<ISO 8601 timestamp when session completed>",
+  "summary": "<1-2 sentence summary of what was accomplished>",
+  "versionBump": {
+    "from": "<version at session start or null>",
+    "to": "<version at session end or null>",
+    "bumpType": "<major|minor|patch|none>"
+  },
+  "workItems": [
+    {
+      "id": "<work item ID from Target Work Items above, e.g. WI-001>",
+      "status": "<completed|partial|blocked|deferred>",
+      "notes": "<what was done, or why blocked/deferred>"
+    }
+  ],
+  "discoveredIssues": [
+    {
+      "title": "<short title>",
+      "description": "<what you found>",
+      "severity": "<critical|high|medium|low>",
+      "suggestedType": "<bugfix|enhancement|chore|research>"
+    }
+  ],
+  "discoveredIdeas": [
+    {
+      "title": "<short title>",
+      "description": "<the idea or improvement>",
+      "suggestedType": "<feature|enhancement|research>"
+    }
+  ],
+  "interfaceChanges": [
+    {
+      "interface": "<name of changed interface, e.g. 'Firebase schema: /users/{uid}/stats'>",
+      "changeType": "<added|modified|removed|renamed>",
+      "description": "<what changed and why>",
+      "breakingChange": <true|false>
+    }
+  ],
+  "filesModified": ["<list of files changed in this session>"],
+  "filesCreated": ["<list of new files created>"],
+  "filesDeleted": ["<list of files removed>"],
+  "changelog": "<markdown-formatted changelog entry for this version, suitable for CHANGELOG.md>"
+}\n`;
+                brief += '```\n\n';
+                brief += `**Rules:**\n`;
+                brief += `- Include ALL sections even if empty (use empty arrays \`[]\`)\n`;
+                brief += `- \`workItems\` must reference the exact IDs from the Target Work Items section above\n`;
+                brief += `- \`discoveredIssues\` = bugs or problems found during the session that were NOT in scope to fix\n`;
+                brief += `- \`discoveredIdeas\` = enhancements or features thought of during the session\n`;
+                brief += `- \`interfaceChanges\` = any API, schema, event, or contract changes that other apps/streams might depend on\n`;
+                brief += `- \`changelog\` should follow the format: \`## vX.Y.Z — Title (Date)\\n- Change 1\\n- Change 2\`\n\n`;
+            }
             if (targetWorkItems && targetWorkItems.length > 0) {
                 brief += `## Target Work Items\n\n`;
                 targetWorkItems.forEach(wi => {
@@ -26462,6 +26531,7 @@ const pushIssueToCommandCenter = async (testResult) => {
         if (CLAUDE_PREP_DOCS.includes(fileName)) return 'push-doc';
         if (fileName === 'SESSION_BRIEF.md') return 'skip'; // Auto-generated, don't push
         if (fileName === 'PRODUCT_BRIEF.md') return 'skip'; // Auto-generated, don't push (Phase 5.5)
+        if (fileName === 'SESSION_RETURN.json') return 'skip'; // Session return manifest, processed by CC on drop (Phase A)
         // .md and .txt files → push to repo
         if (DOC_FILE_EXTENSIONS.test(fileName)) return 'push-doc';
         // Everything else → deploy to GitHub Pages
