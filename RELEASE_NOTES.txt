@@ -1,6 +1,96 @@
 Command Center — Release Notes
 ================================
 
+v8.48.1 — SESSION_RETURN.json: Structured Session Handoff (2026-02-11)
+----------------------------------------------------------------------
+Full implementation of the SESSION_RETURN.json contract — a structured 
+handoff mechanism that lets Claude sessions report results back to 
+Command Center in machine-readable format, replacing manual post-session 
+review when a return manifest is present.
+
+PHASE A — BRIEF GENERATION:
+All 8 session types (Build, Design, Fix, Test, Research, Review, Polish, 
+Document) now include SESSION_RETURN.json in their delivery requirements. 
+SessionBriefGenerator embeds the full JSON schema with typed fields, 
+pre-filled sessionType and sessionId for reliable return matching.
+
+PHASE B — AUTO-REVIEW PROCESSING:
+SESSION_RETURN.json is detected in both ZIP extraction and single-file 
+drop paths. Before the normal 'skip' handling discards the file, its 
+content is captured and validated.
+
+Schema validation (validateSessionReturn): checks required fields 
+(version, sessionType, timestamp, summary), validates enums for work 
+item statuses, severities, change types, bump types, and suggested types.
+
+Session matching (matchSessionReturn): 3-tier confidence algorithm:
+  1. Session ID match (high) — pre-filled from the brief
+  2. Work item ID overlap (high) — matches return WI IDs to session WIs
+  3. Session type + recency (medium/low) — type match or most recent
+
+AutoReviewModal component: displays parsed manifest in a full modal:
+  - Session match info with confidence indicator and reason
+  - Summary and version bump display
+  - Work items with editable status dropdowns (completed/partial/blocked/deferred)
+  - Discovered issues with severity and toggle to create work items
+  - Discovered ideas with toggle to create work items
+  - Interface changes with breaking change flags
+  - File changes summary (modified/created/deleted)
+  - Validation warnings display
+  - "Skip — Manual Review" fallback option
+
+Apply handler processes the manifest:
+  - Updates work item statuses via WorkItemService
+  - Creates new work items for issues (source: 'session-return')
+  - Creates new work items for ideas
+  - Completes session review via SessionService
+  - Stores returnManifest metadata on the session record
+  - Logs auto-review activity
+
+PHASE C — INTEGRATION POLISH:
+Session record creation moved before brief generation so the session ID 
+is available for embedding in the return manifest schema. This enables 
+highest-confidence matching when Claude returns the manifest.
+
+Session history shows a cyan "Auto-Reviewed" badge on sessions that were 
+processed via SESSION_RETURN.json (detected by review.reviewedBy field).
+
+Expanded session details display a "Return Manifest" section showing:
+version bump (from → to with bump type), counts of discovered 
+issues/ideas/interface changes, and the timestamp when applied.
+
+Sessions view shows a persistent banner when a pending SESSION_RETURN.json 
+has been captured but not yet applied, with an "Open Auto-Review" button.
+
+pendingSessionReturn and setPendingSessionReturn state threaded from 
+App component through SessionLogView for banner visibility.
+
+---
+
+v8.47.0 — Domain Management (2026-02-10)
+-----------------------------------------
+Firebase authorized domain management and GitHub Pages DNS health 
+checking directly from Command Center.
+
+FIREBASE AUTH DOMAINS:
+FirebaseAdmin class extended with Identity Toolkit API methods:
+  - getAuthConfig() — fetches project auth configuration
+  - getAuthorizedDomains() — lists currently authorized domains
+  - updateAuthorizedDomains(domains) — replaces domain list
+  - addAuthorizedDomain(domain) — appends without duplicates
+  - removeAuthorizedDomain(domain) — removes with validation
+
+testConnection() updated with 4th check point for auth config access.
+
+AuthorizedDomainsManager component in Settings: view, add, and remove 
+authorized domains for Firebase Authentication.
+
+GITHUB PAGES DNS:
+GitHubPagesDomainManager component with DNS record health checks for 
+custom domain configuration on GitHub Pages repos.
+
+---
+
 v8.46.0 — Unified Plan Phase 5.6–5.7: Activity Feed + Multi-Person Access
 ---------------------------------------------------------------------------
 Phase 5 complete! Command Center is now a multi-person coordination 
