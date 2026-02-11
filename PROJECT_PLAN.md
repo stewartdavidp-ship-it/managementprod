@@ -246,11 +246,22 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] globalDependencyAlerts state with Firebase listener
 - [x] Props threading — SessionLogView → PostSessionReviewModal, App → WorkStreamsView
 
+### Unified Plan Phase 5.5: Product Brief Auto-Generation (v8.45.0)
+- [x] ProductBriefGenerator — Auto-generates PRODUCT_BRIEF.md from scope, work items, deploys, streams, lifecycle
+- [x] Product Identity section — description, category, maturity, audience, goals, version
+- [x] Key Product Decisions — scope category answers formatted as PM-language decisions
+- [x] Feature Inventory — shipped/in-progress/planned/ideas from work items, fallback to scope features
+- [x] Work Streams overview — per-stream progress with owner and status
+- [x] PRODUCT_BRIEF.md in Claude Prep packages — auto-generated, included per context strategy
+- [x] Context strategies updated — alwaysInclude for design/research, preferInclude for all others
+- [x] ProductBriefModal — 📄 button on app rows, rendered markdown viewer with copy
+- [x] Environment Optimization — PRODUCT_BRIEF.md in doc listing with token estimate
+
 ---
 
 ## In Progress
 
-_(Unified Plan Phases 1–4 complete, Phase 5.1–5.4 complete — Phase 5.5–5.7 next: Product Brief, Activity Feed, Multi-Person Access)_
+_(Unified Plan Phases 1–4 complete, Phase 5.1–5.5 complete — Phase 5.6–5.7 next: Activity Feed, Multi-Person Access)_
 
 ---
 
