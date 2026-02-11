@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.42.0">
+    <meta name="version" content="8.44.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -1314,6 +1314,7 @@
             
             const item = {
                 appId: itemData.appId,
+                streamId: itemData.streamId || null,  // Phase 5.3: optional stream assignment
                 title: itemData.title,
                 description: itemData.description || '',
                 type: itemData.type || 'feature',
@@ -1408,6 +1409,16 @@
             return items.filter(i => i.appId === appId);
         },
         
+        // Get work items filtered by stream (Phase 5.3)
+        filterByStream(items, streamId) {
+            return items.filter(i => i.streamId === streamId);
+        },
+        
+        // Get unassigned work items (no stream) for an app
+        getUnassigned(items, appId) {
+            return items.filter(i => (!i.streamId) && (!appId || i.appId === appId));
+        },
+        
         // Get work items filtered by milestone
         filterByMilestone(items, milestone) {
             return items.filter(i => i.milestone === milestone);
@@ -1438,6 +1449,7 @@
             for (const itemData of itemsData) {
                 const item = {
                     appId: itemData.appId,
+                    streamId: itemData.streamId || null,  // Phase 5.3
                     title: itemData.title,
                     description: itemData.description || '',
                     type: itemData.type || 'feature',
@@ -1720,6 +1732,517 @@
                 summary: `${actor} reviewed ${appName} — ${criteriaMetCount}/${criteriaTotalCount} criteria met`,
                 metadata: { sessionId, criteriaMetCount, criteriaTotalCount }
             });
+        }
+    };
+    
+    /**
+     * WorkStreamService — Named, owned, parallel tracks of work (Phase 5.2)
+     * Wraps: Firebase RTDB `command-center/{uid}/streams` path
+     * 
+     * A work stream groups related work items into a coherent track:
+     *   id: 'WS-NNN' (auto-generated)
+     *   appId: which app this belongs to
+     *   name: "Core Gameplay", "Help & Onboarding"
+     *   owner: who owns this stream
+     *   goal: what done looks like
+     *   status: active | paused | blocked | complete
+     *   targetRelease: target version or milestone
+     *   blockedBy: [stream_id] — streams this depends on
+     *   blockedUntil: milestone description
+     *   createdAt, completedAt timestamps
+     */
+    const WorkStreamService = {
+        BASE_PATH: 'command-center',
+        
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/streams`);
+        },
+        
+        // Listen for all streams (returns unsubscribe function)
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, stream]) => ({ id, ...stream }));
+                    callback(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        // Create a new work stream
+        async create(uid, streamData) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            
+            const stream = {
+                appId: streamData.appId,
+                name: streamData.name,
+                owner: streamData.owner || 'Owner',
+                goal: streamData.goal || '',
+                status: streamData.status || 'active',
+                targetRelease: streamData.targetRelease || '',
+                blockedBy: streamData.blockedBy || [],
+                blockedUntil: streamData.blockedUntil || '',
+                createdAt: new Date().toISOString(),
+                createdBy: streamData.createdBy || 'Owner',
+                completedAt: null
+            };
+            
+            await ref.child(streamData.id).set(stream);
+            console.log(`[WorkStreamService] Created ${streamData.id}: ${stream.name}`);
+            return { id: streamData.id, ...stream };
+        },
+        
+        // Update a stream (partial)
+        async update(uid, streamId, updates) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(streamId).update(updates);
+            console.log(`[WorkStreamService] Updated ${streamId}`);
+        },
+        
+        // Delete a stream
+        async delete(uid, streamId) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(streamId).remove();
+            console.log(`[WorkStreamService] Deleted ${streamId}`);
+        },
+        
+        // Update status with timestamp management
+        async updateStatus(uid, streamId, newStatus) {
+            const updates = { status: newStatus };
+            if (newStatus === 'complete') {
+                updates.completedAt = new Date().toISOString();
+            } else {
+                updates.completedAt = null;
+            }
+            await this.update(uid, streamId, updates);
+            console.log(`[WorkStreamService] ${streamId} → ${newStatus}`);
+        },
+        
+        // Get streams filtered by app
+        filterByApp(streams, appId) {
+            return streams.filter(s => s.appId === appId);
+        },
+        
+        // Get active streams for an app
+        getActive(streams, appId) {
+            return streams.filter(s => s.status === 'active' && (!appId || s.appId === appId));
+        },
+        
+        // Get stream completion percentage from its work items
+        getCompletion(stream, workItems) {
+            const streamItems = workItems.filter(wi => wi.streamId === stream.id);
+            if (streamItems.length === 0) return { total: 0, done: 0, pct: 0 };
+            const done = streamItems.filter(wi => wi.status === 'done').length;
+            return { total: streamItems.length, done, pct: Math.round((done / streamItems.length) * 100) };
+        },
+        
+        // Check if a stream is blocked by other streams
+        isBlocked(stream, allStreams) {
+            if (!stream.blockedBy || stream.blockedBy.length === 0) return false;
+            return stream.blockedBy.some(blockerId => {
+                const blocker = allStreams.find(s => s.id === blockerId);
+                return blocker && blocker.status !== 'complete';
+            });
+        },
+        
+        // Generate next stream ID from existing list
+        getNextId(currentStreams) {
+            const existing = currentStreams.map(s => parseInt(s.id?.replace('WS-', '') || '0'));
+            const max = Math.max(0, ...existing);
+            return `WS-${String(max + 1).padStart(3, '0')}`;
+        },
+        
+        // Get a "Default" stream for an app, creating it if needed
+        getDefaultStreamId(streams, appId) {
+            const appStreams = this.filterByApp(streams, appId);
+            if (appStreams.length > 0) return appStreams[0].id;
+            return null; // No stream exists yet — items remain unassigned
+        }
+    };
+    
+    /**
+     * StreamInterfaceService — Declared contracts between streams (Phase 5.4 foundation)
+     * Wraps: Firebase RTDB `command-center/{uid}/interfaces` path
+     * 
+     * Stream interfaces describe what a stream PROVIDES — human-readable descriptions
+     * of behavior or output, not code contracts.
+     * 
+     *   id: 'SI-NNN'
+     *   streamId: which stream provides this
+     *   description: "Scoring format: ★ 450"
+     *   category: behavior | output | data | naming | timing
+     *   lastUpdated, lastUpdatedBy timestamps
+     */
+    const StreamInterfaceService = {
+        BASE_PATH: 'command-center',
+        
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/interfaces`);
+        },
+        
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, iface]) => ({ id, ...iface }));
+                    callback(list);
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        async create(uid, data) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            
+            const iface = {
+                streamId: data.streamId,
+                description: data.description,
+                category: data.category || 'behavior',
+                lastUpdated: new Date().toISOString(),
+                lastUpdatedBy: data.updatedBy || 'Owner'
+            };
+            
+            await ref.child(data.id).set(iface);
+            console.log(`[StreamInterfaceService] Created ${data.id}: ${iface.description}`);
+            return { id: data.id, ...iface };
+        },
+        
+        async update(uid, ifaceId, updates) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            updates.lastUpdated = new Date().toISOString();
+            await ref.child(ifaceId).update(updates);
+        },
+        
+        async delete(uid, ifaceId) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(ifaceId).remove();
+        },
+        
+        // Get interfaces provided by a stream
+        getByStream(interfaces, streamId) {
+            return interfaces.filter(i => i.streamId === streamId);
+        },
+        
+        getNextId(current) {
+            const existing = current.map(i => parseInt(i.id?.replace('SI-', '') || '0'));
+            const max = Math.max(0, ...existing);
+            return `SI-${String(max + 1).padStart(3, '0')}`;
+        }
+    };
+    
+    /**
+     * DependencyService — Declared dependencies between streams (Phase 5.4 foundation)
+     * Wraps: Firebase RTDB `command-center/{uid}/dependencies` path
+     * 
+     * Dependencies declare what one stream CONSUMES from another:
+     *   id: 'DEP-NNN'
+     *   dependentStreamId: stream that CONSUMES this
+     *   interfaceId: which interface is depended upon
+     *   context: "Tutorial screenshots show this format"
+     *   status: active | changed | verified
+     *   lastVerified, lastVerifiedBy timestamps
+     */
+    const DependencyService = {
+        BASE_PATH: 'command-center',
+        
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/dependencies`);
+        },
+        
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, dep]) => ({ id, ...dep }));
+                    callback(list);
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        async create(uid, data) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            
+            const dep = {
+                dependentStreamId: data.dependentStreamId,
+                interfaceId: data.interfaceId,
+                context: data.context || '',
+                status: 'active',
+                lastVerified: new Date().toISOString(),
+                lastVerifiedBy: data.verifiedBy || 'Owner'
+            };
+            
+            await ref.child(data.id).set(dep);
+            console.log(`[DependencyService] Created ${data.id}`);
+            return { id: data.id, ...dep };
+        },
+        
+        async update(uid, depId, updates) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(depId).update(updates);
+        },
+        
+        async delete(uid, depId) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(depId).remove();
+        },
+        
+        // Get dependencies that consume from a stream (via its interfaces)
+        getDependentsOf(dependencies, interfaces, streamId) {
+            const streamInterfaceIds = interfaces.filter(i => i.streamId === streamId).map(i => i.id);
+            return dependencies.filter(d => streamInterfaceIds.includes(d.interfaceId));
+        },
+        
+        // Get dependencies that a stream consumes
+        getConsumedBy(dependencies, streamId) {
+            return dependencies.filter(d => d.dependentStreamId === streamId);
+        },
+        
+        getNextId(current) {
+            const existing = current.map(d => parseInt(d.id?.replace('DEP-', '') || '0'));
+            const max = Math.max(0, ...existing);
+            return `DEP-${String(max + 1).padStart(3, '0')}`;
+        }
+    };
+    
+    /**
+     * DependencyAlertService — Auto-remediation alerts (Phase 5.4)
+     * Wraps: Firebase RTDB `command-center/{uid}/dependencyAlerts` path
+     * 
+     * When a session changes a provided interface, alerts are generated
+     * for every dependent stream. Each alert auto-creates a work item
+     * in the dependent stream with change context for prompt chaining.
+     * 
+     *   id: 'DA-NNN'
+     *   dependencyId: which dependency was affected
+     *   interfaceId: which interface changed
+     *   triggeredBySession: session ID that caused the change
+     *   triggeredByItem: work item ID that caused the change
+     *   changeDescription: what changed (user-provided)
+     *   changeNotes: detailed notes for the dependent stream's Claude session
+     *   triggeredAt: timestamp
+     *   triggeredBy: actor name
+     *   generatedItemId: auto-created work item in dependent stream
+     *   resolution: pending | updated | no_impact
+     *   resolvedBy, resolvedAt
+     */
+    const DependencyAlertService = {
+        BASE_PATH: 'command-center',
+        
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/dependencyAlerts`);
+        },
+        
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, alert]) => ({ id, ...alert }));
+                    callback(list.sort((a, b) => new Date(b.triggeredAt || 0) - new Date(a.triggeredAt || 0)));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        async create(uid, data) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            
+            const alert = {
+                dependencyId: data.dependencyId,
+                interfaceId: data.interfaceId,
+                triggeredBySession: data.triggeredBySession || null,
+                triggeredByItem: data.triggeredByItem || null,
+                changeDescription: data.changeDescription,
+                changeNotes: data.changeNotes || '',
+                triggeredAt: new Date().toISOString(),
+                triggeredBy: data.triggeredBy || 'Owner',
+                generatedItemId: data.generatedItemId || null,
+                resolution: 'pending',
+                resolvedBy: null,
+                resolvedAt: null
+            };
+            
+            await ref.child(data.id).set(alert);
+            console.log(`[DependencyAlertService] Created ${data.id}: ${alert.changeDescription}`);
+            return { id: data.id, ...alert };
+        },
+        
+        async resolve(uid, alertId, resolution, resolvedBy) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(alertId).update({
+                resolution: resolution,  // 'updated' or 'no_impact'
+                resolvedBy: resolvedBy || 'Owner',
+                resolvedAt: new Date().toISOString()
+            });
+            console.log(`[DependencyAlertService] Resolved ${alertId}: ${resolution}`);
+        },
+        
+        async updateGeneratedItem(uid, alertId, itemId) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(alertId).update({ generatedItemId: itemId });
+        },
+        
+        async delete(uid, alertId) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(alertId).remove();
+        },
+        
+        // Get pending alerts for a stream (items that need attention)
+        getPendingForStream(alerts, dependencies, streamId) {
+            const streamDepIds = dependencies.filter(d => d.dependentStreamId === streamId).map(d => d.id);
+            return alerts.filter(a => a.resolution === 'pending' && streamDepIds.includes(a.dependencyId));
+        },
+        
+        // Get all pending alerts
+        getPending(alerts) {
+            return alerts.filter(a => a.resolution === 'pending');
+        },
+        
+        // Get alerts triggered by a specific session
+        getBySession(alerts, sessionId) {
+            return alerts.filter(a => a.triggeredBySession === sessionId);
+        },
+        
+        getNextId(current) {
+            const existing = current.map(a => parseInt(a.id?.replace('DA-', '') || '0'));
+            const max = Math.max(0, ...existing);
+            return `DA-${String(max + 1).padStart(3, '0')}`;
+        },
+        
+        /**
+         * triggerAlerts — Core auto-remediation flow (Phase 5.4)
+         * 
+         * Called when a user confirms an interface changed during post-session review.
+         * For each dependency on the changed interface:
+         *   1. Creates a dependency alert
+         *   2. Auto-creates a work item in the dependent stream with change context
+         *   3. Marks the dependency status as 'changed'
+         *   4. Logs to activity feed
+         * 
+         * The generated work item includes changeContext so when the dependent stream
+         * owner preps a Claude session, the session brief includes what changed and why.
+         * This is the prompt chain: session output → change context → next session input.
+         */
+        async triggerAlerts(uid, { interfaceId, changeDescription, changeNotes, sessionId, workItemId, actor, interfaces, dependencies, streams, workItems, alerts }) {
+            const iface = interfaces.find(i => i.id === interfaceId);
+            if (!iface) return [];
+            
+            // Find all dependencies that consume this interface
+            const affectedDeps = dependencies.filter(d => d.interfaceId === interfaceId);
+            if (affectedDeps.length === 0) return [];
+            
+            const providerStream = streams.find(s => s.id === iface.streamId);
+            const results = [];
+            
+            for (const dep of affectedDeps) {
+                const dependentStream = streams.find(s => s.id === dep.dependentStreamId);
+                if (!dependentStream) continue;
+                
+                // 1. Create the alert
+                const alertId = this.getNextId(alerts.concat(results.map(r => r.alert)));
+                
+                // 2. Auto-create a work item in the dependent stream
+                const itemId = WorkItemService.getNextId(workItems);
+                const workItem = await WorkItemService.create(uid, {
+                    id: itemId,
+                    appId: dependentStream.appId || iface.appId || '',
+                    streamId: dep.dependentStreamId,
+                    title: `Update: ${iface.description} changed`,
+                    description: `Interface "${iface.description}" provided by ${providerStream?.name || 'unknown stream'} has changed.\n\n**What changed:** ${changeDescription}\n\n**Why this stream is affected:** ${dep.context || 'This stream depends on this interface.'}\n\n**Change notes from source session:**\n${changeNotes || 'No additional notes.'}`,
+                    type: 'dependency_update',
+                    priority: 'core',
+                    status: 'ready',
+                    effort: 'session',
+                    criteria: [
+                        `Verify ${dependentStream.name} works correctly with the updated interface`,
+                        `Update any references to: ${iface.description}`
+                    ],
+                    context: {
+                        notes: `Auto-generated from dependency alert ${alertId}. Source session: ${sessionId || 'N/A'}.`,
+                        dependencies: [iface.description],
+                        relatedItems: workItemId ? [workItemId] : []
+                    },
+                    tags: ['dependency-update', 'auto-generated'],
+                    createdBy: actor,
+                    source: 'dependency_alert'
+                });
+                
+                // 3. Create the alert record
+                const alert = await this.create(uid, {
+                    id: alertId,
+                    dependencyId: dep.id,
+                    interfaceId: interfaceId,
+                    triggeredBySession: sessionId,
+                    triggeredByItem: workItemId,
+                    changeDescription: changeDescription,
+                    changeNotes: changeNotes,
+                    triggeredBy: actor,
+                    generatedItemId: itemId
+                });
+                
+                // 4. Mark the dependency as 'changed'
+                await DependencyService.update(uid, dep.id, { 
+                    status: 'changed',
+                    lastChangedAt: new Date().toISOString(),
+                    lastChangedBy: actor
+                });
+                
+                // 5. Log to activity feed
+                ActivityLogService.log(uid, {
+                    appId: dependentStream.appId,
+                    streamId: dep.dependentStreamId,
+                    actor: actor,
+                    action: 'dependency_alert',
+                    summary: `Dependency alert: "${iface.description}" changed — ${dependentStream.name} has update queued`,
+                    metadata: { alertId, interfaceId, dependencyId: dep.id, generatedItemId: itemId }
+                }).catch(e => console.warn('[Activity] Dependency alert log failed:', e));
+                
+                results.push({ alert, workItem, dependency: dep, dependentStream });
+            }
+            
+            return results;
         }
     };
     
@@ -2956,6 +3479,10 @@
                 targetWorkItems.forEach(wi => {
                     brief += `### ${wi.id}: ${wi.title}\n`;
                     brief += `- **Type:** ${wi.type} | **Priority:** ${wi.priority} | **Effort:** ${wi.effort || '—'}\n`;
+                    if (wi.streamId && options.streams) {
+                        const stream = options.streams.find(s => s.id === wi.streamId);
+                        if (stream) brief += `- **Stream:** ${stream.name} (${stream.status}) — Owner: ${stream.owner}\n`;
+                    }
                     if (wi.description) brief += `- **Description:** ${wi.description}\n`;
                     if (wi.criteria && wi.criteria.length > 0) {
                         brief += `- **Acceptance Criteria:**\n`;
@@ -2974,6 +3501,42 @@
                     }
                     brief += '\n';
                 });
+                
+                // Stream context: if all targeted items belong to the same stream, show stream details
+                if (options.streams && options.streams.length > 0) {
+                    const targetStreamIds = [...new Set(targetWorkItems.filter(wi => wi.streamId).map(wi => wi.streamId))];
+                    if (targetStreamIds.length === 1) {
+                        const stream = options.streams.find(s => s.id === targetStreamIds[0]);
+                        if (stream) {
+                            brief += `## Stream Context: ${stream.name}\n`;
+                            brief += `- **Owner:** ${stream.owner}\n`;
+                            brief += `- **Goal:** ${stream.goal || 'Not specified'}\n`;
+                            brief += `- **Status:** ${stream.status}\n`;
+                            if (stream.targetRelease) brief += `- **Target Release:** ${stream.targetRelease}\n`;
+                            brief += '\n';
+                        }
+                    }
+                }
+                
+                // Phase 5.4: Dependency change context (prompt chaining)
+                // If any targeted work items are dependency_update type, include the change context
+                // from the source session. This is the core prompt chain: previous session's output
+                // becomes this session's input, routed through dependency contracts.
+                const depUpdateItems = targetWorkItems.filter(wi => wi.type === 'dependency_update' || wi.source === 'dependency_alert');
+                if (depUpdateItems.length > 0) {
+                    brief += `## ⚠️ Dependency Changes — Context from Source Session\n\n`;
+                    brief += `This session addresses ${depUpdateItems.length} dependency update${depUpdateItems.length !== 1 ? 's' : ''}. `;
+                    brief += `Another stream changed an interface this stream depends on. Review the change context below before making updates.\n\n`;
+                    
+                    depUpdateItems.forEach(wi => {
+                        brief += `### ${wi.title}\n`;
+                        if (wi.description) brief += `${wi.description}\n\n`;
+                        if (wi.context?.notes) brief += `**Notes:** ${wi.context.notes}\n`;
+                        if (wi.context?.dependencies?.length) brief += `**Affected interfaces:** ${wi.context.dependencies.join(', ')}\n`;
+                        if (wi.context?.relatedItems?.length) brief += `**Source work item:** ${wi.context.relatedItems.join(', ')}\n`;
+                        brief += '\n';
+                    });
+                }
             }
             
             // === Current Status ===
@@ -5394,6 +5957,10 @@
         const [globalWorkItems, setGlobalWorkItems] = React.useState([]);
         const [globalSessions, setGlobalSessions] = React.useState([]);
         const [globalActivity, setGlobalActivity] = React.useState([]); // Phase 3.4: Activity log
+        const [globalStreams, setGlobalStreams] = React.useState([]); // Phase 5.2: Work streams
+        const [globalInterfaces, setGlobalInterfaces] = React.useState([]); // Phase 5.4: Stream interfaces
+        const [globalDependencies, setGlobalDependencies] = React.useState([]); // Phase 5.4: Dependencies
+        const [globalDependencyAlerts, setGlobalDependencyAlerts] = React.useState([]); // Phase 5.4: Dependency alerts
         const [firebaseUid, setFirebaseUid] = React.useState(null);
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         
@@ -5405,6 +5972,10 @@
             let unsubscribeWorkItems = () => {};
             let unsubscribeSessions = () => {};
             let unsubscribeActivity = () => {};
+            let unsubscribeStreams = () => {};
+            let unsubscribeInterfaces = () => {};
+            let unsubscribeDependencies = () => {};
+            let unsubscribeDependencyAlerts = () => {};
             
             const unsubscribe = firebaseAuth.onAuthStateChanged((u) => {
                 setFirebaseUser(u);
@@ -5418,12 +5989,23 @@
                     unsubscribeSessions = SessionService.listen(u.uid, setGlobalSessions);
                     // Listen for activity via ActivityLogService (v8.39.0 — Phase 3.4)
                     unsubscribeActivity = ActivityLogService.listen(u.uid, setGlobalActivity);
+                    // Listen for streams via WorkStreamService (v8.43.0 — Phase 5.2)
+                    unsubscribeStreams = WorkStreamService.listen(u.uid, setGlobalStreams);
+                    // Listen for interfaces via StreamInterfaceService (v8.43.0 — Phase 5.4)
+                    unsubscribeInterfaces = StreamInterfaceService.listen(u.uid, setGlobalInterfaces);
+                    // Listen for dependencies via DependencyService (v8.43.0 — Phase 5.4)
+                    unsubscribeDependencies = DependencyService.listen(u.uid, setGlobalDependencies);
+                    // Listen for dependency alerts via DependencyAlertService (v8.44.0 — Phase 5.4)
+                    unsubscribeDependencyAlerts = DependencyAlertService.listen(u.uid, setGlobalDependencyAlerts);
                 } else {
                     setFirebaseUid(null);
                     setGlobalIssues([]);
                     setGlobalWorkItems([]);
                     setGlobalSessions([]);
                     setGlobalActivity([]);
+                    setGlobalStreams([]);
+                    setGlobalInterfaces([]);
+                    setGlobalDependencies([]);
                 }
             });
             
@@ -5433,6 +6015,10 @@
                 unsubscribeWorkItems();
                 unsubscribeSessions();
                 unsubscribeActivity();
+                unsubscribeStreams();
+                unsubscribeInterfaces();
+                unsubscribeDependencies();
+                unsubscribeDependencyAlerts();
             };
         }, []);
         
@@ -7329,7 +7915,7 @@
                                 {[
                                     { id: 'deploy', icon: '🚀', label: 'Deploy', views: ['dashboard', 'smartdeploy', 'history'] },
                                     { id: 'projects', icon: '📂', label: 'Projects', views: ['projects'] },
-                                    { id: 'backlog', icon: '📋', label: 'Backlog', views: ['backlog', 'releases'] },
+                                    { id: 'backlog', icon: '📋', label: 'Backlog', views: ['backlog', 'streams', 'releases'] },
                                     { id: 'monitor', icon: '📊', label: 'Monitor', views: ['portfolio', 'optimize', 'domains', 'users', 'beta', 'firebase', 'integrations', 'issues'] },
                                     { id: 'maintain', icon: '🔧', label: 'Maintain', views: ['cleanup', 'files', 'archive', 'session'] },
                                     { id: 'configure', icon: '⚙️', label: 'Configure', views: ['config', 'setup', 'settings'] }
@@ -7381,6 +7967,7 @@
                                                     {v === 'session' && '📝 Session Log'}
                                                     {v === 'config' && '🌍 Environments'}
                                                     {v === 'releases' && '🚢 Releases'}
+                                                    {v === 'streams' && '🔀 Streams'}
                                                     {v === 'setup' && '🆕 Setup New App'}
                                                     {v === 'settings' && '🔑 Settings'}
                                                 </button>
@@ -7723,6 +8310,7 @@
                                 deployments={deployments}
                                 globalWorkItems={globalWorkItems}
                                 firebaseUid={firebaseUid}
+                                globalStreams={globalStreams}
                             />
                         </div>
                     )}
@@ -7764,6 +8352,10 @@
                             globalWorkItems={globalWorkItems}
                             firebaseUid={firebaseUid}
                             config={config}
+                            globalStreams={globalStreams}
+                            globalInterfaces={globalInterfaces}
+                            globalDependencies={globalDependencies}
+                            globalDependencyAlerts={globalDependencyAlerts}
                         />
                     )}
                     
@@ -7772,11 +8364,15 @@
                     )}
                     
                     {view === 'backlog' && (
-                        <BacklogView apps={apps} showAlert={showAlert} showConfirm={showConfirm} showPrompt={showPrompt} setView={setView} config={config} />
+                        <BacklogView apps={apps} showAlert={showAlert} showConfirm={showConfirm} showPrompt={showPrompt} setView={setView} config={config} globalStreams={globalStreams} />
                     )}
                     
                     {view === 'releases' && (
                         <ReleaseCoordinationView apps={apps} config={config} globalWorkItems={globalWorkItems} globalSessions={globalSessions} deployments={deployments} showAlert={showAlert} showConfirm={showConfirm} showPrompt={showPrompt} setView={setView} />
+                    )}
+                    
+                    {view === 'streams' && (
+                        <WorkStreamsView apps={apps} config={config} globalWorkItems={globalWorkItems} globalStreams={globalStreams} globalInterfaces={globalInterfaces} globalDependencies={globalDependencies} globalDependencyAlerts={globalDependencyAlerts || []} showAlert={showAlert} showConfirm={showConfirm} showPrompt={showPrompt} setView={setView} />
                     )}
                     
                     {view === 'config' && (
@@ -11283,12 +11879,23 @@
             const scope = app.lifecycle?.scope || {};
             const skills = [];
             
-            // Always recommended
-            skills.push({ name: 'gs-active', desc: 'Game Shelf archive structure and deployment conventions', relevance: 'high', reason: 'Ecosystem membership' });
+            // Project-aware: recommend skills based on project ecosystem
+            const project = config?.projects?.[app.project];
+            if (project) {
+                // If project has a custom skill config, use it; otherwise derive from category
+                if (project.skills && Array.isArray(project.skills)) {
+                    project.skills.forEach(s => skills.push({ ...s, reason: `${project.name} ecosystem` }));
+                } else if (app.project === 'gameshelf') {
+                    // Game Shelf specific (backward compat — will be configurable per project later)
+                    skills.push({ name: 'gs-active', desc: 'Archive structure and deployment conventions', relevance: 'high', reason: `${project.name} ecosystem` });
+                }
+            }
             
-            // Category-driven
+            // Category-driven (universal — not ecosystem-specific)
             if (category === 'game') {
-                skills.push({ name: 'game-rules', desc: 'Game mechanics and rules reference', relevance: 'high', reason: 'Game app category' });
+                if (!skills.find(s => s.name === 'game-rules')) {
+                    skills.push({ name: 'game-rules', desc: 'Game mechanics and rules reference', relevance: 'high', reason: 'Game app category' });
+                }
                 skills.push({ name: 'firebase-patterns', desc: 'Firebase RTDB structure for game data', relevance: 'high', reason: 'Game data persistence' });
                 skills.push({ name: 'ui-components', desc: 'Dark mode styling, modals, buttons', relevance: 'medium', reason: 'Consistent game UI' });
             }
@@ -11304,8 +11911,10 @@
                 }
             }
             
-            // Logo skill for branding
-            skills.push({ name: 'gs-logos', desc: 'Game Shelf logo assets and usage', relevance: 'low', reason: 'Branding when needed' });
+            // Logo skill for ecosystem branding (only for GS)
+            if (app.project === 'gameshelf') {
+                skills.push({ name: 'gs-logos', desc: 'Game Shelf logo assets and usage', relevance: 'low', reason: 'Ecosystem branding' });
+            }
             
             // Session continuity for complex apps
             if (app.lifecycle?.complexity === 'large' || app.lifecycle?.complexity === 'medium') {
@@ -11313,7 +11922,7 @@
             }
             
             return skills;
-        }, []);
+        }, [config]);
         
         // === PLATFORM FEATURE RECOMMENDATIONS ===
         const getPlatformRecommendations = React.useCallback((app) => {
@@ -11336,7 +11945,7 @@
                     feature: 'Custom Skills',
                     icon: '🛠️',
                     status: 'recommended',
-                    reason: 'Upload ecosystem-specific skills (gs-active, firebase-patterns, etc.) for consistent conventions',
+                    reason: 'Upload ecosystem-specific skills for consistent conventions across sessions',
                     setup: 'Upload skill .md files to the project\'s Custom Instructions or Skills section'
                 });
             }
@@ -16729,7 +17338,7 @@
     // SESSION LOG VIEW
     // =========================================================================
     
-    function SessionLogView({ apps, sessionLog, setSessionLog, deployments, github, onFileDrop, showAlert, globalSessions, globalWorkItems, firebaseUid, config }) {
+    function SessionLogView({ apps, sessionLog, setSessionLog, deployments, github, onFileDrop, showAlert, globalSessions, globalWorkItems, firebaseUid, config, globalStreams, globalInterfaces, globalDependencies, globalDependencyAlerts }) {
         const [newEntry, setNewEntry] = React.useState('');
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         const [syncStatus, setSyncStatus] = React.useState('local');
@@ -17396,6 +18005,10 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
                         showAlert={showAlert}
                         firebaseUid={firebaseUid}
                         config={config}
+                        streams={globalStreams || []}
+                        interfaces={globalInterfaces || []}
+                        dependencies={globalDependencies || []}
+                        dependencyAlerts={globalDependencyAlerts || []}
                     />
                 )}
             </div>
@@ -17408,13 +18021,19 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
     // Inline guided flow: Review deliverables → Check criteria → Deploy decision → Close items
     // =========================================================================
     
-    function PostSessionReviewModal({ session, workItems, app, onClose, onDeploy, showAlert, firebaseUid, config }) {
+    function PostSessionReviewModal({ session, workItems, app, onClose, onDeploy, showAlert, firebaseUid, config, streams, interfaces, dependencies, dependencyAlerts }) {
         const [step, setStep] = React.useState(1); // 1: Overview, 2: Criteria Review, 3: Deploy Decision, 4: Close Items
         const [deliverableNotes, setDeliverableNotes] = React.useState(session?.deliverables?.summary || '');
         const [criteriaResults, setCriteriaResults] = React.useState([]);
         const [reviewNotes, setReviewNotes] = React.useState('');
         const [closingItems, setClosingItems] = React.useState(new Set());
         const [saving, setSaving] = React.useState(false);
+        
+        // Phase 5.4: Interface change detection state
+        const [interfaceChanges, setInterfaceChanges] = React.useState([]); // [{interfaceId, changed: bool, description: '', notes: ''}]
+        const [alertsTriggered, setAlertsTriggered] = React.useState(false);
+        const [triggerResults, setTriggerResults] = React.useState([]); // Results from triggerAlerts
+        const [triggeringAlerts, setTriggeringAlerts] = React.useState(false);
         
         // Gather acceptance criteria from linked work items
         const sessionWorkItemIds = React.useMemo(() => {
@@ -17443,6 +18062,99 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
             setCriteriaResults(allCriteria);
             setClosingItems(new Set(sessionWorkItems.map(wi => wi.id)));
         }, [sessionWorkItems]);
+        
+        // Phase 5.4: Detect which interfaces this session's stream provides
+        const sessionStreamId = React.useMemo(() => {
+            const streamIds = [...new Set(sessionWorkItems.filter(wi => wi.streamId).map(wi => wi.streamId))];
+            return streamIds.length === 1 ? streamIds[0] : null;
+        }, [sessionWorkItems]);
+        
+        const providedInterfaces = React.useMemo(() => {
+            if (!sessionStreamId || !interfaces) return [];
+            return (interfaces || []).filter(i => i.streamId === sessionStreamId);
+        }, [sessionStreamId, interfaces]);
+        
+        // Interfaces that actually have dependents (other streams consume them)
+        const interfacesWithDependents = React.useMemo(() => {
+            if (!providedInterfaces.length || !dependencies) return [];
+            return providedInterfaces.filter(iface => 
+                (dependencies || []).some(d => d.interfaceId === iface.id)
+            );
+        }, [providedInterfaces, dependencies]);
+        
+        // Initialize interface change tracking
+        React.useEffect(() => {
+            if (interfacesWithDependents.length > 0 && interfaceChanges.length === 0) {
+                setInterfaceChanges(interfacesWithDependents.map(iface => ({
+                    interfaceId: iface.id,
+                    description: iface.description,
+                    changed: false,
+                    changeDescription: '',
+                    changeNotes: ''
+                })));
+            }
+        }, [interfacesWithDependents]);
+        
+        const hasInterfaceChanges = interfaceChanges.some(ic => ic.changed);
+        
+        const toggleInterfaceChange = (interfaceId) => {
+            setInterfaceChanges(prev => prev.map(ic => 
+                ic.interfaceId === interfaceId ? { ...ic, changed: !ic.changed } : ic
+            ));
+        };
+        
+        const updateInterfaceChange = (interfaceId, field, value) => {
+            setInterfaceChanges(prev => prev.map(ic => 
+                ic.interfaceId === interfaceId ? { ...ic, [field]: value } : ic
+            ));
+        };
+        
+        // Trigger dependency alerts for changed interfaces
+        const handleTriggerAlerts = async () => {
+            if (!firebaseUid || alertsTriggered) return;
+            setTriggeringAlerts(true);
+            const actor = config?.ownerName || 'Owner';
+            const allResults = [];
+            
+            try {
+                for (const ic of interfaceChanges.filter(c => c.changed && c.changeDescription.trim())) {
+                    const results = await DependencyAlertService.triggerAlerts(firebaseUid, {
+                        interfaceId: ic.interfaceId,
+                        changeDescription: ic.changeDescription,
+                        changeNotes: ic.changeNotes || deliverableNotes,
+                        sessionId: session?.id,
+                        workItemId: sessionWorkItemIds[0] || null,
+                        actor,
+                        interfaces: interfaces || [],
+                        dependencies: dependencies || [],
+                        streams: streams || [],
+                        workItems: workItems || [],
+                        alerts: dependencyAlerts || []
+                    });
+                    allResults.push(...results);
+                }
+                
+                // Update the interface lastUpdated timestamps
+                for (const ic of interfaceChanges.filter(c => c.changed)) {
+                    await StreamInterfaceService.update(firebaseUid, ic.interfaceId, {
+                        lastUpdatedBy: actor,
+                        lastChangeDescription: ic.changeDescription
+                    });
+                }
+                
+                setTriggerResults(allResults);
+                setAlertsTriggered(true);
+                
+                if (allResults.length > 0) {
+                    showAlert(`🔔 ${allResults.length} dependency alert${allResults.length !== 1 ? 's' : ''} triggered — work items created in dependent streams.`, 'success');
+                }
+            } catch (e) {
+                console.error('[DependencyAlert] Failed to trigger alerts:', e);
+                showAlert(`Error triggering alerts: ${e.message}`, 'error');
+            } finally {
+                setTriggeringAlerts(false);
+            }
+        };
         
         const toggleCriteria = (criteriaId) => {
             setCriteriaResults(prev => prev.map(c => c.id === criteriaId ? { ...c, met: !c.met } : c));
@@ -17599,6 +18311,104 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
                                                 </div>
                                             ))}
                                         </div>
+                                    </div>
+                                )}
+                                
+                                {/* Phase 5.4: Interface change detection */}
+                                {interfacesWithDependents.length > 0 && (
+                                    <div className="border-t border-slate-700 pt-4">
+                                        <div className="text-sm font-medium text-slate-300 mb-1">🔗 Did any provided interfaces change?</div>
+                                        <div className="text-xs text-slate-500 mb-3">
+                                            This stream provides interfaces other streams depend on. If any changed, dependent streams will be notified with a work item.
+                                        </div>
+                                        
+                                        <div className="space-y-2">
+                                            {interfaceChanges.map(ic => {
+                                                const depCount = (dependencies || []).filter(d => d.interfaceId === ic.interfaceId).length;
+                                                return (
+                                                    <div key={ic.interfaceId} className={`rounded-lg border transition-colors ${
+                                                        ic.changed ? 'bg-amber-900/20 border-amber-700/50' : 'bg-slate-900/60 border-slate-700'
+                                                    }`}>
+                                                        <div className="flex items-center gap-3 px-3 py-2.5 cursor-pointer" onClick={() => toggleInterfaceChange(ic.interfaceId)}>
+                                                            <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${
+                                                                ic.changed ? 'bg-amber-600 text-white' : 'border-2 border-slate-500'
+                                                            }`}>
+                                                                {ic.changed && <span className="text-xs">✓</span>}
+                                                            </div>
+                                                            <div className="flex-1">
+                                                                <div className={`text-sm ${ic.changed ? 'text-amber-200' : 'text-slate-200'}`}>{ic.description}</div>
+                                                                <div className="text-xs text-slate-500">{depCount} dependent stream{depCount !== 1 ? 's' : ''}</div>
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        {ic.changed && (
+                                                            <div className="px-3 pb-3 space-y-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={ic.changeDescription}
+                                                                    onChange={e => updateInterfaceChange(ic.interfaceId, 'changeDescription', e.target.value)}
+                                                                    placeholder="What changed? e.g. 'Score format now includes difficulty badge'"
+                                                                    className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm text-white placeholder-slate-500 focus:border-amber-500 outline-none"
+                                                                    onClick={e => e.stopPropagation()}
+                                                                />
+                                                                <textarea
+                                                                    value={ic.changeNotes}
+                                                                    onChange={e => updateInterfaceChange(ic.interfaceId, 'changeNotes', e.target.value)}
+                                                                    placeholder="Additional context for the dependent stream's Claude session (optional)"
+                                                                    className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm text-white placeholder-slate-500 focus:border-amber-500 outline-none resize-none"
+                                                                    rows={2}
+                                                                    onClick={e => e.stopPropagation()}
+                                                                />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        
+                                        {/* Trigger alerts button */}
+                                        {hasInterfaceChanges && !alertsTriggered && (
+                                            <div className="mt-3">
+                                                <button 
+                                                    onClick={handleTriggerAlerts}
+                                                    disabled={triggeringAlerts || interfaceChanges.filter(c => c.changed && !c.changeDescription.trim()).length > 0}
+                                                    className={`px-4 py-2 rounded-lg text-sm font-medium w-full ${
+                                                        triggeringAlerts ? 'bg-slate-700 text-slate-400 cursor-wait' :
+                                                        interfaceChanges.filter(c => c.changed && !c.changeDescription.trim()).length > 0 
+                                                            ? 'bg-slate-700 text-slate-500 cursor-not-allowed' 
+                                                            : 'bg-amber-600 hover:bg-amber-500 text-white'
+                                                    }`}>
+                                                    {triggeringAlerts ? '⏳ Creating dependency alerts...' : 
+                                                     `🔔 Notify ${interfaceChanges.filter(c => c.changed).length} changed interface${interfaceChanges.filter(c => c.changed).length !== 1 ? 's' : ''}`}
+                                                </button>
+                                                {interfaceChanges.filter(c => c.changed && !c.changeDescription.trim()).length > 0 && (
+                                                    <div className="text-xs text-amber-400/70 mt-1">Describe what changed for each checked interface</div>
+                                                )}
+                                            </div>
+                                        )}
+                                        
+                                        {/* Alert results */}
+                                        {alertsTriggered && triggerResults.length > 0 && (
+                                            <div className="mt-3 bg-green-900/20 border border-green-700/50 rounded-lg px-3 py-2.5">
+                                                <div className="text-sm text-green-300 font-medium mb-1">
+                                                    ✅ {triggerResults.length} dependency alert{triggerResults.length !== 1 ? 's' : ''} triggered
+                                                </div>
+                                                <div className="space-y-1">
+                                                    {triggerResults.map((r, i) => (
+                                                        <div key={i} className="text-xs text-green-200/70">
+                                                            📋 {r.workItem?.id}: "{r.workItem?.title}" → {r.dependentStream?.name}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="text-xs text-green-200/50 mt-1.5">
+                                                    Work items created in dependent streams with change context for prompt chaining.
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {alertsTriggered && triggerResults.length === 0 && (
+                                            <div className="mt-3 text-xs text-slate-500">No alerts needed — no dependent streams found.</div>
+                                        )}
                                     </div>
                                 )}
                                 
@@ -18138,6 +18948,7 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
     // =========================================================================
     
     // Category question definitions — static data, no AI dependency
+    // Built-in scope categories (Phase 5.1: extensible — custom categories can override or extend)
     const SCOPE_CATEGORIES = {
         game: { label: 'Game', icon: '🎮', description: 'Puzzle, word game, or interactive game' },
         tool: { label: 'Tool', icon: '🔧', description: 'Utility or productivity tool' },
@@ -18145,6 +18956,12 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
         content: { label: 'Content', icon: '📄', description: 'Content site or documentation' },
         admin: { label: 'Admin', icon: '🔐', description: 'Administration or management panel' }
     };
+    
+    // Helper: get all categories (built-in + custom from config)
+    function getAllCategories(config) {
+        const custom = config?.customCategories || {};
+        return { ...SCOPE_CATEGORIES, ...custom };
+    }
     
     // v8.38.0: PM-first intent questions (Phase 2.1 + 2.4)
     // Questions capture INTENT. The package engine translates intent into technology.
@@ -19297,11 +20114,12 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
     // BACKLOG VIEW - Work Item Tracking & Project Planning (v8.22.0)
     // =========================================================================
     
-    function WorkItemEditModal({ item, apps, isNew, onSave, onCancel }) {
+    function WorkItemEditModal({ item, apps, isNew, onSave, onCancel, globalStreams }) {
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
         
         const [formData, setFormData] = React.useState({
             appId: item?.appId || configuredApps[0]?.id || '',
+            streamId: item?.streamId || null,  // Phase 5.3: stream assignment
             title: item?.title || '',
             description: item?.description || '',
             type: item?.type || 'feature',
@@ -19394,7 +20212,7 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
                         <div className="grid grid-cols-[200px_1fr] gap-3 mb-4">
                             <div>
                                 <label className="text-xs text-slate-400 block mb-1">App</label>
-                                <select value={formData.appId} onChange={e => update('appId', e.target.value)}
+                                <select value={formData.appId} onChange={e => { update('appId', e.target.value); update('streamId', null); }}
                                     className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
                                     {configuredApps.map(a => (
                                         <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
@@ -19409,6 +20227,24 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
                                     autoFocus />
                             </div>
                         </div>
+                        
+                        {/* Stream assignment (Phase 5.3) */}
+                        {globalStreams && (() => {
+                            const appStreams = (globalStreams || []).filter(s => s.appId === formData.appId);
+                            if (appStreams.length === 0) return null;
+                            return (
+                                <div className="mb-4">
+                                    <label className="text-xs text-slate-400 block mb-1">Work Stream</label>
+                                    <select value={formData.streamId || ''} onChange={e => update('streamId', e.target.value || null)}
+                                        className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
+                                        <option value="">No stream (unassigned)</option>
+                                        {appStreams.map(s => (
+                                            <option key={s.id} value={s.id}>🔀 {s.name} ({s.status})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            );
+                        })()}
                         
                         {/* Description */}
                         <div className="mb-4">
@@ -19562,7 +20398,7 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
         );
     }
     
-    function BacklogView({ apps, showAlert, showConfirm, showPrompt, setView, config }) {
+    function BacklogView({ apps, showAlert, showConfirm, showPrompt, setView, config, globalStreams }) {
         const [workItems, setWorkItems] = React.useState([]);
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         const [loading, setLoading] = React.useState(true);
@@ -19573,7 +20409,7 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
         const [appFilter, setAppFilter] = React.useState('all');
         const [searchQuery, setSearchQuery] = React.useState('');
         const [sortBy, setSortBy] = React.useState('priority'); // 'priority', 'status', 'created', 'effort', 'type'
-        const [groupBy, setGroupBy] = React.useState('app'); // 'app', 'status', 'type', 'none'
+        const [groupBy, setGroupBy] = React.useState('app'); // 'app', 'status', 'type', 'stream', 'none'
         const [selectedItems, setSelectedItems] = React.useState(new Set());
         
         const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
@@ -19831,13 +20667,18 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
                     }
                     case 'status': key = item.status || 'unknown'; break;
                     case 'type': key = item.type || 'unknown'; break;
+                    case 'stream': {
+                        const stream = (globalStreams || []).find(s => s.id === item.streamId);
+                        key = stream ? `🔀 ${stream.name}` : '📋 Unassigned';
+                        break;
+                    }
                     default: key = 'All';
                 }
                 if (!groups[key]) groups[key] = [];
                 groups[key].push(item);
             });
             return groups;
-        }, [filteredItems, groupBy, configuredApps]);
+        }, [filteredItems, groupBy, configuredApps, globalStreams]);
         
         // Stats
         const stats = React.useMemo(() => {
@@ -20034,6 +20875,7 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
                     <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
                         className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm">
                         <option value="app">Group: App</option>
+                        <option value="stream">Group: Stream</option>
                         <option value="status">Group: Status</option>
                         <option value="type">Group: Type</option>
                         <option value="none">No Grouping</option>
@@ -20120,6 +20962,10 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
                                                                 {groupBy !== 'app' && app && (
                                                                     <span className="text-xs text-slate-500">{app.icon} {app.name}</span>
                                                                 )}
+                                                                {groupBy !== 'stream' && item.streamId && (() => {
+                                                                    const stream = (globalStreams || []).find(s => s.id === item.streamId);
+                                                                    return stream ? <span className="text-xs text-indigo-400/70">🔀 {stream.name}</span> : null;
+                                                                })()}
                                                                 {item.source && item.source !== 'manual' && (
                                                                     <span className="text-xs text-slate-600 italic">{item.source}</span>
                                                                 )}
@@ -20192,6 +21038,7 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
                         isNew={showEditModal.isNew}
                         onSave={showEditModal.isNew ? createItem : updateItem}
                         onCancel={() => setShowEditModal(null)}
+                        globalStreams={globalStreams || []}
                     />
                 )}
                 
@@ -20214,6 +21061,500 @@ When complete, note: "Completes ${item.id}" in deploy notes.`;
     // RELEASE COORDINATION VIEW — Phase 4.4 + 4.5
     // Answers: "Is this version ready to ship?"
     // Shows completion %, blocked items, go/no-go summary, test checklists
+    // =========================================================================
+    // WorkStreamsView — Named, owned, parallel tracks of work (Phase 5.2)
+    // =========================================================================
+    
+    function WorkStreamsView({ apps, config, globalWorkItems, globalStreams, globalInterfaces, globalDependencies, globalDependencyAlerts, showAlert, showConfirm, showPrompt, setView }) {
+        const [selectedApp, setSelectedApp] = React.useState('all');
+        const [editingStream, setEditingStream] = React.useState(null); // null, 'new', or stream object
+        const [firebaseUser, setFirebaseUser] = React.useState(null);
+        
+        React.useEffect(() => {
+            if (firebaseAuth) {
+                return firebaseAuth.onAuthStateChanged(u => setFirebaseUser(u));
+            }
+        }, []);
+        
+        const actor = config?._userName || 'Owner';
+        const appList = Object.values(apps).filter(a => a.id !== 'command-center').sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        
+        const filteredStreams = selectedApp === 'all' 
+            ? globalStreams 
+            : WorkStreamService.filterByApp(globalStreams, selectedApp);
+        
+        // Group streams by app
+        const streamsByApp = {};
+        filteredStreams.forEach(s => {
+            const key = s.appId || 'unassigned';
+            if (!streamsByApp[key]) streamsByApp[key] = [];
+            streamsByApp[key].push(s);
+        });
+        
+        // Get unassigned items count per app
+        const getUnassignedCount = (appId) => {
+            return WorkItemService.getUnassigned(globalWorkItems, appId).length;
+        };
+        
+        const handleCreateStream = async (streamData) => {
+            if (!firebaseUser) return;
+            const id = WorkStreamService.getNextId(globalStreams);
+            await WorkStreamService.create(firebaseUser.uid, { ...streamData, id, createdBy: actor });
+            ActivityLogService.log(firebaseUser.uid, {
+                appId: streamData.appId,
+                streamId: id,
+                actor,
+                action: 'stream_create',
+                summary: `${actor} created stream "${streamData.name}" for ${apps[streamData.appId]?.name || streamData.appId}`,
+                metadata: { streamId: id }
+            }).catch(() => {});
+            setEditingStream(null);
+        };
+        
+        const handleUpdateStream = async (streamId, updates) => {
+            if (!firebaseUser) return;
+            await WorkStreamService.update(firebaseUser.uid, streamId, updates);
+        };
+        
+        const handleDeleteStream = async (stream) => {
+            if (!firebaseUser) return;
+            const itemCount = WorkItemService.filterByStream(globalWorkItems, stream.id).length;
+            const msg = itemCount > 0 
+                ? `Delete stream "${stream.name}"? ${itemCount} work item(s) will become unassigned.`
+                : `Delete stream "${stream.name}"?`;
+            showConfirm(msg, '🗑️ Delete Stream', async () => {
+                // Unassign work items from this stream
+                if (itemCount > 0) {
+                    const items = WorkItemService.filterByStream(globalWorkItems, stream.id);
+                    for (const item of items) {
+                        await WorkItemService.update(firebaseUser.uid, item.id, { streamId: null });
+                    }
+                }
+                await WorkStreamService.delete(firebaseUser.uid, stream.id);
+                ActivityLogService.log(firebaseUser.uid, {
+                    appId: stream.appId,
+                    actor,
+                    action: 'stream_delete',
+                    summary: `${actor} deleted stream "${stream.name}"`,
+                    metadata: { streamId: stream.id }
+                }).catch(() => {});
+            });
+        };
+        
+        const handleStatusChange = async (stream, newStatus) => {
+            if (!firebaseUser) return;
+            await WorkStreamService.updateStatus(firebaseUser.uid, stream.id, newStatus);
+            ActivityLogService.log(firebaseUser.uid, {
+                appId: stream.appId,
+                streamId: stream.id,
+                actor,
+                action: 'stream_status',
+                summary: `${actor} changed "${stream.name}" to ${newStatus}`,
+                metadata: { fromStatus: stream.status, toStatus: newStatus }
+            }).catch(() => {});
+        };
+        
+        // Assign work items to stream
+        const handleAssignItems = async (stream) => {
+            if (!firebaseUser) return;
+            const unassigned = WorkItemService.getUnassigned(globalWorkItems, stream.appId);
+            if (unassigned.length === 0) {
+                showAlert('No unassigned work items for this app.', '📋 No Items');
+                return;
+            }
+            // For now, show a confirm with list and assign all unassigned
+            const names = unassigned.slice(0, 10).map(i => `• ${i.title}`).join('\n');
+            const more = unassigned.length > 10 ? `\n...and ${unassigned.length - 10} more` : '';
+            showConfirm(
+                `Assign ${unassigned.length} unassigned item(s) to "${stream.name}"?\n\n${names}${more}`,
+                `📋 Assign to ${stream.name}`,
+                async () => {
+                    for (const item of unassigned) {
+                        await WorkItemService.update(firebaseUser.uid, item.id, { streamId: stream.id });
+                    }
+                    showAlert(`${unassigned.length} item(s) assigned to "${stream.name}".`, '✅ Assigned');
+                }
+            );
+        };
+        
+        // Phase 5.4: Resolve a dependency alert
+        const handleResolveAlert = async (alert, resolution) => {
+            if (!firebaseUser) return;
+            const actor = config?.ownerName || 'Owner';
+            try {
+                await DependencyAlertService.resolve(firebaseUser.uid, alert.id, resolution, actor);
+                
+                // If resolved as 'updated', also mark the dependency as 'verified'
+                if (resolution === 'updated') {
+                    await DependencyService.update(firebaseUser.uid, alert.dependencyId, {
+                        status: 'verified',
+                        lastVerified: new Date().toISOString(),
+                        lastVerifiedBy: actor
+                    });
+                }
+                
+                showAlert(`Alert resolved: ${resolution === 'updated' ? 'Updated' : 'No impact'}.`, '✅ Resolved');
+            } catch (e) {
+                showAlert(`Error: ${e.message}`, 'error');
+            }
+        };
+        
+        // Pending alerts count for summary stats
+        const totalPendingAlerts = DependencyAlertService.getPending(globalDependencyAlerts || []).length;
+        
+        const statusColors = {
+            active: 'bg-green-900/30 text-green-400 border-green-800/50',
+            paused: 'bg-yellow-900/30 text-yellow-400 border-yellow-800/50',
+            blocked: 'bg-red-900/30 text-red-400 border-red-800/50',
+            complete: 'bg-slate-700/30 text-slate-400 border-slate-600/50'
+        };
+        
+        const statusIcons = { active: '🟢', paused: '⏸️', blocked: '🔴', complete: '✅' };
+        
+        return (
+            <div className="max-w-6xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                    <div>
+                        <h2 className="text-xl font-bold flex items-center gap-2">🔀 Work Streams</h2>
+                        <p className="text-sm text-slate-400 mt-1">Named, owned, parallel tracks of work. Different people run AI sessions against different streams.</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <select value={selectedApp} onChange={e => setSelectedApp(e.target.value)}
+                            className="bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm">
+                            <option value="all">All Apps</option>
+                            {appList.map(a => (
+                                <option key={a.id} value={a.id}>{a.icon === 'gs-logo' ? '🎮' : a.icon} {a.name}</option>
+                            ))}
+                        </select>
+                        <button onClick={() => setEditingStream('new')}
+                            className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-medium">
+                            + New Stream
+                        </button>
+                    </div>
+                </div>
+                
+                {/* Summary stats */}
+                <div className={`grid gap-4 mb-6 ${totalPendingAlerts > 0 ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                    {[
+                        { label: 'Active Streams', value: filteredStreams.filter(s => s.status === 'active').length, color: 'text-green-400' },
+                        { label: 'Blocked', value: filteredStreams.filter(s => s.status === 'blocked').length, color: 'text-red-400' },
+                        { label: 'Complete', value: filteredStreams.filter(s => s.status === 'complete').length, color: 'text-slate-400' },
+                        { label: 'Total Items', value: filteredStreams.reduce((sum, s) => sum + WorkItemService.filterByStream(globalWorkItems, s.id).length, 0), color: 'text-blue-400' },
+                        ...(totalPendingAlerts > 0 ? [{ label: '🔔 Pending Alerts', value: totalPendingAlerts, color: 'text-amber-400' }] : [])
+                    ].map(stat => (
+                        <div key={stat.label} className="bg-slate-800 rounded-lg border border-slate-700 p-4 text-center">
+                            <div className={`text-2xl font-bold ${stat.color}`}>{stat.value}</div>
+                            <div className="text-xs text-slate-500 mt-1">{stat.label}</div>
+                        </div>
+                    ))}
+                </div>
+                
+                {/* Stream cards by app */}
+                {Object.keys(streamsByApp).length === 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-12 text-center">
+                        <div className="text-4xl mb-3">🔀</div>
+                        <h3 className="text-lg font-semibold mb-2">No work streams yet</h3>
+                        <p className="text-slate-400 text-sm mb-4 max-w-lg mx-auto">
+                            Work streams organize your backlog into parallel tracks. Each stream has an owner, a goal, and its own set of work items. 
+                            Different people can run AI sessions against different streams without stepping on each other.
+                        </p>
+                        <button onClick={() => setEditingStream('new')}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded font-medium">
+                            Create Your First Stream
+                        </button>
+                    </div>
+                )}
+                
+                {Object.entries(streamsByApp).sort((a, b) => (apps[a[0]]?.name || '').localeCompare(apps[b[0]]?.name || '')).map(([appId, streams]) => {
+                    const app = apps[appId] || { name: appId, icon: '📦' };
+                    const unassignedCount = getUnassignedCount(appId);
+                    
+                    return (
+                        <div key={appId} className="mb-6">
+                            <div className="flex items-center gap-2 mb-3">
+                                <span>{app.icon === 'gs-logo' ? '🎮' : app.icon}</span>
+                                <h3 className="font-semibold">{app.name}</h3>
+                                <span className="text-xs text-slate-500">{streams.length} stream{streams.length !== 1 ? 's' : ''}</span>
+                                {unassignedCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded text-xs bg-amber-900/30 text-amber-400 border border-amber-800/50">
+                                        {unassignedCount} unassigned item{unassignedCount !== 1 ? 's' : ''}
+                                    </span>
+                                )}
+                            </div>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {streams.map(stream => {
+                                    const completion = WorkStreamService.getCompletion(stream, globalWorkItems);
+                                    const streamItems = WorkItemService.filterByStream(globalWorkItems, stream.id);
+                                    const isBlocked = WorkStreamService.isBlocked(stream, globalStreams);
+                                    const interfaces = StreamInterfaceService.getByStream(globalInterfaces, stream.id);
+                                    const consumedDeps = DependencyService.getConsumedBy(globalDependencies, stream.id);
+                                    const pendingAlerts = DependencyAlertService.getPendingForStream(globalDependencyAlerts || [], globalDependencies, stream.id);
+                                    
+                                    return (
+                                        <div key={stream.id} className={`bg-slate-800 rounded-xl border ${stream.status === 'blocked' ? 'border-red-800/50' : 'border-slate-700'} p-4`}>
+                                            {/* Header */}
+                                            <div className="flex items-start justify-between mb-3">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`px-2 py-0.5 rounded text-xs border ${statusColors[stream.status]}`}>
+                                                            {statusIcons[stream.status]} {stream.status}
+                                                        </span>
+                                                        <h4 className="font-semibold">{stream.name}</h4>
+                                                    </div>
+                                                    {stream.goal && <p className="text-xs text-slate-400 mt-1">{stream.goal}</p>}
+                                                    <div className="text-xs text-slate-500 mt-1 flex items-center gap-3">
+                                                        <span>👤 {stream.owner}</span>
+                                                        {stream.targetRelease && <span>🎯 {stream.targetRelease}</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <button onClick={() => setEditingStream(stream)} className="p-1 hover:bg-slate-700 rounded text-slate-400 text-xs" title="Edit stream">✏️</button>
+                                                    <button onClick={() => handleDeleteStream(stream)} className="p-1 hover:bg-slate-700 rounded text-slate-400 text-xs" title="Delete stream">🗑️</button>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Completion bar */}
+                                            {completion.total > 0 && (
+                                                <div className="mb-3">
+                                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                                                        <span>{completion.done}/{completion.total} items done</span>
+                                                        <span>{completion.pct}%</span>
+                                                    </div>
+                                                    <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                                        <div className="h-full bg-green-500 rounded-full transition-all" style={{width: `${completion.pct}%`}}></div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            
+                                            {/* Work items summary */}
+                                            <div className="space-y-1 mb-3">
+                                                {streamItems.filter(i => i.status !== 'done' && i.status !== 'deferred').slice(0, 5).map(item => (
+                                                    <div key={item.id} className="flex items-center gap-2 text-xs">
+                                                        <span>{item.status === 'in-progress' ? '🔨' : item.status === 'review' ? '👁️' : item.status === 'ready' ? '◉' : '○'}</span>
+                                                        <span className="text-slate-300 truncate flex-1">{item.title}</span>
+                                                        <span className="text-slate-500 capitalize">{item.status}</span>
+                                                    </div>
+                                                ))}
+                                                {streamItems.filter(i => i.status !== 'done' && i.status !== 'deferred').length > 5 && (
+                                                    <div className="text-xs text-slate-500">+{streamItems.filter(i => i.status !== 'done' && i.status !== 'deferred').length - 5} more</div>
+                                                )}
+                                                {streamItems.length === 0 && (
+                                                    <div className="text-xs text-slate-500 py-2">No items assigned yet</div>
+                                                )}
+                                            </div>
+                                            
+                                            {/* Interfaces provided */}
+                                            {interfaces.length > 0 && (
+                                                <div className="mb-3 border-t border-slate-700 pt-2">
+                                                    <div className="text-xs text-slate-500 mb-1">Provides:</div>
+                                                    {interfaces.map(iface => (
+                                                        <div key={iface.id} className="text-xs text-slate-400 flex items-center gap-1">
+                                                            <span className="text-indigo-400">•</span> {iface.description}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Dependencies consumed */}
+                                            {consumedDeps.length > 0 && (
+                                                <div className="mb-3 border-t border-slate-700 pt-2">
+                                                    <div className="text-xs text-slate-500 mb-1">Depends on:</div>
+                                                    {consumedDeps.map(dep => {
+                                                        const iface = globalInterfaces.find(i => i.id === dep.interfaceId);
+                                                        const providerStream = globalStreams.find(s => s.id === iface?.streamId);
+                                                        return (
+                                                            <div key={dep.id} className="text-xs text-slate-400 flex items-center gap-1">
+                                                                <span className={dep.status === 'changed' ? 'text-amber-400' : 'text-green-400'}>•</span>
+                                                                <span>{iface?.description || dep.interfaceId}</span>
+                                                                {providerStream && <span className="text-slate-500">← {providerStream.name}</span>}
+                                                                {dep.status === 'changed' && <span className="text-amber-400 ml-1">⚠ changed</span>}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Phase 5.4: Pending dependency alerts */}
+                                            {pendingAlerts.length > 0 && (
+                                                <div className="mb-3 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2">
+                                                    <div className="text-xs font-medium text-amber-300 mb-1">
+                                                        🔔 {pendingAlerts.length} dependency update{pendingAlerts.length !== 1 ? 's' : ''} pending
+                                                    </div>
+                                                    {pendingAlerts.slice(0, 3).map(alert => {
+                                                        const iface = globalInterfaces.find(i => i.id === alert.interfaceId);
+                                                        return (
+                                                            <div key={alert.id} className="text-xs text-amber-200/70 mb-0.5">
+                                                                • {iface?.description || 'Interface'}: {alert.changeDescription}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    {pendingAlerts.length > 3 && (
+                                                        <div className="text-xs text-amber-200/50">+{pendingAlerts.length - 3} more</div>
+                                                    )}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Actions */}
+                                            <div className="flex items-center gap-2 pt-2 border-t border-slate-700">
+                                                <select value={stream.status} onChange={e => handleStatusChange(stream, e.target.value)}
+                                                    className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs flex-1">
+                                                    <option value="active">🟢 Active</option>
+                                                    <option value="paused">⏸️ Paused</option>
+                                                    <option value="blocked">🔴 Blocked</option>
+                                                    <option value="complete">✅ Complete</option>
+                                                </select>
+                                                <button onClick={() => handleAssignItems(stream)}
+                                                    className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs"
+                                                    title="Assign unassigned items">
+                                                    📋 Assign Items
+                                                </button>
+                                                <button onClick={() => { setView('backlog'); }}
+                                                    className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs"
+                                                    title="View in backlog">
+                                                    📋 Backlog
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                })}
+                
+                {/* Stream Edit Modal */}
+                {editingStream && (
+                    <StreamEditModal
+                        stream={editingStream === 'new' ? null : editingStream}
+                        apps={apps}
+                        globalStreams={globalStreams}
+                        config={config}
+                        onSave={editingStream === 'new' ? handleCreateStream : (data) => handleUpdateStream(editingStream.id, data)}
+                        onCancel={() => setEditingStream(null)}
+                    />
+                )}
+            </div>
+        );
+    }
+    
+    // StreamEditModal — Create/edit work streams
+    function StreamEditModal({ stream, apps, globalStreams, config, onSave, onCancel }) {
+        const isNew = !stream;
+        const [name, setName] = React.useState(stream?.name || '');
+        const [appId, setAppId] = React.useState(stream?.appId || '');
+        const [owner, setOwner] = React.useState(stream?.owner || config?._userName || 'Owner');
+        const [goal, setGoal] = React.useState(stream?.goal || '');
+        const [targetRelease, setTargetRelease] = React.useState(stream?.targetRelease || '');
+        const [status, setStatus] = React.useState(stream?.status || 'active');
+        const [blockedBy, setBlockedBy] = React.useState(stream?.blockedBy || []);
+        
+        const appList = Object.values(apps).filter(a => a.id !== 'command-center').sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        const otherStreams = globalStreams.filter(s => s.id !== stream?.id);
+        
+        const handleSubmit = () => {
+            if (!name.trim() || !appId) return;
+            onSave({
+                name: name.trim(),
+                appId,
+                owner: owner.trim() || 'Owner',
+                goal: goal.trim(),
+                targetRelease: targetRelease.trim(),
+                status,
+                blockedBy
+            });
+        };
+        
+        return (
+            <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={onCancel}>
+                <div className="bg-slate-800 rounded-xl border border-slate-700 max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+                    <h3 className="text-lg font-bold mb-4">{isNew ? '🔀 New Work Stream' : `✏️ Edit: ${stream.name}`}</h3>
+                    
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Stream Name *</label>
+                            <input value={name} onChange={e => setName(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                placeholder="Core Gameplay, Help & Onboarding, Marketing..." autoFocus />
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">App *</label>
+                            <select value={appId} onChange={e => setAppId(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                disabled={!isNew}>
+                                <option value="">Select app...</option>
+                                {appList.map(a => (
+                                    <option key={a.id} value={a.id}>{a.icon === 'gs-logo' ? '🎮' : a.icon} {a.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Owner</label>
+                                <input value={owner} onChange={e => setOwner(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                    placeholder="Dave, Sarah..." />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Target Release</label>
+                                <input value={targetRelease} onChange={e => setTargetRelease(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                    placeholder="v1.0, v2.0..." />
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Goal — what done looks like</label>
+                            <textarea value={goal} onChange={e => setGoal(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm h-20"
+                                placeholder="All core game mechanics working, tested, and deployed to prod..." />
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Status</label>
+                            <select value={status} onChange={e => setStatus(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+                                <option value="active">🟢 Active</option>
+                                <option value="paused">⏸️ Paused</option>
+                                <option value="blocked">🔴 Blocked</option>
+                                <option value="complete">✅ Complete</option>
+                            </select>
+                        </div>
+                        
+                        {otherStreams.length > 0 && (
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Blocked by (other streams)</label>
+                                <div className="space-y-1 max-h-32 overflow-y-auto">
+                                    {otherStreams.map(s => (
+                                        <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-slate-700/50 px-2 py-1 rounded">
+                                            <input type="checkbox" checked={blockedBy.includes(s.id)}
+                                                onChange={e => {
+                                                    if (e.target.checked) setBlockedBy([...blockedBy, s.id]);
+                                                    else setBlockedBy(blockedBy.filter(id => id !== s.id));
+                                                }} />
+                                            <span className="text-slate-300">{s.name}</span>
+                                            <span className="text-xs text-slate-500">{apps[s.appId]?.name || s.appId}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    
+                    <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-700">
+                        <button onClick={onCancel} className="px-4 py-2 text-sm text-slate-400 hover:text-white">Cancel</button>
+                        <button onClick={handleSubmit} disabled={!name.trim() || !appId}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium">
+                            {isNew ? 'Create Stream' : 'Save Changes'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
     // =========================================================================
     
     function ReleaseCoordinationView({ apps, config, globalWorkItems, globalSessions, deployments, showAlert, showConfirm, showPrompt, setView }) {
@@ -23669,7 +25010,7 @@ const pushIssueToCommandCenter = async (testResult) => {
     // =========================================================================
     // PROJECTS TAB (v8.8.0) — Replaces Apps tab in Configure
     // =========================================================================
-    function ProjectsTab({ config, updateConfig, activeEnvs, envColors, github, githubOwner, availableRepos, showAlert, showConfirm, onRefreshRepos, deployments, globalWorkItems, firebaseUid }) {
+    function ProjectsTab({ config, updateConfig, activeEnvs, envColors, github, githubOwner, availableRepos, showAlert, showConfirm, onRefreshRepos, deployments, globalWorkItems, firebaseUid, globalStreams }) {
         const [expandedProject, setExpandedProject] = React.useState(null);
         const [editingApp, setEditingApp] = React.useState(null);
         const [editingProject, setEditingProject] = React.useState(null);
@@ -24073,6 +25414,7 @@ const pushIssueToCommandCenter = async (testResult) => {
                         showAlert={showAlert}
                         globalWorkItems={globalWorkItems}
                         firebaseUid={firebaseUid}
+                        globalStreams={globalStreams}
                     />
                 )}
             </div>
@@ -24793,7 +26135,7 @@ ${repoStr || '- *No repos configured*'}
 `;
     }
     
-    function ClaudePrepModal({ app, config, github, githubOwner, deployments, onClose, showAlert, globalWorkItems, firebaseUid }) {
+    function ClaudePrepModal({ app, config, github, githubOwner, deployments, onClose, showAlert, globalWorkItems, firebaseUid, globalStreams }) {
         // === Wizard State (v8.37.0: 3-step Session Wizard) ===
         const [wizardStep, setWizardStep] = React.useState(1); // 1: Work Items, 2: Session Type + Context, 3: Generate
         const [phase, setPhase] = React.useState('wizard'); // wizard | building | done | error
@@ -24810,10 +26152,20 @@ ${repoStr || '- *No repos configured*'}
         const [sessionRecord, setSessionRecord] = React.useState(null);
         
         // Get work items for this app
+        const [streamFilter, setStreamFilter] = React.useState('all'); // Phase 5.2: stream filter for work items
+        
+        const appStreams = React.useMemo(() => {
+            return (globalStreams || []).filter(s => s.appId === app.id);
+        }, [globalStreams, app.id]);
+        
         const appWorkItems = React.useMemo(() => {
             if (!globalWorkItems) return [];
-            return globalWorkItems.filter(wi => wi.appId === app.id && (wi.status === 'ready' || wi.status === 'in-progress'));
-        }, [globalWorkItems, app.id]);
+            let items = globalWorkItems.filter(wi => wi.appId === app.id && (wi.status === 'ready' || wi.status === 'in-progress'));
+            if (streamFilter !== 'all') {
+                items = items.filter(wi => streamFilter === 'unassigned' ? !wi.streamId : wi.streamId === streamFilter);
+            }
+            return items;
+        }, [globalWorkItems, app.id, streamFilter]);
         
         // Auto-suggest session type when a work item is selected
         const handleWorkItemToggle = (wi) => {
@@ -25041,7 +26393,8 @@ ${repoStr || '- *No repos configured*'}
                 const brief = generateSessionBrief(app, config, deployments, {
                     sessionType: sessionType || null,
                     targetWorkItems: selectedWorkItems.length > 0 ? selectedWorkItems : null,
-                    allWorkItems: globalWorkItems || []
+                    allWorkItems: globalWorkItems || [],
+                    streams: globalStreams || []  // Phase 5.2: stream context
                 });
                 const manifest = '\n## Files in This Package\n| File | Size | Tokens | Source |\n|------|------|--------|--------|\n' +
                     files.map(f => `| ${f.name} | ${(f.size / 1024).toFixed(1)}KB | ${TokenRegistryService.formatTokens(f.tokens || 0)} | ${f.generated ? '\u26a1 Generated skeleton' : '\ud83d\udcc2 From repo'} |`).join('\n') + '\n';
@@ -25303,6 +26656,21 @@ ${repoStr || '- *No repos configured*'}
                         <div className="flex-1 overflow-y-auto p-5 min-h-0 space-y-4">
                             <div className="text-sm font-medium text-slate-300 mb-1">What are you working on?</div>
                             <div className="text-xs text-slate-500 mb-3">Build a Claude briefing package. Select work items to focus on, or skip for a general session.</div>
+                            
+                            {/* Stream filter (Phase 5.2) */}
+                            {appStreams.length > 0 && (
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xs text-slate-500">Stream:</span>
+                                    <select value={streamFilter} onChange={e => setStreamFilter(e.target.value)}
+                                        className="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                                        <option value="all">All streams</option>
+                                        {appStreams.map(s => (
+                                            <option key={s.id} value={s.id}>🔀 {s.name}</option>
+                                        ))}
+                                        <option value="unassigned">📋 Unassigned</option>
+                                    </select>
+                                </div>
+                            )}
                             
                             {appWorkItems.length > 0 ? (
                                 <div className="space-y-1.5 max-h-64 overflow-y-auto">
