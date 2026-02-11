@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.46.0** — Released 2026-02-11
+**v8.48.1** — Released 2026-02-11
 
 ## What Command Center Is
 
@@ -22,7 +22,7 @@ Command Center is an internal tool for managing the Game Shelf ecosystem of web 
 
 ## Architecture
 
-- **Single HTML file** — All CSS, JS, React inline (~890KB, ~30,400 lines)
+- **Single HTML file** — All CSS, JS, React inline (~1.8MB, ~31,700 lines)
 - **React via CDN** — React 18 + ReactDOM loaded from unpkg
 - **No build step** — Runs directly from file:// or GitHub Pages
 - **GitHub API** — All repo/deploy operations use personal access token
@@ -147,7 +147,7 @@ Maintain
 ├── Cleanup          — Orphan file detection
 ├── Files            — Repo file browser
 ├── Archive          — gs-active management
-└── Session Log      — Activity log
+└── Session Log      — Activity log, session history, auto-review (SESSION_RETURN.json v8.48.0)
 
 Configure
 ├── Environments     — Test/Prod environment config
@@ -174,6 +174,9 @@ Configure
 | `ProductBriefGenerator` | Auto-generates PRODUCT_BRIEF.md from scope, work items, deploys, streams — PM-language product context for cross-stream sharing (NEW v8.45.0) |
 | `ProductBriefModal` | Lightweight viewer for auto-generated Product Brief with copy-to-clipboard (NEW v8.45.0) |
 | `TeamService` | Multi-person workspace management — invite by email, role-based access (owner/editor/viewer), Firebase data path sharing (NEW v8.46.0) |
+| `AutoReviewModal` | Displays parsed SESSION_RETURN.json with editable work item statuses, issue/idea creation toggles, session match confidence, and apply handler (NEW v8.48.0) |
+| `validateSessionReturn()` | Schema validation for SESSION_RETURN.json — required fields, enum checks, type validation (NEW v8.48.0) |
+| `matchSessionReturn()` | 3-tier session matching: session ID (high), work item overlap (high), type + recency (medium/low) (NEW v8.48.0) |
 | `WorkStreamsView` | Work streams board view — stream cards with completion, items, interfaces, dependencies per app (NEW v8.43.0) |
 | `StreamEditModal` | Create/edit work streams with full metadata (NEW v8.43.0) |
 | `WorkItemService` | Backlog work item CRUD via Firebase, status transitions, batch create, milestone filtering (NEW v8.20.0, enhanced v8.22.0, streamId added v8.43.0) |
@@ -196,6 +199,36 @@ Configure
 | `ConfigManager` | Config load/save/migrate with backward compatibility |
 
 ## Recent Changes (This Session)
+
+### v8.48.1 — SESSION_RETURN.json: Structured Session Handoff
+Three-phase implementation of a structured handoff contract for Claude sessions.
+
+**Phase A: Brief Generation**
+- All 8 SESSION_TYPES updated with `SESSION_RETURN.json` in deliveryRequirements
+- SessionBriefGenerator embeds full JSON schema in generated briefs with pre-filled sessionType and sessionId
+- classifyFileAction treats SESSION_RETURN.json as 'skip' (not pushed to repo)
+
+**Phase B: Auto-Review Processing**
+- SESSION_RETURN.json detection in both ZIP extraction and single-file drop paths
+- `validateSessionReturn()` — full schema validation: required fields (version, sessionType, timestamp, summary), enum checks, type validation
+- `matchSessionReturn()` — 3-tier confidence matching: session ID → work item overlap → type + recency
+- `AutoReviewModal` component — displays parsed manifest with editable work item statuses, toggleable issue/idea creation, interface change flags, breaking change warnings, file summary
+- Apply handler: updates work item statuses via WorkItemService, creates new work items for discovered issues/ideas (source: 'session-return'), completes session review, stores `returnManifest` metadata on session record, logs activity
+
+**Phase C: Integration Polish**
+- Session record creation moved before brief generation so session ID is embedded in the return manifest schema
+- `sessionId` field added to SESSION_RETURN_SCHEMA and matchSessionReturn (highest-confidence match)
+- SessionBriefGenerator accepts `sessionId` in options, pre-fills in schema
+- Session history shows cyan `⚡ Auto-Reviewed` badge on sessions processed via SESSION_RETURN.json
+- Expanded session details display return manifest section with version bump, issue/idea/interface change counts, and application timestamp
+- Pending return manifest banner in Sessions view with "Open Auto-Review" button
+- `pendingSessionReturn` / `setPendingSessionReturn` state threaded from App → SessionLogView
+
+### v8.47.0 — Domain Management
+- FirebaseAdmin: getAuthConfig(), getAuthorizedDomains(), updateAuthorizedDomains(), addAuthorizedDomain(), removeAuthorizedDomain()
+- testConnection() updated with 4th check for auth config
+- AuthorizedDomainsManager component in Settings
+- GitHubPagesDomainManager component with DNS health checks
 
 ### v8.46.0 — Unified Plan Phase 5.6–5.7: Activity Feed Multi-Person View + Multi-Person Access
 - **Activity Feed View (Phase 5.6)** — New "📡 Activity Feed" sub-tab in Session Log alongside Session Log and Session History. Full-page activity timeline with:
