@@ -6,7 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [8.38.0] — 2026-02-10
+## [8.40.0] — 2026-02-10
+
+### Added — Phase 3.3: Work Item Lifecycle Automation
+- **`review` status** — New work item status between in-progress and done; represents "built, awaiting verification and deploy"
+- **Idea → Ready auto-suggest** — When acceptance criteria are added to an idea-status work item, CC prompts "Promote to Ready?" after save
+- **In-Progress → Review auto-transition** — When Post-Session Review starts (Step 1 completes), linked work items automatically transition from in-progress to review with activity log entry
+- **Review → Done via deploy** — Deploy completion dialog now picks up both in-progress AND review items, showing current status per item
+- **Stale detection in Backlog** — Items in-progress or review for 7+ days show "⚠ Nd stale" badge inline on work item rows
+- **`WorkItemService.isStale()`** — Reusable stale check for any item (checks both in-progress and review status)
+- **`WorkItemService.getStaleDays()`** — Returns days in current status
+- **`WorkItemService.getInReview()`** — Filter helper for review-status items
+- **`reviewStartedAt` timestamp** — Tracked on work items entering review status
+
+### Changed
+- **Status flow** — idea → ready → in-progress → review → done (review inserted before done)
+- **Quick transition buttons** — In-progress items now show Review as primary forward transition, with Done and Deferred as alternatives
+- **Active filter** — Backlog "Active" count and filter now includes review status
+- **Dashboard backlog widget** — Grid expanded from 4 to 5 columns to show Review count with purple styling
+- **Portfolio aging metric** — Uses `WorkItemService.isStale()` for both in-progress and review items instead of manual 7-day check
+- **Deploy close-the-loop** — Completion dialog shows item status (in-progress/review) and handles both
+- **Post-Session Review Step 4** — Logs correct from-status (review→done) instead of always assuming in-progress→done
+
+---
+
+## [8.39.0] — 2026-02-10
 
 ### Changed — Phase 2: Rewrite (PM-First Language)
 - **Scoping questions rewritten as intent** — all 5 categories now use PM language, not developer language (e.g. "Data persistence: none / localStorage / Firebase" → "Should data save between sessions? No / On this device / Synced across devices")
