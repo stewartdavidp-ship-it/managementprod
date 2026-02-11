@@ -208,11 +208,24 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] Portfolio View — Features Shipped added to top stats row (5 columns)
 - [x] Demoted below fold — maturity distribution, session mix, deploy counts per Unified Plan spec
 
+### Unified Plan Phase 4.4–4.5: Release Coordination + Test Checklist (v8.42.0)
+- [x] Release Coordination View — per-app readiness assessment with go/no-go summary
+- [x] Pipeline visualization — completion %, status bars, blocker detection
+- [x] Milestone breakdown — expandable per-milestone progress with stale warnings
+- [x] Version tracking — test vs prod comparison with drift detection
+- [x] Summary cards — Ready to Ship, Blocked, Overall Completion, Stale Items
+- [x] Release Test Checklist — auto-generated from completed work items + acceptance criteria
+- [x] Category-driven user journeys — game/tool/dashboard/content/admin standard test paths
+- [x] Regression checks — recent session deliverables surfaced as verification items
+- [x] Deploy verification section — PWA-aware with service worker checks
+- [x] Interactive checklist — progress tracking with completion % and deploy prompt
+- [x] Navigation — Releases view added under Backlog dropdown
+
 ---
 
 ## In Progress
 
-_(Unified Plan Phases 1–3 complete, Phase 4.1–4.3 complete — Phase 4.4–4.5: Release Coordination + Test Checklist next)_
+_(Unified Plan Phases 1–4 complete — Phase 5: Generalize next)_
 
 ---
 
