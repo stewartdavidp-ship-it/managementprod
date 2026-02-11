@@ -1,6 +1,36 @@
 Command Center — Release Notes
 ================================
 
+v8.40.0 — Phase 3: Close the Loop, Session 2
+-------------------------------------------------
+Work Item Lifecycle Automation: Work items now flow through a full 
+lifecycle with intelligent auto-suggestions at each transition.
+
+New "review" status sits between in-progress and done. When you start 
+a Post-Session Review, linked work items automatically move to "review". 
+When you deploy and close items, they move review → done with proper 
+activity logging.
+
+Adding acceptance criteria to an idea-status item triggers a prompt: 
+"Promote to Ready?" — so items don't sit as ideas after they've been 
+specified.
+
+Stale items (7+ days in-progress or review) now show a red "⚠ Nd stale" 
+badge directly on work item rows in the Backlog, making it immediately 
+visible which items are stuck.
+
+The deploy completion dialog now catches both in-progress AND review 
+items, showing their current status so you know what you're completing.
+
+Full lifecycle: Idea → Ready (criteria added) → In Progress (session 
+started) → Review (session reviewed) → Done (deployed & confirmed).
+
+Phase 3 status: Complete. All four sub-phases delivered:
+  3.1 ✅ Post-Session Review Flow (v8.39.0)
+  3.2 ✅ Session-Deploy-WorkItem Linking (v8.27.0)  
+  3.3 ✅ Work Item Lifecycle Automation (v8.40.0)
+  3.4 ✅ Activity Logging (v8.39.0)
+
 v8.39.0 — Phase 3: Close the Loop, Session 1
 -------------------------------------------------
 Post-Session Review Flow: After returning from a Claude session, you can now 
