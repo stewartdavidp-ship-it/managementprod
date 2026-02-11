@@ -5966,6 +5966,7 @@
         const [view, setView] = React.useState('dashboard');
         const [cleanupInitialTab, setCleanupInitialTab] = React.useState(null);
         const [pendingGsActiveFile, setPendingGsActiveFile] = React.useState(null); // For passing gs-active zip to Smart Deploy
+        const [pendingSessionReturn, setPendingSessionReturn] = React.useState(null); // SESSION_RETURN.json auto-review (Phase B)
         const [githubToken, setGithubToken] = React.useState(() => {
             try { return localStorage.getItem('cc_token') || ''; } catch { return ''; }
         });
@@ -7046,7 +7047,28 @@
                                     console.log('Extracted:', cleanPath, '→', targetPath, 'v' + version);
                                     
                                     const fileAction = classifyFileAction(fileName);
-                                    if (fileAction === 'skip') return; // Skip SESSION_BRIEF.md etc.
+                                    if (fileAction === 'skip') {
+                                        // Phase B: Capture SESSION_RETURN.json before skipping
+                                        if (fileName === 'SESSION_RETURN.json' && isText) {
+                                            console.log('[SESSION_RETURN] Found in zip, capturing for auto-review');
+                                            const validation = validateSessionReturn(content);
+                                            if (validation.valid) {
+                                                setPendingSessionReturn({ 
+                                                    data: validation.data, 
+                                                    warnings: validation.warnings,
+                                                    sourceApp: suggestedApp || primaryApp,
+                                                    raw: content
+                                                });
+                                            } else {
+                                                console.warn('[SESSION_RETURN] Validation failed:', validation.errors);
+                                                showAlert(
+                                                    `SESSION_RETURN.json found but has errors:\n\n${validation.errors.join('\n')}\n\nFalling back to manual review.`,
+                                                    '⚠️ Return Manifest Invalid'
+                                                );
+                                            }
+                                        }
+                                        return; // Skip SESSION_BRIEF.md etc.
+                                    }
                                     
                                     // For push-doc files, compute the repo target path
                                     let docTargetPath = fileName; // Default: just the filename at root
@@ -7220,7 +7242,28 @@
                     }
                     
                     const fileAction = classifyFileAction(cleanedName);
-                    if (fileAction === 'skip') return;
+                    if (fileAction === 'skip') {
+                        // Phase B: Capture SESSION_RETURN.json before skipping
+                        if (cleanedName === 'SESSION_RETURN.json' && isText) {
+                            console.log('[SESSION_RETURN] Found as single file drop, capturing for auto-review');
+                            const validation = validateSessionReturn(content);
+                            if (validation.valid) {
+                                setPendingSessionReturn({
+                                    data: validation.data,
+                                    warnings: validation.warnings,
+                                    sourceApp: suggestedApp,
+                                    raw: content
+                                });
+                            } else {
+                                console.warn('[SESSION_RETURN] Validation failed:', validation.errors);
+                                showAlert(
+                                    `SESSION_RETURN.json has errors:\n\n${validation.errors.join('\n')}\n\nFalling back to manual review.`,
+                                    '⚠️ Return Manifest Invalid'
+                                );
+                            }
+                        }
+                        return;
+                    }
                     
                     // For push-doc files, compute repo target path
                     let finalTargetPath = targetPath;
@@ -8884,6 +8927,131 @@
                                 await showAlert(`Version bumps prepared!\n\nTo apply, you'll need to update the source files and redeploy.\n\n${bumps.map(b => `${b.app}: ${b.current} → ${b.new}`).join('\n')}`, 'Version Bump Preview');
                             }}
                             onCancel={() => setModal(null)}
+                        />
+                    )}
+                    
+                    {/* SESSION_RETURN.json Auto-Review Modal (Phase B) */}
+                    {pendingSessionReturn && (
+                        <AutoReviewModal
+                            returnManifest={pendingSessionReturn}
+                            sessions={globalSessions || []}
+                            workItems={globalWorkItems || []}
+                            apps={apps}
+                            onClose={() => setPendingSessionReturn(null)}
+                            onApply={async ({ data, matchedSession, wiStatuses, applyWorkItems, applyNewIssues, applyNewIdeas }) => {
+                                const results = [];
+                                const actor = config?.ownerName || 'Owner';
+                                const appId = matchedSession?.appId;
+                                const appName = appId ? (apps[appId]?.name || appId) : 'unknown';
+                                
+                                try {
+                                    // 1. Update work item statuses
+                                    if (applyWorkItems && firebaseUid && wiStatuses.length > 0) {
+                                        for (const wi of wiStatuses) {
+                                            try {
+                                                if (wi.status === 'completed') {
+                                                    await WorkItemService.complete(firebaseUid, wi.id, data.versionBump?.to || null);
+                                                    results.push(`✅ ${wi.id} → completed`);
+                                                } else if (wi.status === 'blocked' || wi.status === 'deferred') {
+                                                    await WorkItemService.updateStatus(firebaseUid, wi.id, 'ready');
+                                                    results.push(`⏸ ${wi.id} → ready (was ${wi.status})`);
+                                                }
+                                                // 'partial' items stay in-progress
+                                            } catch (e) {
+                                                results.push(`⚠️ ${wi.id}: ${e.message}`);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // 2. Create work items for discovered issues
+                                    if (applyNewIssues && firebaseUid && (data.discoveredIssues || []).length > 0) {
+                                        for (const issue of data.discoveredIssues) {
+                                            try {
+                                                const newWi = await WorkItemService.create(firebaseUid, {
+                                                    appId: appId || '',
+                                                    title: issue.title,
+                                                    description: issue.description || '',
+                                                    type: issue.suggestedType || 'bugfix',
+                                                    priority: issue.severity || 'medium',
+                                                    status: 'ready',
+                                                    source: 'session-return'
+                                                });
+                                                results.push(`🐛 Created: ${newWi.id} — ${issue.title}`);
+                                            } catch (e) {
+                                                results.push(`⚠️ Issue "${issue.title}": ${e.message}`);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // 3. Create work items for discovered ideas
+                                    if (applyNewIdeas && firebaseUid && (data.discoveredIdeas || []).length > 0) {
+                                        for (const idea of data.discoveredIdeas) {
+                                            try {
+                                                const newWi = await WorkItemService.create(firebaseUid, {
+                                                    appId: appId || '',
+                                                    title: idea.title,
+                                                    description: idea.description || '',
+                                                    type: idea.suggestedType || 'feature',
+                                                    priority: 'low',
+                                                    status: 'ready',
+                                                    source: 'session-return'
+                                                });
+                                                results.push(`💡 Created: ${newWi.id} — ${idea.title}`);
+                                            } catch (e) {
+                                                results.push(`⚠️ Idea "${idea.title}": ${e.message}`);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // 4. Complete session review
+                                    if (firebaseUid && matchedSession) {
+                                        try {
+                                            await SessionService.startReview(firebaseUid, matchedSession.id, {
+                                                files: data.filesModified || [],
+                                                summary: data.summary
+                                            });
+                                            await SessionService.completeReview(firebaseUid, matchedSession.id, {
+                                                criteriaResults: (wiStatuses || []).map(wi => ({
+                                                    id: wi.id,
+                                                    met: wi.status === 'completed',
+                                                    text: wi.notes || ''
+                                                })),
+                                                reviewedBy: 'auto-review (SESSION_RETURN.json)',
+                                                notes: data.summary
+                                            });
+                                            results.push(`📋 Session ${matchedSession.id} → review complete`);
+                                        } catch (e) {
+                                            results.push(`⚠️ Session update: ${e.message}`);
+                                        }
+                                    }
+                                    
+                                    // 5. Log activity
+                                    if (firebaseUid) {
+                                        ActivityLogService.log(firebaseUid, {
+                                            type: 'auto-review',
+                                            actor,
+                                            appName,
+                                            sessionId: matchedSession?.id,
+                                            summary: data.summary,
+                                            workItemsProcessed: wiStatuses.length,
+                                            issuesCreated: applyNewIssues ? (data.discoveredIssues || []).length : 0,
+                                            ideasCreated: applyNewIdeas ? (data.discoveredIdeas || []).length : 0
+                                        }).catch(() => {});
+                                    }
+                                    
+                                    setPendingSessionReturn(null);
+                                    await showAlert(
+                                        `Auto-review applied successfully!\n\n${results.join('\n')}`,
+                                        '✅ Session Review Complete'
+                                    );
+                                } catch (e) {
+                                    await showAlert(`Error during auto-review: ${e.message}\n\nPartial results:\n${results.join('\n')}`, '⚠️ Auto-Review Error');
+                                    setPendingSessionReturn(null);
+                                }
+                            }}
+                            showAlert={showAlert}
+                            firebaseUid={firebaseUid}
+                            config={config}
                         />
                     )}
                     
@@ -19128,6 +19296,257 @@ The deploy will appear in Command Center's Session tab for one-click deployment.
         );
     }
     
+    // =========================================================================
+    // AUTO-REVIEW CONFIRMATION UI — Phase B (v8.48.0)
+    // When SESSION_RETURN.json is detected in a file drop, this modal shows
+    // the parsed manifest and lets the user confirm/modify before applying.
+    // Replaces manual post-session review when a return manifest is present.
+    // =========================================================================
+    
+    function AutoReviewModal({ returnManifest, sessions, workItems, apps, onClose, onApply, showAlert, firebaseUid, config }) {
+        const { data, warnings, sourceApp } = returnManifest;
+        const [applying, setApplying] = React.useState(false);
+        
+        // Match to a session
+        const match = React.useMemo(() => matchSessionReturn(data, sessions, apps), [data, sessions, apps]);
+        const matchedSession = match.session;
+        const matchedApp = matchedSession ? apps[matchedSession.appId] : (sourceApp ? apps[sourceApp] : null);
+        
+        // Work item status overrides (user can change before applying)
+        const [wiStatuses, setWiStatuses] = React.useState(() => {
+            return (data.workItems || []).map(wi => ({ ...wi }));
+        });
+        
+        // Toggles for what to apply
+        const [applyWorkItems, setApplyWorkItems] = React.useState(true);
+        const [applyNewIssues, setApplyNewIssues] = React.useState(true);
+        const [applyNewIdeas, setApplyNewIdeas] = React.useState(true);
+        
+        const updateWiStatus = (idx, status) => {
+            setWiStatuses(prev => prev.map((wi, i) => i === idx ? { ...wi, status } : wi));
+        };
+        
+        const handleApply = async () => {
+            setApplying(true);
+            try {
+                await onApply({
+                    data,
+                    matchedSession,
+                    wiStatuses,
+                    applyWorkItems,
+                    applyNewIssues,
+                    applyNewIdeas
+                });
+            } catch (e) {
+                showAlert(`Error applying return manifest: ${e.message}`, 'Error');
+            } finally {
+                setApplying(false);
+            }
+        };
+        
+        const statusColors = {
+            completed: 'bg-green-900/40 text-green-300',
+            partial: 'bg-yellow-900/40 text-yellow-300',
+            blocked: 'bg-red-900/40 text-red-300',
+            deferred: 'bg-slate-700 text-slate-400'
+        };
+        
+        const severityColors = {
+            critical: 'text-red-400',
+            high: 'text-orange-400',
+            medium: 'text-yellow-400',
+            low: 'text-slate-400'
+        };
+        
+        const confidenceColors = {
+            high: 'text-green-400',
+            medium: 'text-yellow-400',
+            low: 'text-orange-400',
+            none: 'text-red-400'
+        };
+        
+        const e = React.createElement;
+        
+        return e('div', { className: 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4' },
+            e('div', { className: 'bg-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col border border-slate-600' },
+                // Header
+                e('div', { className: 'flex items-center justify-between px-6 py-4 border-b border-slate-700' },
+                    e('div', null,
+                        e('div', { className: 'text-lg font-semibold text-white flex items-center gap-2' }, 
+                            '📋 Auto-Review: SESSION_RETURN.json'
+                        ),
+                        e('div', { className: 'text-sm text-slate-400 mt-0.5' },
+                            matchedApp ? `${matchedApp.icon || '📦'} ${matchedApp.name}` : 'No app matched',
+                            ' — ',
+                            data.sessionType || 'unknown',
+                            ' session'
+                        )
+                    ),
+                    e('button', { onClick: onClose, className: 'text-slate-400 hover:text-white text-xl' }, '✕')
+                ),
+                
+                // Scrollable content
+                e('div', { className: 'px-6 py-5 overflow-y-auto flex-1 space-y-5' },
+                    
+                    // Session match info
+                    e('div', { className: 'p-3 rounded-lg border border-slate-700 bg-slate-900/50' },
+                        e('div', { className: 'text-xs font-medium text-slate-400 mb-1' }, 'Session Match'),
+                        matchedSession 
+                            ? e('div', { className: 'text-sm' },
+                                e('span', { className: 'text-indigo-400 font-mono' }, matchedSession.id),
+                                ' — ',
+                                e('span', { className: confidenceColors[match.confidence] || 'text-slate-400' }, `${match.confidence} confidence`),
+                                e('div', { className: 'text-xs text-slate-500 mt-1' }, match.reason)
+                            )
+                            : e('div', { className: 'text-sm text-orange-400' }, '⚠️ No matching session found — ', match.reason)
+                    ),
+                    
+                    // Summary
+                    e('div', null,
+                        e('div', { className: 'text-xs font-medium text-slate-400 mb-1' }, 'Summary'),
+                        e('div', { className: 'text-sm text-white' }, data.summary)
+                    ),
+                    
+                    // Version bump
+                    data.versionBump && data.versionBump.bumpType !== 'none' && e('div', { className: 'flex items-center gap-3 text-sm' },
+                        e('span', { className: 'text-slate-400' }, 'Version:'),
+                        e('span', { className: 'font-mono text-slate-500' }, data.versionBump.from || '?'),
+                        e('span', { className: 'text-slate-500' }, '→'),
+                        e('span', { className: 'font-mono text-green-400' }, data.versionBump.to || '?'),
+                        e('span', { className: 'text-xs text-slate-500 bg-slate-700 px-1.5 py-0.5 rounded' }, data.versionBump.bumpType)
+                    ),
+                    
+                    // Work Items
+                    (data.workItems || []).length > 0 && e('div', null,
+                        e('div', { className: 'flex items-center justify-between mb-2' },
+                            e('div', { className: 'text-xs font-medium text-slate-400' }, `Work Items (${data.workItems.length})`),
+                            e('label', { className: 'flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer' },
+                                e('input', { type: 'checkbox', checked: applyWorkItems, onChange: () => setApplyWorkItems(!applyWorkItems), className: 'rounded' }),
+                                'Apply status changes'
+                            )
+                        ),
+                        e('div', { className: 'space-y-2' },
+                            wiStatuses.map((wi, idx) => {
+                                // Try to find the actual work item for title
+                                const actualWi = (workItems || []).find(w => w.id === wi.id);
+                                return e('div', { key: wi.id, className: 'flex items-center gap-2 px-3 py-2 bg-slate-900/60 border border-slate-700 rounded-lg text-sm' },
+                                    e('span', { className: 'text-indigo-400 font-mono text-xs shrink-0' }, wi.id),
+                                    e('span', { className: 'text-slate-200 flex-1 truncate' }, actualWi?.title || wi.notes || ''),
+                                    e('select', {
+                                        value: wi.status,
+                                        onChange: (ev) => updateWiStatus(idx, ev.target.value),
+                                        className: `text-xs px-1.5 py-0.5 rounded border-0 ${statusColors[wi.status] || 'bg-slate-700 text-slate-400'}`
+                                    },
+                                        e('option', { value: 'completed' }, '✅ Completed'),
+                                        e('option', { value: 'partial' }, '🔶 Partial'),
+                                        e('option', { value: 'blocked' }, '🚫 Blocked'),
+                                        e('option', { value: 'deferred' }, '⏸ Deferred')
+                                    ),
+                                    wi.notes && e('div', { className: 'text-xs text-slate-500 w-full mt-1', title: wi.notes }, wi.notes.length > 80 ? wi.notes.slice(0, 80) + '...' : wi.notes)
+                                );
+                            })
+                        )
+                    ),
+                    
+                    // Discovered Issues
+                    (data.discoveredIssues || []).length > 0 && e('div', null,
+                        e('div', { className: 'flex items-center justify-between mb-2' },
+                            e('div', { className: 'text-xs font-medium text-slate-400' }, `Discovered Issues (${data.discoveredIssues.length})`),
+                            e('label', { className: 'flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer' },
+                                e('input', { type: 'checkbox', checked: applyNewIssues, onChange: () => setApplyNewIssues(!applyNewIssues), className: 'rounded' }),
+                                'Create work items'
+                            )
+                        ),
+                        e('div', { className: 'space-y-1.5' },
+                            data.discoveredIssues.map((issue, idx) =>
+                                e('div', { key: idx, className: 'px-3 py-2 bg-slate-900/60 border border-slate-700 rounded-lg text-sm' },
+                                    e('div', { className: 'flex items-center gap-2' },
+                                        e('span', { className: `text-xs font-medium ${severityColors[issue.severity] || 'text-slate-400'}` }, issue.severity?.toUpperCase()),
+                                        e('span', { className: 'text-slate-200' }, issue.title)
+                                    ),
+                                    issue.description && e('div', { className: 'text-xs text-slate-500 mt-1' }, issue.description)
+                                )
+                            )
+                        )
+                    ),
+                    
+                    // Discovered Ideas
+                    (data.discoveredIdeas || []).length > 0 && e('div', null,
+                        e('div', { className: 'flex items-center justify-between mb-2' },
+                            e('div', { className: 'text-xs font-medium text-slate-400' }, `Discovered Ideas (${data.discoveredIdeas.length})`),
+                            e('label', { className: 'flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer' },
+                                e('input', { type: 'checkbox', checked: applyNewIdeas, onChange: () => setApplyNewIdeas(!applyNewIdeas), className: 'rounded' }),
+                                'Create work items'
+                            )
+                        ),
+                        e('div', { className: 'space-y-1.5' },
+                            data.discoveredIdeas.map((idea, idx) =>
+                                e('div', { key: idx, className: 'px-3 py-2 bg-slate-900/60 border border-slate-700 rounded-lg text-sm' },
+                                    e('div', { className: 'text-slate-200' }, idea.title),
+                                    idea.description && e('div', { className: 'text-xs text-slate-500 mt-1' }, idea.description)
+                                )
+                            )
+                        )
+                    ),
+                    
+                    // Interface Changes
+                    (data.interfaceChanges || []).length > 0 && e('div', null,
+                        e('div', { className: 'text-xs font-medium text-slate-400 mb-2' }, `Interface Changes (${data.interfaceChanges.length})`),
+                        e('div', { className: 'space-y-1.5' },
+                            data.interfaceChanges.map((change, idx) =>
+                                e('div', { key: idx, className: 'px-3 py-2 bg-slate-900/60 border border-slate-700 rounded-lg text-sm' },
+                                    e('div', { className: 'flex items-center gap-2' },
+                                        e('span', { className: `text-xs px-1.5 py-0.5 rounded ${
+                                            change.breakingChange ? 'bg-red-900/40 text-red-300' : 'bg-slate-700 text-slate-400'
+                                        }` }, change.changeType),
+                                        change.breakingChange && e('span', { className: 'text-xs text-red-400 font-medium' }, '⚠️ BREAKING'),
+                                        e('span', { className: 'text-slate-200' }, change.interface)
+                                    ),
+                                    change.description && e('div', { className: 'text-xs text-slate-500 mt-1' }, change.description)
+                                )
+                            )
+                        )
+                    ),
+                    
+                    // File changes summary
+                    (data.filesModified?.length > 0 || data.filesCreated?.length > 0 || data.filesDeleted?.length > 0) && e('div', null,
+                        e('div', { className: 'text-xs font-medium text-slate-400 mb-2' }, 'File Changes'),
+                        e('div', { className: 'text-xs text-slate-500 space-y-1' },
+                            data.filesModified?.length > 0 && e('div', null, `📝 Modified: ${data.filesModified.join(', ')}`),
+                            data.filesCreated?.length > 0 && e('div', null, `➕ Created: ${data.filesCreated.join(', ')}`),
+                            data.filesDeleted?.length > 0 && e('div', null, `🗑️ Deleted: ${data.filesDeleted.join(', ')}`)
+                        )
+                    ),
+                    
+                    // Warnings
+                    warnings && warnings.length > 0 && e('div', { className: 'p-3 rounded-lg border border-yellow-700/50 bg-yellow-900/20' },
+                        e('div', { className: 'text-xs font-medium text-yellow-400 mb-1' }, `⚠️ ${warnings.length} Validation Warning${warnings.length !== 1 ? 's' : ''}`),
+                        e('div', { className: 'text-xs text-yellow-300/70 space-y-0.5' },
+                            warnings.map((w, i) => e('div', { key: i }, `• ${w}`))
+                        )
+                    )
+                ),
+                
+                // Footer
+                e('div', { className: 'px-6 py-4 border-t border-slate-700 flex items-center justify-between' },
+                    e('button', {
+                        onClick: onClose,
+                        className: 'px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors'
+                    }, 'Skip — Manual Review'),
+                    e('button', {
+                        onClick: handleApply,
+                        disabled: applying || !matchedSession,
+                        className: `px-5 py-2 text-sm font-medium rounded-lg transition-colors ${
+                            applying || !matchedSession
+                                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                        }`
+                    }, applying ? 'Applying...' : '✅ Apply & Complete Review')
+                )
+            )
+        );
+    }
+    
     function SessionHistoryPanel({ sessions, workItems, apps, deployments, firebaseUid, config, showAlert, onStartReview }) {
         const [filterApp, setFilterApp] = React.useState('all');
         const [filterType, setFilterType] = React.useState('all');
@@ -26521,6 +26940,135 @@ const pushIssueToCommandCenter = async (testResult) => {
     
     // Standard doc filenames for the Claude Prep package convention
     const CLAUDE_PREP_DOCS = ['CONTEXT.md', 'PROJECT_PLAN.md', 'CHANGELOG.md', 'RELEASE_NOTES.txt', 'ARCHITECTURE.md', 'CLAUDE-PREP-STANDARD.md', 'CLAUDE_INSTRUCTIONS.md'];
+    
+    // =========================================================================
+    // SESSION_RETURN.json — Validation & Session Matching (Phase B)
+    // =========================================================================
+    
+    const SESSION_RETURN_SCHEMA = {
+        required: ['version', 'sessionType', 'timestamp', 'summary'],
+        optional: ['versionBump', 'workItems', 'discoveredIssues', 'discoveredIdeas', 'interfaceChanges', 'filesModified', 'filesCreated', 'filesDeleted', 'changelog'],
+        workItemStatuses: ['completed', 'partial', 'blocked', 'deferred'],
+        severities: ['critical', 'high', 'medium', 'low'],
+        changeTypes: ['added', 'modified', 'removed', 'renamed'],
+        bumpTypes: ['major', 'minor', 'patch', 'none'],
+        suggestedTypes: ['bugfix', 'enhancement', 'chore', 'research', 'feature']
+    };
+    
+    function validateSessionReturn(jsonString) {
+        const errors = [];
+        const warnings = [];
+        let data;
+        
+        // Step 1: Parse JSON
+        try {
+            data = JSON.parse(jsonString);
+        } catch (e) {
+            return { valid: false, data: null, errors: [`Invalid JSON: ${e.message}`], warnings: [] };
+        }
+        
+        // Step 2: Required fields
+        for (const field of SESSION_RETURN_SCHEMA.required) {
+            if (data[field] === undefined || data[field] === null || data[field] === '') {
+                errors.push(`Missing required field: ${field}`);
+            }
+        }
+        
+        // Step 3: Version
+        if (data.version && data.version !== '1.0') {
+            warnings.push(`Unexpected schema version: ${data.version} (expected 1.0)`);
+        }
+        
+        // Step 4: Session type
+        if (data.sessionType && !SESSION_TYPES[data.sessionType]) {
+            warnings.push(`Unknown session type: ${data.sessionType}`);
+        }
+        
+        // Step 5: Timestamp
+        if (data.timestamp) {
+            const ts = new Date(data.timestamp);
+            if (isNaN(ts.getTime())) {
+                errors.push(`Invalid timestamp: ${data.timestamp}`);
+            }
+        }
+        
+        // Step 6: Version bump
+        if (data.versionBump) {
+            if (data.versionBump.bumpType && !SESSION_RETURN_SCHEMA.bumpTypes.includes(data.versionBump.bumpType)) {
+                warnings.push(`Unknown bump type: ${data.versionBump.bumpType}`);
+            }
+        }
+        
+        // Step 7: Work items
+        if (data.workItems && Array.isArray(data.workItems)) {
+            data.workItems.forEach((wi, i) => {
+                if (!wi.id) errors.push(`workItems[${i}]: missing id`);
+                if (wi.status && !SESSION_RETURN_SCHEMA.workItemStatuses.includes(wi.status)) {
+                    warnings.push(`workItems[${i}]: unknown status "${wi.status}"`);
+                }
+            });
+        }
+        
+        // Step 8: Discovered issues
+        if (data.discoveredIssues && Array.isArray(data.discoveredIssues)) {
+            data.discoveredIssues.forEach((issue, i) => {
+                if (!issue.title) warnings.push(`discoveredIssues[${i}]: missing title`);
+                if (issue.severity && !SESSION_RETURN_SCHEMA.severities.includes(issue.severity)) {
+                    warnings.push(`discoveredIssues[${i}]: unknown severity "${issue.severity}"`);
+                }
+            });
+        }
+        
+        // Step 9: Interface changes
+        if (data.interfaceChanges && Array.isArray(data.interfaceChanges)) {
+            data.interfaceChanges.forEach((change, i) => {
+                if (!change.interface) warnings.push(`interfaceChanges[${i}]: missing interface name`);
+                if (change.changeType && !SESSION_RETURN_SCHEMA.changeTypes.includes(change.changeType)) {
+                    warnings.push(`interfaceChanges[${i}]: unknown changeType "${change.changeType}"`);
+                }
+            });
+        }
+        
+        return { valid: errors.length === 0, data, errors, warnings };
+    }
+    
+    function matchSessionReturn(returnData, sessions, apps) {
+        if (!sessions || sessions.length === 0) return { session: null, confidence: 'none', reason: 'No sessions available' };
+        
+        // Filter to active/in-progress sessions, sorted newest first
+        const candidates = sessions
+            .filter(s => s.status === 'prep' || s.status === 'active' || s.status === 'in-progress' || s.status === 'review')
+            .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        
+        if (candidates.length === 0) return { session: null, confidence: 'none', reason: 'No active sessions found' };
+        
+        // Try matching by session type + app context
+        const typeMatch = candidates.filter(s => s.type === returnData.sessionType);
+        
+        // If work items are present, try matching by work item IDs
+        if (returnData.workItems && returnData.workItems.length > 0) {
+            const returnWiIds = new Set(returnData.workItems.map(wi => wi.id));
+            for (const session of candidates) {
+                const sessionWiIds = session.workItemId ? session.workItemId.split(',').map(s => s.trim()) : [];
+                const overlap = sessionWiIds.filter(id => returnWiIds.has(id));
+                if (overlap.length > 0) {
+                    return { session, confidence: 'high', reason: `Matched ${overlap.length} work item(s): ${overlap.join(', ')}` };
+                }
+            }
+        }
+        
+        // Fall back to type + recency
+        if (typeMatch.length === 1) {
+            return { session: typeMatch[0], confidence: 'medium', reason: `Single active ${returnData.sessionType} session` };
+        }
+        
+        if (typeMatch.length > 1) {
+            return { session: typeMatch[0], confidence: 'low', reason: `${typeMatch.length} active ${returnData.sessionType} sessions — matched newest` };
+        }
+        
+        // Last resort: most recent session
+        return { session: candidates[0], confidence: 'low', reason: 'No type match — using most recent active session' };
+    }
     
     // File action classification: deploy to GitHub Pages or push to source repo
     const DOC_FILE_EXTENSIONS = /\.(md|txt)$/i;
