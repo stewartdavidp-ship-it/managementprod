@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.46.0">
+    <meta name="version" content="8.47.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -291,6 +291,77 @@
             return await response.json();
         }
         
+        // ---- Firebase Auth Config API (Identity Toolkit v2) ----
+        
+        // Get Firebase Auth project config (includes authorizedDomains)
+        async getAuthConfig() {
+            const token = await this.getAccessToken();
+            const projectId = this.serviceAccount.project_id;
+            const response = await fetch(
+                `https://identitytoolkit.googleapis.com/v2/projects/${projectId}/config`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Failed to fetch auth config: ${response.status} — ${err}`);
+            }
+            return await response.json();
+        }
+        
+        // Get current authorized domains list
+        async getAuthorizedDomains() {
+            const config = await this.getAuthConfig();
+            return config.authorizedDomains || [];
+        }
+        
+        // Update authorized domains (replaces entire list — always include existing domains)
+        async updateAuthorizedDomains(domains) {
+            const token = await this.getAccessToken();
+            const projectId = this.serviceAccount.project_id;
+            const response = await fetch(
+                `https://identitytoolkit.googleapis.com/v2/projects/${projectId}/config?updateMask=authorizedDomains`,
+                {
+                    method: 'PATCH',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`, 
+                        'Content-Type': 'application/json' 
+                    },
+                    body: JSON.stringify({ authorizedDomains: domains })
+                }
+            );
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Failed to update authorized domains: ${response.status} — ${err}`);
+            }
+            return await response.json();
+        }
+        
+        // Add a domain to authorized domains (safe — reads current list first)
+        async addAuthorizedDomain(domain) {
+            const current = await this.getAuthorizedDomains();
+            if (current.includes(domain)) {
+                console.log(`[FirebaseAdmin] Domain ${domain} already authorized`);
+                return { authorizedDomains: current, alreadyExists: true };
+            }
+            const updated = [...current, domain];
+            const result = await this.updateAuthorizedDomains(updated);
+            console.log(`[FirebaseAdmin] Added ${domain} to authorized domains`);
+            return { authorizedDomains: result.authorizedDomains || updated, alreadyExists: false };
+        }
+        
+        // Remove a domain from authorized domains
+        async removeAuthorizedDomain(domain) {
+            const current = await this.getAuthorizedDomains();
+            const updated = current.filter(d => d !== domain);
+            if (updated.length === current.length) {
+                console.log(`[FirebaseAdmin] Domain ${domain} not found in authorized domains`);
+                return { authorizedDomains: current, notFound: true };
+            }
+            const result = await this.updateAuthorizedDomains(updated);
+            console.log(`[FirebaseAdmin] Removed ${domain} from authorized domains`);
+            return { authorizedDomains: result.authorizedDomains || updated, notFound: false };
+        }
+        
         // ---- Cloud Functions API ----
         
         // List all Cloud Functions in the project
@@ -345,7 +416,7 @@
         
         // Quick test — tries to read RTDB rules to verify admin access
         async testConnection() {
-            const results = { token: false, rules: false, functions: false, errors: [] };
+            const results = { token: false, rules: false, functions: false, authConfig: false, errors: [] };
             
             try {
                 await this.getAccessToken();
@@ -368,6 +439,14 @@
                 results.functionCount = fns.length;
             } catch (e) {
                 results.errors.push(`Functions: ${e.message}`);
+            }
+            
+            try {
+                const domains = await this.getAuthorizedDomains();
+                results.authConfig = Array.isArray(domains);
+                results.authorizedDomains = domains;
+            } catch (e) {
+                results.errors.push(`Auth Config: ${e.message}`);
             }
             
             return results;
@@ -8601,7 +8680,7 @@
                     )}
                     
                     {view === 'settings' && (
-                        <SettingsView token={githubToken} setToken={setGithubToken} settings={settings} setSettings={setSettings} repoCount={availableRepos.length} syncStatus={syncStatus} onForceSync={handleForceSync} config={config} onConfigChange={handleConfigChange} firebaseUid={firebaseUid} firebaseUser={firebaseUser} teamMembers={teamMembers} teamMembership={teamMembership} />
+                        <SettingsView token={githubToken} setToken={setGithubToken} settings={settings} setSettings={setSettings} repoCount={availableRepos.length} syncStatus={syncStatus} onForceSync={handleForceSync} config={config} onConfigChange={handleConfigChange} firebaseUid={firebaseUid} firebaseUser={firebaseUser} teamMembers={teamMembers} teamMembership={teamMembership} showAlert={showAlert} showConfirm={showConfirm} />
                     )}
                     
                     {view === 'setup' && (
@@ -29774,6 +29853,15 @@ The developer uses Claude for iterative development — each session should:
                                     <span className="text-slate-500 text-xs">— found {testResult.functionCount} function{testResult.functionCount !== 1 ? 's' : ''}</span>
                                 )}
                             </div>
+                            <div className="flex items-center gap-2 text-sm">
+                                <span className={testResult.authConfig ? 'text-green-400' : 'text-red-400'}>
+                                    {testResult.authConfig ? '✅' : '❌'}
+                                </span>
+                                <span>Auth Config API</span>
+                                {testResult.authorizedDomains && (
+                                    <span className="text-slate-500 text-xs">— {testResult.authorizedDomains.length} authorized domain{testResult.authorizedDomains.length !== 1 ? 's' : ''}</span>
+                                )}
+                            </div>
                         </div>
                         {testResult.errors?.length > 0 && (
                             <div className="mt-3 space-y-1">
@@ -29794,7 +29882,427 @@ The developer uses Claude for iterative development — each session should:
                     <div className="ml-3">• Read & deploy RTDB security rules</div>
                     <div className="ml-3">• List Cloud Functions and their status</div>
                     <div className="ml-3">• View Cloud Logging entries and errors</div>
+                    <div className="ml-3">• Manage Firebase Auth authorized domains</div>
                     <div className="ml-3">• Admin-level RTDB data access</div>
+                </div>
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // AUTHORIZED DOMAINS MANAGER (v8.47.0)
+    // =========================================================================
+    // Manages Firebase Auth authorized domains and GitHub Pages custom domains
+    // from a unified interface. Uses FirebaseAdmin (Identity Toolkit v2 API) and
+    // GitHub API (Pages custom domain endpoint).
+    
+    function AuthorizedDomainsManager({ showAlert }) {
+        const [domains, setDomains] = React.useState(null);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [newDomain, setNewDomain] = React.useState('');
+        const [adding, setAdding] = React.useState(false);
+        const [removing, setRemoving] = React.useState(null);
+        
+        const loadDomains = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const list = await firebaseAdmin.getAuthorizedDomains();
+                setDomains(list);
+            } catch (e) {
+                setError(e.message);
+            }
+            setLoading(false);
+        };
+        
+        const handleAdd = async () => {
+            if (!newDomain.trim()) return;
+            const domain = newDomain.trim().toLowerCase();
+            setAdding(true);
+            setError(null);
+            try {
+                const result = await firebaseAdmin.addAuthorizedDomain(domain);
+                if (result.alreadyExists) {
+                    showAlert?.(`${domain} is already in the authorized domains list.`, 'Already Exists');
+                } else {
+                    showAlert?.(`✅ Added ${domain} to Firebase authorized domains.`, 'Domain Added');
+                }
+                setDomains(result.authorizedDomains);
+                setNewDomain('');
+            } catch (e) {
+                setError(e.message);
+            }
+            setAdding(false);
+        };
+        
+        const handleRemove = async (domain) => {
+            // Protect system domains
+            const protectedDomains = ['localhost', 'word-boxing.firebaseapp.com', 'word-boxing.web.app'];
+            if (protectedDomains.some(p => domain.includes(p) || domain === 'localhost')) {
+                showAlert?.(`Cannot remove system domain: ${domain}`, 'Protected Domain');
+                return;
+            }
+            setRemoving(domain);
+            setError(null);
+            try {
+                const result = await firebaseAdmin.removeAuthorizedDomain(domain);
+                if (result.notFound) {
+                    showAlert?.(`${domain} was not found in authorized domains.`, 'Not Found');
+                } else {
+                    showAlert?.(`Removed ${domain} from Firebase authorized domains.`, 'Domain Removed');
+                }
+                setDomains(result.authorizedDomains);
+            } catch (e) {
+                setError(e.message);
+            }
+            setRemoving(null);
+        };
+        
+        const handleKeyDown = (e) => {
+            if (e.key === 'Enter') handleAdd();
+        };
+        
+        // Categorize domains for display
+        const systemDomains = (domains || []).filter(d => 
+            d === 'localhost' || d.endsWith('.firebaseapp.com') || d.endsWith('.web.app')
+        );
+        const customDomains = (domains || []).filter(d => 
+            d !== 'localhost' && !d.endsWith('.firebaseapp.com') && !d.endsWith('.web.app')
+        );
+        
+        return (
+            <div className="space-y-4">
+                {/* Load button or domain list */}
+                {domains === null ? (
+                    <div className="text-center">
+                        <button onClick={loadDomains} disabled={loading}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm disabled:opacity-50">
+                            {loading ? '⏳ Loading...' : '🔍 Load Authorized Domains'}
+                        </button>
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {/* Custom domains */}
+                        <div>
+                            <div className="text-xs text-slate-500 uppercase tracking-wide mb-2">Custom Domains ({customDomains.length})</div>
+                            <div className="space-y-1">
+                                {customDomains.map(domain => (
+                                    <div key={domain} className="flex items-center justify-between p-2 bg-slate-900 rounded border border-slate-700 group">
+                                        <div className="flex items-center gap-2">
+                                            <span className="inline-block w-2 h-2 rounded-full bg-green-400"></span>
+                                            <span className="text-sm text-slate-300 font-mono">{domain}</span>
+                                        </div>
+                                        <button 
+                                            onClick={() => handleRemove(domain)} 
+                                            disabled={removing === domain}
+                                            className="text-xs text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 rounded hover:bg-red-900/30"
+                                        >
+                                            {removing === domain ? '⏳' : '✕ Remove'}
+                                        </button>
+                                    </div>
+                                ))}
+                                {customDomains.length === 0 && (
+                                    <div className="text-xs text-slate-500 italic p-2">No custom domains configured</div>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* System domains (collapsed) */}
+                        <details className="text-xs">
+                            <summary className="text-slate-500 uppercase tracking-wide cursor-pointer hover:text-slate-400">
+                                System Domains ({systemDomains.length})
+                            </summary>
+                            <div className="space-y-1 mt-2">
+                                {systemDomains.map(domain => (
+                                    <div key={domain} className="flex items-center gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                                        <span className="inline-block w-2 h-2 rounded-full bg-slate-500"></span>
+                                        <span className="text-xs text-slate-500 font-mono">{domain}</span>
+                                        <span className="text-xs text-slate-600 ml-auto">protected</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                        
+                        {/* Add domain */}
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={newDomain}
+                                onChange={e => setNewDomain(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="e.g. aicommandcenter.dev"
+                                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-sm text-slate-300 font-mono placeholder-slate-600"
+                            />
+                            <button onClick={handleAdd} disabled={adding || !newDomain.trim()}
+                                className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded text-sm disabled:opacity-50 whitespace-nowrap">
+                                {adding ? '⏳' : '+ Add'}
+                            </button>
+                        </div>
+                        
+                        {/* Refresh */}
+                        <button onClick={loadDomains} disabled={loading}
+                            className="text-xs text-slate-500 hover:text-slate-400">
+                            🔄 Refresh list
+                        </button>
+                    </div>
+                )}
+                
+                {/* Error display */}
+                {error && (
+                    <div className="p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-300">
+                        ❌ {error}
+                    </div>
+                )}
+                
+                <div className="text-xs text-slate-500 space-y-1">
+                    <div>⚠️ After adding a domain here, you also need to update:</div>
+                    <div className="ml-3">• <a href="https://console.cloud.google.com/apis/credentials?project=word-boxing" target="_blank" className="text-indigo-400 hover:underline">Google Cloud Console → OAuth Redirect URIs</a></div>
+                    <div className="ml-3 text-slate-600">Add: https://DOMAIN/__/auth/handler (redirect URI) + https://DOMAIN (JS origin)</div>
+                </div>
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // GITHUB PAGES DOMAIN MANAGER (v8.47.0)
+    // =========================================================================
+    // Set or update custom domains on GitHub Pages repos using the GitHub API.
+    // Requires a GitHub token with full repo access.
+    
+    function GitHubPagesDomainManager({ showAlert }) {
+        const [repos, setRepos] = React.useState(null);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [editingRepo, setEditingRepo] = React.useState(null);
+        const [newCname, setNewCname] = React.useState('');
+        const [updating, setUpdating] = React.useState(false);
+        const [healthCheck, setHealthCheck] = React.useState({});
+        
+        const loadRepos = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                // Get app config to find all repos with Pages
+                const config = JSON.parse(localStorage.getItem('cc_config') || '{}');
+                const apps = config.apps || [];
+                const repoList = [];
+                
+                for (const app of apps) {
+                    if (app.prodRepo) {
+                        try {
+                            const [owner, repoName] = app.prodRepo.split('/');
+                            const token = localStorage.getItem('cc_token');
+                            const response = await fetch(`https://api.github.com/repos/${owner}/${repoName}/pages`, {
+                                headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+                            });
+                            if (response.ok) {
+                                const pages = await response.json();
+                                repoList.push({
+                                    repo: app.prodRepo,
+                                    appId: app.id,
+                                    appName: app.name || app.id,
+                                    cname: pages.cname || null,
+                                    url: pages.html_url,
+                                    httpsEnforced: pages.https_enforced,
+                                    status: pages.status
+                                });
+                            }
+                        } catch (e) {
+                            // Skip repos that don't have Pages enabled
+                        }
+                    }
+                    if (app.testRepo) {
+                        try {
+                            const [owner, repoName] = app.testRepo.split('/');
+                            const token = localStorage.getItem('cc_token');
+                            const response = await fetch(`https://api.github.com/repos/${owner}/${repoName}/pages`, {
+                                headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+                            });
+                            if (response.ok) {
+                                const pages = await response.json();
+                                repoList.push({
+                                    repo: app.testRepo,
+                                    appId: app.id,
+                                    appName: (app.name || app.id) + ' (test)',
+                                    cname: pages.cname || null,
+                                    url: pages.html_url,
+                                    httpsEnforced: pages.https_enforced,
+                                    status: pages.status
+                                });
+                            }
+                        } catch (e) {
+                            // Skip
+                        }
+                    }
+                }
+                
+                setRepos(repoList);
+            } catch (e) {
+                setError(e.message);
+            }
+            setLoading(false);
+        };
+        
+        const handleSetDomain = async (repo, domain) => {
+            setUpdating(true);
+            setError(null);
+            try {
+                const token = localStorage.getItem('cc_token');
+                const github = new GitHubAPI(token);
+                await github.updatePagesConfig(repo, domain, true);
+                showAlert?.(`✅ Set custom domain ${domain || '(none)'} on ${repo}`, 'Domain Updated');
+                // Reload to refresh
+                await loadRepos();
+                setEditingRepo(null);
+                setNewCname('');
+            } catch (e) {
+                setError(e.message);
+            }
+            setUpdating(false);
+        };
+        
+        const handleRemoveDomain = async (repo) => {
+            setUpdating(true);
+            setError(null);
+            try {
+                const token = localStorage.getItem('cc_token');
+                const github = new GitHubAPI(token);
+                await github.updatePagesConfig(repo, null, true);
+                showAlert?.(`Removed custom domain from ${repo}`, 'Domain Removed');
+                await loadRepos();
+            } catch (e) {
+                setError(e.message);
+            }
+            setUpdating(false);
+        };
+        
+        const handleHealthCheck = async (repo) => {
+            setHealthCheck(prev => ({ ...prev, [repo]: { loading: true } }));
+            try {
+                const token = localStorage.getItem('cc_token');
+                const github = new GitHubAPI(token);
+                const result = await github.checkPagesHealth(repo);
+                setHealthCheck(prev => ({ ...prev, [repo]: result }));
+            } catch (e) {
+                setHealthCheck(prev => ({ ...prev, [repo]: { error: e.message } }));
+            }
+        };
+        
+        const startEdit = (repo, currentCname) => {
+            setEditingRepo(repo);
+            setNewCname(currentCname || '');
+        };
+        
+        return (
+            <div className="space-y-4">
+                {repos === null ? (
+                    <div className="text-center">
+                        <button onClick={loadRepos} disabled={loading}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm disabled:opacity-50">
+                            {loading ? '⏳ Scanning...' : '🔍 Scan Repos for Pages'}
+                        </button>
+                    </div>
+                ) : (
+                    <div className="space-y-2">
+                        {repos.map(r => (
+                            <div key={r.repo} className="p-3 bg-slate-900 rounded-lg border border-slate-700">
+                                <div className="flex items-center justify-between mb-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium text-slate-200">{r.appName}</span>
+                                        <span className="text-xs text-slate-500 font-mono">{r.repo}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        {r.status === 'built' && <span className="text-xs text-green-400">● live</span>}
+                                        {r.httpsEnforced && <span className="text-xs text-green-600">🔒</span>}
+                                    </div>
+                                </div>
+                                
+                                <div className="flex items-center justify-between">
+                                    <div className="text-xs font-mono">
+                                        {r.cname ? (
+                                            <span className="text-indigo-400">{r.cname}</span>
+                                        ) : (
+                                            <span className="text-slate-500 italic">no custom domain</span>
+                                        )}
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-2">
+                                        {/* Health check */}
+                                        {r.cname && (
+                                            <button onClick={() => handleHealthCheck(r.repo)}
+                                                className="text-xs text-slate-500 hover:text-slate-400">
+                                                {healthCheck[r.repo]?.loading ? '⏳' : '🏥'}
+                                            </button>
+                                        )}
+                                        
+                                        {/* Edit domain */}
+                                        {editingRepo === r.repo ? (
+                                            <div className="flex items-center gap-1">
+                                                <input
+                                                    type="text"
+                                                    value={newCname}
+                                                    onChange={e => setNewCname(e.target.value)}
+                                                    onKeyDown={e => e.key === 'Enter' && handleSetDomain(r.repo, newCname)}
+                                                    placeholder="domain.com"
+                                                    className="w-40 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs text-slate-300 font-mono"
+                                                    autoFocus
+                                                />
+                                                <button onClick={() => handleSetDomain(r.repo, newCname)} disabled={updating}
+                                                    className="text-xs text-green-400 hover:text-green-300 px-1">
+                                                    {updating ? '⏳' : '✓'}
+                                                </button>
+                                                <button onClick={() => { setEditingRepo(null); setNewCname(''); }}
+                                                    className="text-xs text-slate-500 hover:text-slate-400 px-1">✕</button>
+                                            </div>
+                                        ) : (
+                                            <button onClick={() => startEdit(r.repo, r.cname)}
+                                                className="text-xs text-indigo-400 hover:text-indigo-300">
+                                                {r.cname ? '✏️ Edit' : '+ Set Domain'}
+                                            </button>
+                                        )}
+                                        
+                                        {/* Remove domain */}
+                                        {r.cname && editingRepo !== r.repo && (
+                                            <button onClick={() => handleRemoveDomain(r.repo)} disabled={updating}
+                                                className="text-xs text-red-400 hover:text-red-300 opacity-50 hover:opacity-100">
+                                                ✕
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                                
+                                {/* Health check result */}
+                                {healthCheck[r.repo] && !healthCheck[r.repo].loading && (
+                                    <div className={`mt-2 p-2 rounded text-xs ${healthCheck[r.repo].error ? 'bg-red-900/20 text-red-400' : healthCheck[r.repo].pending ? 'bg-amber-900/20 text-amber-400' : 'bg-green-900/20 text-green-400'}`}>
+                                        {healthCheck[r.repo].error ? `❌ ${healthCheck[r.repo].error}` :
+                                         healthCheck[r.repo].pending ? '⏳ DNS check in progress...' :
+                                         `✅ DNS healthy${healthCheck[r.repo].domain ? ` — ${healthCheck[r.repo].domain.host}` : ''}`}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                        
+                        {repos.length === 0 && (
+                            <div className="text-xs text-slate-500 italic text-center py-4">No repos with GitHub Pages found in config</div>
+                        )}
+                        
+                        {/* Refresh */}
+                        <button onClick={loadRepos} disabled={loading}
+                            className="text-xs text-slate-500 hover:text-slate-400">
+                            🔄 Refresh
+                        </button>
+                    </div>
+                )}
+                
+                {error && (
+                    <div className="p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-300">
+                        ❌ {error}
+                    </div>
+                )}
+                
+                <div className="text-xs text-slate-500">
+                    DNS records (A records + CNAME) must be configured at your registrar separately. Use the Domain Registrar section below or configure manually.
                 </div>
             </div>
         );
@@ -29804,7 +30312,7 @@ The developer uses Claude for iterative development — each session should:
     // SETTINGS VIEW
     // =========================================================================
     
-    function SettingsView({ token, setToken, settings, setSettings, repoCount, syncStatus, onForceSync, config, onConfigChange, firebaseUid, firebaseUser, teamMembers, teamMembership }) {
+    function SettingsView({ token, setToken, settings, setSettings, repoCount, syncStatus, onForceSync, config, onConfigChange, firebaseUid, firebaseUser, teamMembers, teamMembership, showAlert, showConfirm }) {
         const [show, setShow] = React.useState(false);
         const [testing, setTesting] = React.useState(false);
         const [result, setResult] = React.useState(null);
@@ -30148,6 +30656,32 @@ The developer uses Claude for iterative development — each session should:
                     </p>
                     
                     <FirebaseAdminSettings />
+                </div>
+                
+                {/* Firebase Auth Domains (v8.47.0) */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🔐 Firebase Auth Domains
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Manage which domains are authorized for Firebase Authentication sign-in redirects. 
+                        New custom domains must be added here before users can authenticate from them.
+                    </p>
+                    
+                    <AuthorizedDomainsManager showAlert={showAlert} />
+                </div>
+                
+                {/* GitHub Pages Domains (v8.47.0) */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        📄 GitHub Pages Domains
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        View and set custom domains on GitHub Pages repos. Requires a GitHub token with full repo access. 
+                        DNS records must be configured at your registrar before setting a custom domain.
+                    </p>
+                    
+                    <GitHubPagesDomainManager showAlert={showAlert} />
                 </div>
                 
                 {/* Domain Registrar (v8.35.0) */}
