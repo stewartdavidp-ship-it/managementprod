@@ -178,11 +178,31 @@ Single-file web application for managing deployment, monitoring, and configurati
 - [x] Session type quick reference table
 - [x] 6-step setup checklist per app
 
+### Unified Plan Phase 1: Clean (v8.37.0)
+- [x] Removed scoping Step 4 (Standards checkboxes) — auto-assembled silently
+- [x] Merged session wizard Step 3 into Step 2 as collapsible "What Claude will see"
+- [x] Hidden implementation details (drives text, token bar, file manifest)
+- [x] Quick Build bypass for 0 work items
+- [x] "Your Name" field in Settings with `createdBy` on records
+
+### Unified Plan Phase 2: Rewrite PM-First Language (v8.38.0)
+- [x] All 5 category scoping questions rewritten as PM intent
+- [x] Jargon relabeled (V1→Launch, Core→Must have, Environment Optimization→Setup Guide)
+- [x] Outcome statements on wizard steps
+- [x] Redundant questions removed/merged
+- [x] Acceptance criteria coaching
+
+### Unified Plan Phase 3: Close the Loop (v8.39.0–v8.40.0)
+- [x] Post-Session Review Flow — 4-step guided inline review (v8.39.0)
+- [x] Session-Deploy-WorkItem linking — enriched deploy records (v8.27.0)
+- [x] Activity Logging — ActivityLogService audit trail (v8.39.0)
+- [x] Work Item Lifecycle Automation — `review` status, Idea→Ready auto-suggest, In-Progress→Review on session review, stale detection badges (v8.40.0)
+
 ---
 
 ## In Progress
 
-_(All orchestrator phases complete — see Planned Features for remaining backlog)_
+_(Unified Plan Phases 1–3 complete — Phase 4: Polish is next)_
 
 ---
 
