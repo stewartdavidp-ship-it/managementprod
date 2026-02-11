@@ -4,7 +4,7 @@
 
 ## Current Version
 
-**v8.41.0** — Released 2026-02-10
+**v8.42.0** — Released 2026-02-10
 
 ## What Command Center Is
 
