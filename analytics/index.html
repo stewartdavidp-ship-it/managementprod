@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Analytics — Command Center</title>
-    <meta name="version" content="1.0.0">
+    <meta name="version" content="1.0.1">
     <meta name="gs-app-id" content="cc-analytics">
     <link rel="stylesheet" href="../shared/cc-shared.css">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -290,7 +290,7 @@
             ref.on('value', (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
-                    const list = Object.entries(data).map(([id, stream]) => ({ id, ...stream }));
+                    const list = Object.entries(data).map(([id, stream]) => this.migrate({ id, ...stream }));
                     callback(list.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
                 } else {
                     callback([]);
@@ -306,6 +306,7 @@
             if (!ref) return null;
             
             const stream = {
+                // === Existing fields ===
                 appId: streamData.appId,
                 name: streamData.name,
                 owner: streamData.owner || 'Owner',
@@ -316,11 +317,21 @@
                 blockedUntil: streamData.blockedUntil || '',
                 createdAt: new Date().toISOString(),
                 createdBy: streamData.createdBy || 'Owner',
-                completedAt: null
+                completedAt: null,
+                // === Extended fields (Streams Evolution) ===
+                appIds: streamData.appIds || (streamData.appId ? [streamData.appId] : []),
+                project: streamData.project || '',
+                concepts: streamData.concepts || [],
+                artifacts: streamData.artifacts || [],
+                sessions: streamData.sessions || [],
+                tests: streamData.tests || null,
+                codeReview: streamData.codeReview || null,
+                openItems: streamData.openItems || [],
+                next: streamData.next || ''
             };
             
             await ref.child(streamData.id).set(stream);
-            console.log(`[WorkStreamService] Created ${streamData.id}: ${stream.name}`);
+            console.log(`[WorkStreamService] Created ${streamData.id}: ${stream.name} (appIds: [${stream.appIds.join(', ')}])`);
             return { id: streamData.id, ...stream };
         },
         
@@ -329,7 +340,8 @@
             const ref = this._ref(uid);
             if (!ref) return;
             await ref.child(streamId).update(updates);
-            console.log(`[WorkStreamService] Updated ${streamId}`);
+            const fields = Object.keys(updates).join(', ');
+            console.log(`[WorkStreamService] Updated ${streamId} (${fields})`);
         },
         
         // Delete a stream
@@ -352,14 +364,17 @@
             console.log(`[WorkStreamService] ${streamId} → ${newStatus}`);
         },
         
-        // Get streams filtered by app
+        // Get streams filtered by app (checks both appId and appIds[])
         filterByApp(streams, appId) {
-            return streams.filter(s => s.appId === appId);
+            return streams.filter(s => s.appId === appId || (s.appIds && s.appIds.includes(appId)));
         },
         
-        // Get active streams for an app
+        // Get active streams for an app (multi-app aware)
         getActive(streams, appId) {
-            return streams.filter(s => s.status === 'active' && (!appId || s.appId === appId));
+            return streams.filter(s => 
+                (s.status === 'active' || s.status === 'testing') && 
+                (!appId || s.appId === appId || (s.appIds && s.appIds.includes(appId)))
+            );
         },
         
         // Get stream completion percentage from its work items
@@ -391,6 +406,34 @@
             const appStreams = this.filterByApp(streams, appId);
             if (appStreams.length > 0) return appStreams[0].id;
             return null; // No stream exists yet — items remain unassigned
+        },
+        
+        // Migrate a stream: ensure all extended fields exist with safe defaults
+        // Called on load — no Firebase write, just in-memory enrichment
+        migrate(stream) {
+            return {
+                ...stream,
+                appIds: stream.appIds || (stream.appId ? [stream.appId] : []),
+                project: stream.project || '',
+                concepts: stream.concepts || [],
+                artifacts: stream.artifacts || [],
+                sessions: stream.sessions || [],
+                tests: stream.tests || null,
+                codeReview: stream.codeReview || null,
+                openItems: stream.openItems || [],
+                next: stream.next || ''
+            };
+        },
+        
+        // Get streams for a project
+        getByProject(streams, project) {
+            return streams.filter(s => s.project === project);
+        },
+        
+        // Get concept count for a stream
+        getActiveConceptCount(stream) {
+            if (!stream.concepts || !Array.isArray(stream.concepts)) return 0;
+            return stream.concepts.filter(c => c.status === 'active').length;
         }
     };
     const StreamInterfaceService = {
@@ -2716,7 +2759,7 @@
             const now = new Date();
             const projectDef = config?.projects?.[app.project] || {};
             const appItems = (workItems || []).filter(wi => wi.appId === app.id);
-            const appStreams = (streams || []).filter(s => s.appId === app.id);
+            const appStreams = (streams || []).filter(s => s.appId === app.id || (s.appIds && s.appIds.includes(app.id)));
             const appDeploys = (deployments || []).filter(d => d.appId === app.id && d.status === 'success');
             const cat = scopeData?.category ? (SCOPE_CATEGORIES[scopeData.category] || {}) : {};
             
@@ -3205,6 +3248,7 @@
         const handleUpdateStream = async (streamId, updates) => {
             if (!firebaseUser) return;
             await WorkStreamService.update(firebaseUser.uid, streamId, updates);
+            setEditingStream(null);
         };
         
         const handleDeleteStream = async (stream) => {
@@ -3294,13 +3338,16 @@
         const totalPendingAlerts = DependencyAlertService.getPending(globalDependencyAlerts || []).length;
         
         const statusColors = {
+            planning: 'bg-purple-900/30 text-purple-400 border-purple-800/50',
             active: 'bg-green-900/30 text-green-400 border-green-800/50',
+            testing: 'bg-blue-900/30 text-blue-400 border-blue-800/50',
             paused: 'bg-yellow-900/30 text-yellow-400 border-yellow-800/50',
             blocked: 'bg-red-900/30 text-red-400 border-red-800/50',
-            complete: 'bg-slate-700/30 text-slate-400 border-slate-600/50'
+            complete: 'bg-slate-700/30 text-slate-400 border-slate-600/50',
+            archived: 'bg-slate-800/30 text-slate-500 border-slate-700/50'
         };
         
-        const statusIcons = { active: '🟢', paused: '⏸️', blocked: '🔴', complete: '✅' };
+        const statusIcons = { planning: '📋', active: '🟢', testing: '🧪', paused: '⏸️', blocked: '🔴', complete: '✅', archived: '📦' };
         
         return (
             <div className="max-w-6xl mx-auto">
@@ -3325,17 +3372,19 @@
                 </div>
                 
                 {/* Summary stats */}
-                <div className={`grid gap-4 mb-6 ${totalPendingAlerts > 0 ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                <div className="flex flex-wrap gap-3 mb-6">
                     {[
-                        { label: 'Active Streams', value: filteredStreams.filter(s => s.status === 'active').length, color: 'text-green-400' },
-                        { label: 'Blocked', value: filteredStreams.filter(s => s.status === 'blocked').length, color: 'text-red-400' },
-                        { label: 'Complete', value: filteredStreams.filter(s => s.status === 'complete').length, color: 'text-slate-400' },
-                        { label: 'Total Items', value: filteredStreams.reduce((sum, s) => sum + WorkItemService.filterByStream(globalWorkItems, s.id).length, 0), color: 'text-blue-400' },
-                        ...(totalPendingAlerts > 0 ? [{ label: '🔔 Pending Alerts', value: totalPendingAlerts, color: 'text-amber-400' }] : [])
-                    ].map(stat => (
-                        <div key={stat.label} className="bg-slate-800 rounded-lg border border-slate-700 p-4 text-center">
-                            <div className={`text-2xl font-bold ${stat.color}`}>{stat.value}</div>
-                            <div className="text-xs text-slate-500 mt-1">{stat.label}</div>
+                        { label: 'Planning', value: filteredStreams.filter(s => s.status === 'planning').length, color: 'text-purple-400', show: true },
+                        { label: 'Active', value: filteredStreams.filter(s => s.status === 'active').length, color: 'text-green-400', show: true },
+                        { label: 'Testing', value: filteredStreams.filter(s => s.status === 'testing').length, color: 'text-blue-400', show: true },
+                        { label: 'Blocked', value: filteredStreams.filter(s => s.status === 'blocked').length, color: 'text-red-400', show: true },
+                        { label: 'Complete', value: filteredStreams.filter(s => s.status === 'complete').length, color: 'text-slate-400', show: true },
+                        { label: 'Total Items', value: filteredStreams.reduce((sum, s) => sum + WorkItemService.filterByStream(globalWorkItems, s.id).length, 0), color: 'text-cyan-400', show: true },
+                        { label: '🔔 Alerts', value: totalPendingAlerts, color: 'text-amber-400', show: totalPendingAlerts > 0 }
+                    ].filter(s => s.show).map(stat => (
+                        <div key={stat.label} className="bg-slate-800 rounded-lg border border-slate-700 px-4 py-3 text-center flex-1 min-w-[80px]">
+                            <div className={`text-xl font-bold ${stat.color}`}>{stat.value}</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">{stat.label}</div>
                         </div>
                     ))}
                 </div>
@@ -3397,7 +3446,37 @@
                                                     <div className="text-xs text-slate-500 mt-1 flex items-center gap-3">
                                                         <span>👤 {stream.owner}</span>
                                                         {stream.targetRelease && <span>🎯 {stream.targetRelease}</span>}
+                                                        {stream.project && <span className="px-1.5 py-0.5 rounded bg-slate-700/50 border border-slate-600/50 text-slate-400">{stream.project}</span>}
                                                     </div>
+                                                    {/* Evolution badges */}
+                                                    {(stream.appIds?.length > 1 || stream.concepts?.length > 0 || stream.openItems?.length > 0 || stream.next) && (
+                                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                                            {stream.appIds?.length > 1 && (
+                                                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-900/20 text-indigo-400 border border-indigo-800/30">
+                                                                    {stream.appIds.length} apps
+                                                                </span>
+                                                            )}
+                                                            {stream.concepts?.filter(c => c.status === 'active').length > 0 && (
+                                                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-900/20 text-purple-400 border border-purple-800/30">
+                                                                    💡 {stream.concepts.filter(c => c.status === 'active').length} concepts
+                                                                </span>
+                                                            )}
+                                                            {stream.openItems?.length > 0 && (
+                                                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-900/20 text-amber-400 border border-amber-800/30">
+                                                                    ❓ {stream.openItems.length} open
+                                                                </span>
+                                                            )}
+                                                            {stream.tests?.coverage && (
+                                                                <span className={`px-1.5 py-0.5 rounded text-[10px] border ${
+                                                                    stream.tests.coverage.fail > 0 ? 'bg-red-900/20 text-red-400 border-red-800/30' :
+                                                                    stream.tests.coverage.untested > 0 ? 'bg-blue-900/20 text-blue-400 border-blue-800/30' :
+                                                                    'bg-green-900/20 text-green-400 border-green-800/30'
+                                                                }`}>
+                                                                    🧪 {stream.tests.coverage.pass}/{stream.tests.coverage.total}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 <div className="flex items-center gap-1">
                                                     <button onClick={() => setEditingStream(stream)} className="p-1 hover:bg-slate-700 rounded text-slate-400 text-xs" title="Edit stream">✏️</button>
@@ -3532,31 +3611,58 @@
         const isNew = !stream;
         const [name, setName] = React.useState(stream?.name || '');
         const [appId, setAppId] = React.useState(stream?.appId || '');
+        const [appIds, setAppIds] = React.useState(stream?.appIds || (stream?.appId ? [stream.appId] : []));
+        const [project, setProject] = React.useState(stream?.project || '');
         const [owner, setOwner] = React.useState(stream?.owner || config?._userName || 'Owner');
         const [goal, setGoal] = React.useState(stream?.goal || '');
         const [targetRelease, setTargetRelease] = React.useState(stream?.targetRelease || '');
         const [status, setStatus] = React.useState(stream?.status || 'active');
         const [blockedBy, setBlockedBy] = React.useState(stream?.blockedBy || []);
+        const [next, setNext] = React.useState(stream?.next || '');
+        const [openItemsText, setOpenItemsText] = React.useState((stream?.openItems || []).join('\n'));
         
         const appList = Object.values(apps).filter(a => a.id !== 'command-center').sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         const otherStreams = globalStreams.filter(s => s.id !== stream?.id);
         
+        // Derive unique projects from existing streams
+        const existingProjects = [...new Set(globalStreams.map(s => s.project).filter(Boolean))].sort();
+        
+        // When primary app changes (new stream), sync to appIds
+        const handleAppIdChange = (newAppId) => {
+            setAppId(newAppId);
+            if (isNew) {
+                setAppIds(newAppId ? [newAppId] : []);
+            } else if (newAppId && !appIds.includes(newAppId)) {
+                setAppIds([newAppId, ...appIds.filter(id => id !== appId)]);
+            }
+        };
+        
+        const toggleAppId = (id) => {
+            if (id === appId) return; // Can't remove primary app
+            setAppIds(prev => prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]);
+        };
+        
         const handleSubmit = () => {
             if (!name.trim() || !appId) return;
+            const openItems = openItemsText.split('\n').map(s => s.trim()).filter(Boolean);
             onSave({
                 name: name.trim(),
                 appId,
+                appIds: appIds.length > 0 ? appIds : [appId],
+                project: project.trim(),
                 owner: owner.trim() || 'Owner',
                 goal: goal.trim(),
                 targetRelease: targetRelease.trim(),
                 status,
-                blockedBy
+                blockedBy,
+                next: next.trim(),
+                openItems
             });
         };
         
         return (
             <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={onCancel}>
-                <div className="bg-slate-800 rounded-xl border border-slate-700 max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
+                <div className="bg-slate-800 rounded-xl border border-slate-700 max-w-lg w-full p-6 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                     <h3 className="text-lg font-bold mb-4">{isNew ? '🔀 New Work Stream' : `✏️ Edit: ${stream.name}`}</h3>
                     
                     <div className="space-y-4">
@@ -3568,8 +3674,8 @@
                         </div>
                         
                         <div>
-                            <label className="block text-sm text-slate-400 mb-1">App *</label>
-                            <select value={appId} onChange={e => setAppId(e.target.value)}
+                            <label className="block text-sm text-slate-400 mb-1">Primary App *</label>
+                            <select value={appId} onChange={e => handleAppIdChange(e.target.value)}
                                 className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
                                 disabled={!isNew}>
                                 <option value="">Select app...</option>
@@ -3577,6 +3683,47 @@
                                     <option key={a.id} value={a.id}>{a.icon === 'gs-logo' ? '🎮' : a.icon} {a.name}</option>
                                 ))}
                             </select>
+                        </div>
+                        
+                        {/* Multi-app selector — only show when primary is set */}
+                        {appId && appList.length > 1 && (
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Additional Apps <span className="text-slate-500">(multi-app scope)</span></label>
+                                <div className="flex flex-wrap gap-2">
+                                    {appList.filter(a => a.id !== appId).map(a => (
+                                        <label key={a.id} className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer border transition-colors ${
+                                            appIds.includes(a.id) 
+                                                ? 'bg-indigo-900/30 border-indigo-700 text-indigo-300' 
+                                                : 'bg-slate-900/50 border-slate-700 text-slate-500 hover:border-slate-600'
+                                        }`}>
+                                            <input type="checkbox" className="hidden" checked={appIds.includes(a.id)}
+                                                onChange={() => toggleAppId(a.id)} />
+                                            {a.icon === 'gs-logo' ? '🎮' : a.icon} {a.name}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Project</label>
+                                <input value={project} onChange={e => setProject(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                    placeholder="cc, gameshelf..."
+                                    list="project-suggestions" />
+                                {existingProjects.length > 0 && (
+                                    <datalist id="project-suggestions">
+                                        {existingProjects.map(p => <option key={p} value={p} />)}
+                                    </datalist>
+                                )}
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Target Release</label>
+                                <input value={targetRelease} onChange={e => setTargetRelease(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                    placeholder="v1.0, v2.0..." />
+                            </div>
                         </div>
                         
                         <div className="grid grid-cols-2 gap-4">
@@ -3587,29 +3734,39 @@
                                     placeholder="Dave, Sarah..." />
                             </div>
                             <div>
-                                <label className="block text-sm text-slate-400 mb-1">Target Release</label>
-                                <input value={targetRelease} onChange={e => setTargetRelease(e.target.value)}
-                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
-                                    placeholder="v1.0, v2.0..." />
+                                <label className="block text-sm text-slate-400 mb-1">Status</label>
+                                <select value={status} onChange={e => setStatus(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
+                                    <option value="planning">📋 Planning</option>
+                                    <option value="active">🟢 Active</option>
+                                    <option value="testing">🧪 Testing</option>
+                                    <option value="paused">⏸️ Paused</option>
+                                    <option value="blocked">🔴 Blocked</option>
+                                    <option value="complete">✅ Complete</option>
+                                    <option value="archived">📦 Archived</option>
+                                </select>
                             </div>
                         </div>
                         
                         <div>
                             <label className="block text-sm text-slate-400 mb-1">Goal — what done looks like</label>
                             <textarea value={goal} onChange={e => setGoal(e.target.value)}
-                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm h-20"
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm h-16"
                                 placeholder="All core game mechanics working, tested, and deployed to prod..." />
                         </div>
                         
                         <div>
-                            <label className="block text-sm text-slate-400 mb-1">Status</label>
-                            <select value={status} onChange={e => setStatus(e.target.value)}
-                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm">
-                                <option value="active">🟢 Active</option>
-                                <option value="paused">⏸️ Paused</option>
-                                <option value="blocked">🔴 Blocked</option>
-                                <option value="complete">✅ Complete</option>
-                            </select>
+                            <label className="block text-sm text-slate-400 mb-1">Next — what the next session should do</label>
+                            <input value={next} onChange={e => setNext(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm"
+                                placeholder="Execute test plan, deploy to test environment..." />
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Open Items <span className="text-slate-500">(one per line)</span></label>
+                            <textarea value={openItemsText} onChange={e => setOpenItemsText(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm h-16 font-mono"
+                                placeholder="How should CC handle cross-project archives?&#10;When to introduce Claude API?" />
                         </div>
                         
                         {otherStreams.length > 0 && (
