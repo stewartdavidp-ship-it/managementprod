@@ -1,0 +1,3729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quality — Command Center</title>
+    <meta name="version" content="1.0.0">
+    <meta name="gs-app-id" content="cc-quality">
+    <link rel="stylesheet" href="../shared/cc-shared.css">
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="../shared/cc-shared.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; }
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .fade-in { animation: fadeIn 0.2s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="text-align:center;">Loading Quality...</div></div></div>
+
+    <script type="text/babel">
+    console.log('Quality Satellite v1.0.0 starting...');
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+    
+    const fb = initFirebase();
+    const firebaseAuth = fb ? fb.auth : null;
+    const firebaseDb = fb ? fb.db : null;
+    
+    const isFileProtocol = window.location.protocol === 'file:';
+
+    const GS_ACTIVE_REPO = 'stewartdavidp-ship-it/gs-active';
+
+    // =========================================================================
+    // ICONS (subset needed by Quality views)
+    // =========================================================================
+    
+    const Icons = {
+        Check: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>,
+        Copy: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>,
+        Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+        File: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
+        Refresh: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>,
+        Rocket: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" /></svg>,
+        Upload: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>,
+        X: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>,
+        Zap: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>,
+        Search: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>,
+        Trash: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+        Plus: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>,
+        ExternalLink: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>,
+        AlertTriangle: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+        Archive: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>,
+        Edit: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+    };
+
+
+    // =========================================================================
+    // GITHUB API (subset for Quality satellite)
+    // =========================================================================
+
+    class GitHubAPI {
+        constructor(token) {
+            this.token = token;
+            this.baseUrl = 'https://api.github.com';
+        }
+        
+        // Helper: Clean base64 content from GitHub (remove newlines)
+        cleanBase64(content) {
+            return content ? content.replace(/[\r\n\s]/g, '') : '';
+        }
+        
+        // Helper: Decode base64 content from GitHub to UTF-8 string
+        decodeContent(content) {
+            const clean = this.cleanBase64(content);
+            return decodeURIComponent(escape(atob(clean)));
+        }
+        
+        async request(endpoint, options = {}) {
+            const url = `${this.baseUrl}${endpoint}`;
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    headers: {
+                        'Authorization': `token ${this.token}`,
+                        'Accept': 'application/vnd.github.v3+json',
+                        'Content-Type': 'application/json',
+                        ...options.headers
+                    }
+                });
+                
+                // Track rate limit from response headers
+                const remaining = response.headers.get('X-RateLimit-Remaining');
+                const limit = response.headers.get('X-RateLimit-Limit');
+                const resetTime = response.headers.get('X-RateLimit-Reset');
+                
+                if (remaining !== null) {
+                    this.rateLimit = { remaining: parseInt(remaining), limit: parseInt(limit), resetTime: parseInt(resetTime) * 1000 };
+                    if (parseInt(remaining) < 100) {
+                        console.warn(`⚠️ GitHub API rate limit low: ${remaining}/${limit} remaining. Resets at ${new Date(this.rateLimit.resetTime).toLocaleTimeString()}`);
+                    }
+                }
+                
+                // Handle rate limit exceeded
+                if (response.status === 403 && remaining === '0') {
+                    const resetDate = new Date(parseInt(resetTime) * 1000);
+                    throw new Error(`GitHub API rate limit exceeded. Resets at ${resetDate.toLocaleTimeString()}. Please wait and try again.`);
+                }
+                
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    console.error('GitHub API Error:', {
+                        url,
+                        status: response.status,
+                        error,
+                        body: options.body ? JSON.parse(options.body) : null
+                    });
+                    throw new Error(error.message || `GitHub API error: ${response.status}`);
+                }
+                return response.json();
+            } catch (e) {
+                console.error('Request failed:', url, e);
+                throw e;
+            }
+        }
+        
+        // Get current rate limit status
+        getRateLimit() {
+            return this.rateLimit || { remaining: null, limit: null, resetTime: null };
+        }
+        
+        async listRepos() {
+            const repos = await this.request('/user/repos?per_page=100&sort=updated');
+            return repos.map(r => ({ fullName: r.full_name, name: r.name, owner: r.owner.login }));
+        }
+        
+        async getFile(repo, path) {
+            try {
+                const [owner, repoName] = repo.split('/');
+                // Add timestamp to bust GitHub API cache
+                return await this.request(`/repos/${owner}/${repoName}/contents/${path}?_=${Date.now()}`);
+            } catch { return null; }
+        }
+        
+        // Get file content - handles large files (>1MB) that GitHub API doesn't return content for
+        async getFileContent(repo, path) {
+            try {
+                const file = await this.getFile(repo, path);
+                if (!file) return null;
+                
+                // For large files (>1MB), GitHub API doesn't return content - use download_url
+                if (!file.content && file.download_url) {
+                    console.log(`Large file detected (${path}), using download_url`);
+                    // Add cache-busting to download_url
+                    const cacheBustUrl = file.download_url + (file.download_url.includes('?') ? '&' : '?') + '_=' + Date.now();
+                    const response = await fetch(cacheBustUrl);
+                    const content = await response.text();
+                    return { ...file, content: null, textContent: content };
+                }
+                
+                // Normal file - decode base64 content
+                const textContent = this.decodeContent(file.content);
+                return { ...file, textContent };
+            } catch (e) {
+                console.warn(`Failed to get file content for ${path}:`, e);
+                return null;
+            }
+        }
+        
+        // Get file content at specific commit - handles large files
+        async getFileContentAtCommit(repo, path, commitSha) {
+            try {
+                const file = await this.getFileAtCommit(repo, path, commitSha);
+                if (!file) return null;
+                
+                // For large files, use raw URL with commit ref
+                if (!file.content && file.download_url) {
+                    console.log(`Large file detected at commit (${path}), using download_url`);
+                    const response = await fetch(file.download_url);
+                    const content = await response.text();
+                    return { ...file, content: null, textContent: content };
+                }
+                
+                // Normal file - decode base64 content
+                const textContent = this.decodeContent(file.content);
+                return { ...file, textContent };
+            } catch (e) {
+                console.warn(`Failed to get file content at commit for ${path}:`, e);
+                return null;
+            }
+        }
+        
+        async getFileAtCommit(repo, path, commitSha) {
+            try {
+                const [owner, repoName] = repo.split('/');
+                return await this.request(`/repos/${owner}/${repoName}/contents/${path}?ref=${commitSha}`);
+            } catch { return null; }
+        }
+        
+        // Get blob content directly via Git Blob API - bypasses CDN caching
+        async getBlobContent(repo, sha) {
+            try {
+                const [owner, repoName] = repo.split('/');
+                const blob = await this.request(`/repos/${owner}/${repoName}/git/blobs/${sha}?_=${Date.now()}`);
+                if (blob && blob.content) {
+                    return {
+                        content: blob.content,
+                        encoding: blob.encoding,
+                        size: blob.size
+                    };
+                }
+                return null;
+            } catch (e) {
+                console.warn(`Failed to get blob ${sha}:`, e);
+                return null;
+            }
+        }
+        
+        async listRepoContents(repo, path = '') {
+            try {
+                const [owner, repoName] = repo.split('/');
+                const endpoint = path 
+                    ? `/repos/${owner}/${repoName}/contents/${path}`
+                    : `/repos/${owner}/${repoName}/contents`;
+                // Add timestamp to bust any caching
+                const cacheBuster = `?_=${Date.now()}`;
+                const contents = await this.request(endpoint + cacheBuster);
+                return Array.isArray(contents) ? contents : [contents];
+            } catch { return []; }
+        }
+        
+        
+        async createOrUpdateFile(repo, path, content, message, sha = null, branch = 'main') {
+            const [owner, repoName] = repo.split('/');
+            const body = {
+                message,
+                content: btoa(unescape(encodeURIComponent(content))),
+                committer: { name: 'Command Center', email: 'deploy@gameshelf.app' },
+                branch
+            };
+            if (sha) body.sha = sha;
+            
+            const url = `/repos/${owner}/${repoName}/contents/${path}`;
+            console.log('createOrUpdateFile request:', { 
+                url,
+                repo, 
+                path, 
+                sha, 
+                branch,
+                messageLength: message.length, 
+                contentLength: content.length,
+                base64Length: body.content.length
+            });
+            
+            try {
+                return await this.request(url, { method: 'PUT', body: JSON.stringify(body) });
+            } catch (error) {
+                console.error('createOrUpdateFile failed:', {
+                    url,
+                    error: error.message,
+                    sha,
+                    bodyPreview: JSON.stringify(body).substring(0, 200)
+                });
+                throw error;
+            }
+        }
+        
+        async deleteFile(repo, path, message, sha) {
+            const [owner, repoName] = repo.split('/');
+            return this.request(`/repos/${owner}/${repoName}/contents/${path}`, {
+                method: 'DELETE',
+                body: JSON.stringify({
+                    message,
+                    sha,
+                    committer: { name: 'Command Center', email: 'deploy@gameshelf.app' }
+                })
+            });
+        }
+        
+        async createTag(repo, tagName, sha, message) {
+            const [owner, repoName] = repo.split('/');
+            
+            // Check if tag already exists
+            try {
+                await this.request(`/repos/${owner}/${repoName}/git/ref/tags/${tagName}`);
+                console.log(`Tag ${tagName} already exists, skipping`);
+                return { existing: true, tag: tagName };
+            } catch {
+                // Tag doesn't exist, create it
+            }
+            
+            const tagObj = await this.request(`/repos/${owner}/${repoName}/git/tags`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    tag: tagName, message, object: sha, type: 'commit',
+                    tagger: { name: 'Command Center', email: 'deploy@gameshelf.app', date: new Date().toISOString() }
+                })
+            });
+            await this.request(`/repos/${owner}/${repoName}/git/refs`, {
+                method: 'POST',
+                body: JSON.stringify({ ref: `refs/tags/${tagName}`, sha: tagObj.sha })
+            });
+            return tagObj;
+        }
+        
+        async enablePages(repo) {
+            const [owner, repoName] = repo.split('/');
+            try {
+                await this.request(`/repos/${owner}/${repoName}/pages`);
+                return { alreadyEnabled: true };
+            } catch {}
+            const response = await fetch(`${this.baseUrl}/repos/${owner}/${repoName}/pages`, {
+                method: 'POST',
+                headers: { 'Authorization': `token ${this.token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: { branch: 'main', path: '/' } })
+            });
+            if (!response.ok) throw new Error(`Failed to enable Pages`);
+            return { enabled: true };
+        }
+        
+        // Get recent workflow runs for a repo
+        async getWorkflowRuns(repo, options = {}) {
+            const [owner, repoName] = repo.split('/');
+            const params = new URLSearchParams();
+            if (options.per_page) params.append('per_page', options.per_page);
+            if (options.branch) params.append('branch', options.branch);
+            if (options.event) params.append('event', options.event);
+            if (options.status) params.append('status', options.status);
+            
+            const queryString = params.toString();
+            const endpoint = `/repos/${owner}/${repoName}/actions/runs${queryString ? '?' + queryString : ''}`;
+            
+            try {
+                const result = await this.request(endpoint);
+                return result.workflow_runs || [];
+            } catch (e) {
+                console.error('Failed to get workflow runs:', e);
+                return [];
+            }
+        }
+        
+        // Get a specific workflow run
+        async getWorkflowRun(repo, runId) {
+            const [owner, repoName] = repo.split('/');
+            try {
+                return await this.request(`/repos/${owner}/${repoName}/actions/runs/${runId}`);
+            } catch (e) {
+                console.error('Failed to get workflow run:', e);
+                return null;
+            }
+        }
+        
+        // Get workflow run logs URL (returns URL, not content - logs require redirect)
+        async getWorkflowRunLogsUrl(repo, runId) {
+            const [owner, repoName] = repo.split('/');
+            return `https://github.com/${owner}/${repoName}/actions/runs/${runId}`;
+        }
+        
+        // Monitor a workflow run until completion
+        async waitForWorkflowRun(repo, runId, maxWaitMs = 300000, onStatus = null) {
+            const startTime = Date.now();
+            let lastStatus = null;
+            
+            while (Date.now() - startTime < maxWaitMs) {
+                const run = await this.getWorkflowRun(repo, runId);
+                
+                if (run && run.status !== lastStatus) {
+                    lastStatus = run.status;
+                    if (onStatus) onStatus(run);
+                }
+                
+                // Terminal states
+                if (run?.status === 'completed') {
+                    return { 
+                        success: run.conclusion === 'success',
+                        conclusion: run.conclusion, // success, failure, cancelled, skipped
+                        run,
+                        logsUrl: await this.getWorkflowRunLogsUrl(repo, runId)
+                    };
+                }
+                
+                // Wait 5 seconds before checking again
+                await new Promise(r => setTimeout(r, 5000));
+            }
+            
+            return { 
+                success: false, 
+                error: 'Timeout waiting for workflow', 
+                logsUrl: await this.getWorkflowRunLogsUrl(repo, runId)
+            };
+        }
+        
+        // Find a workflow run triggered after a specific time
+        async findRecentWorkflowRun(repo, afterTime, maxWaitMs = 30000) {
+            const startTime = Date.now();
+            
+            while (Date.now() - startTime < maxWaitMs) {
+                const runs = await this.getWorkflowRuns(repo, { per_page: 5 });
+                
+                // Find a run that started after our commit
+                const recentRun = runs.find(run => {
+                    const runTime = new Date(run.created_at).getTime();
+                    return runTime >= afterTime - 5000; // 5 second tolerance
+                });
+                
+                if (recentRun) {
+                    return recentRun;
+                }
+                
+                // Wait 3 seconds before checking again
+                await new Promise(r => setTimeout(r, 3000));
+            }
+            
+            return null;
+        }
+        
+        // Batch commit multiple files in one commit
+        async batchCommit(repo, files, message) {
+            const [owner, repoName] = repo.split('/');
+            
+            console.log('=== BATCH COMMIT START ===');
+            console.log('Repo:', repo);
+            console.log('Message:', message);
+            console.log('Files to commit:', files.map(f => ({ path: f.path, contentLength: f.content?.length, encoding: f.encoding })));
+            
+            // Get current commit SHA
+            const ref = await this.request(`/repos/${owner}/${repoName}/git/ref/heads/main`);
+            const commitSha = ref.object.sha;
+            console.log('Current commit SHA:', commitSha);
+            
+            // Get current tree
+            const commit = await this.request(`/repos/${owner}/${repoName}/git/commits/${commitSha}`);
+            const treeSha = commit.tree.sha;
+            console.log('Current tree SHA:', treeSha);
+            
+            // Create blobs for each file
+            const treeItems = await Promise.all(files.map(async (file) => {
+                console.log('Creating blob for:', file.path);
+                const blob = await this.request(`/repos/${owner}/${repoName}/git/blobs`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        content: file.content,
+                        encoding: file.encoding || 'utf-8'
+                    })
+                });
+                console.log('Blob created:', file.path, '-> SHA:', blob.sha);
+                return {
+                    path: file.path,
+                    mode: '100644',
+                    type: 'blob',
+                    sha: blob.sha
+                };
+            }));
+            
+            console.log('Tree items:', treeItems);
+            
+            // Create new tree
+            const treePayload = {
+                base_tree: treeSha,
+                tree: treeItems
+            };
+            console.log('Creating tree with payload:', JSON.stringify(treePayload, null, 2));
+            
+            const newTree = await this.request(`/repos/${owner}/${repoName}/git/trees`, {
+                method: 'POST',
+                body: JSON.stringify(treePayload)
+            });
+            console.log('New tree SHA:', newTree.sha);
+            
+            // Create commit
+            const newCommit = await this.request(`/repos/${owner}/${repoName}/git/commits`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    message,
+                    tree: newTree.sha,
+                    parents: [commitSha],
+                    committer: { name: 'Command Center', email: 'deploy@gameshelf.app' }
+                })
+            });
+            console.log('New commit SHA:', newCommit.sha);
+            
+            // Update ref (force: true handles non-fast-forward cases)
+            const updatedRef = await this.request(`/repos/${owner}/${repoName}/git/refs/heads/main`, {
+                method: 'PATCH',
+                body: JSON.stringify({ sha: newCommit.sha, force: true })
+            });
+            console.log('Ref updated:', updatedRef);
+            console.log('=== BATCH COMMIT COMPLETE ===');
+            
+            return newCommit;
+        }
+        
+        async createRepo(name, description = '', isPrivate = false) {
+            const response = await fetch(`${this.baseUrl}/user/repos`, {
+                method: 'POST',
+                headers: { 
+                    'Authorization': `token ${this.token}`, 
+                    'Accept': 'application/vnd.github.v3+json', 
+                    'Content-Type': 'application/json' 
+                },
+                body: JSON.stringify({
+                    name,
+                    description,
+                    private: isPrivate,
+                    auto_init: true,
+                    has_issues: false,
+                    has_projects: false,
+                    has_wiki: false
+                })
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.message || 'Failed to create repository');
+            }
+            
+            const repo = await response.json();
+            return {
+                fullName: repo.full_name,
+                name: repo.name,
+                owner: repo.owner.login,
+                url: repo.html_url,
+                pagesUrl: `https://${repo.owner.login}.github.io/${repo.name}/`
+            };
+        }
+        
+        async repoExists(owner, repoName) {
+            try {
+                await this.request(`/repos/${owner}/${repoName}`);
+                return true;
+            } catch {
+                return false;
+            }
+        }
+    }
+
+    // =========================================================================
+    // DEPLOY SERVICE (read-only — loads deploy history from localStorage)
+    // =========================================================================
+
+    const DeployService = {
+        STORAGE_KEY: 'cc_history_v2',
+        load() {
+            try {
+                const s = localStorage.getItem(this.STORAGE_KEY);
+                return s ? JSON.parse(s) : [];
+            } catch { return []; }
+        }
+    };
+
+    // =========================================================================
+    // SERVICES (Firebase CRUD — shared with CC Core)
+    // =========================================================================
+
+    /**
+     * IssueService — Issues CRUD via Firebase (per-user path)
+     * Wraps: Firebase RTDB `command-center/{uid}/issues` path
+     * Used by: IssuesView, App() globalIssues state, deploy issue-linking
+     * Note: Issues are stored in Firebase under the user's UID, not in localStorage.
+     */
+    const IssueService = {
+        BASE_PATH: 'command-center',
+        
+        // Get the Firebase ref for issues (requires uid)
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/issues`);
+        },
+        
+        // Listen for all issues (returns unsubscribe function)
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, issue]) => ({ id, ...issue }));
+                    callback(list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        // Create a new issue
+        async create(uid, issueData) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            
+            const issue = {
+                ...issueData,
+                status: 'open',
+                createdAt: new Date().toISOString(),
+                createdBy: issueData.createdBy || 'manual',
+                notes: issueData.notes || []
+            };
+            
+            await ref.child(issueData.id).set(issue);
+            return issue;
+        },
+        
+        // Update an issue (partial update)
+        async update(uid, issueId, updates) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(issueId).update(updates);
+        },
+        
+        // Update issue status with timestamp
+        async updateStatus(uid, issueId, newStatus, extraData = {}) {
+            const updates = {
+                status: newStatus,
+                [`${newStatus}At`]: new Date().toISOString(),
+                ...extraData
+            };
+            await this.update(uid, issueId, updates);
+        },
+        
+        // Link issues to a deployed version
+        async linkToVersion(uid, issueIds, version, appId) {
+            if (!issueIds || !issueIds.length) return;
+            
+            for (const issueId of issueIds) {
+                await this.update(uid, issueId, {
+                    status: 'fixed',
+                    fixedAt: new Date().toISOString(),
+                    fixedInVersion: version,
+                    fixedInApp: appId
+                });
+            }
+        },
+        
+        // Mark issues as released to prod
+        async markReleasedToProd(uid, issueIds, version) {
+            for (const issueId of issueIds) {
+                await this.update(uid, issueId, {
+                    status: 'closed',
+                    closedAt: new Date().toISOString(),
+                    releasedToProd: true,
+                    releasedInVersion: version
+                });
+            }
+        },
+        
+        // Get next issue ID from existing list
+        getNextId(currentIssues) {
+            const existing = currentIssues.map(i => parseInt(i.id?.replace('ISS-', '') || 0));
+            const max = Math.max(0, ...existing);
+            return `ISS-${String(max + 1).padStart(3, '0')}`;
+        }
+    };
+    /**
+     * ReleaseService — Release records via Firebase (per-user path)
+     * Wraps: Firebase RTDB `command-center/{uid}/releases` path
+     * Used by: IssuesView for release tracking
+     */
+    const ReleaseService = {
+        BASE_PATH: 'command-center',
+        
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/releases`);
+        },
+        
+        // Listen for all releases
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, rel]) => ({ id, ...rel }));
+                    callback(list.sort((a, b) => new Date(b.deployedAt) - new Date(a.deployedAt)));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        // Create a release record
+        async create(uid, releaseData) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            
+            const releaseId = `${releaseData.app}-${releaseData.version}-${Date.now()}`;
+            await ref.child(releaseId).set({
+                ...releaseData,
+                deployedAt: releaseData.deployedAt || new Date().toISOString()
+            });
+            return releaseId;
+        }
+    };
+    /**
+     * UserReportService — User-submitted bug reports via Firebase (public path)
+     * Wraps: Firebase RTDB `reported-issues` path
+     * Used by: IssuesView for user report inbox
+     */
+    const UserReportService = {
+        _ref() {
+            if (!firebaseDb) return null;
+            return firebaseDb.ref('reported-issues');
+        },
+        
+        // Listen for all user reports
+        listen(callback) {
+            const ref = this._ref();
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, report]) => ({
+                        firebaseKey: id,
+                        ...report
+                    }));
+                    callback(list.sort((a, b) =>
+                        new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0)
+                    ));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        }
+    };
+    
+     *   context: { filesAffected, sections, dependencies, notes, relatedItems }
+     *   tags: string array for filtering
+     *   Timestamps: createdAt, startedAt, completedAt, completedInVersion, sessionId
+     */
+    const WorkItemService = {
+        BASE_PATH: 'command-center',
+        
+        _ref(uid) {
+            if (!firebaseDb || !uid) return null;
+            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/backlog`);
+        },
+        
+        // Listen for all work items (returns unsubscribe function)
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            if (!ref) return () => {};
+            
+            ref.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    const list = Object.entries(data).map(([id, item]) => ({ id, ...item }));
+                    callback(list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)));
+                } else {
+                    callback([]);
+                }
+            });
+            
+            return () => ref.off();
+        },
+        
+        // Get a single work item
+        async get(uid, itemId) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            const snapshot = await ref.child(itemId).once('value');
+            const data = snapshot.val();
+            return data ? { id: itemId, ...data } : null;
+        },
+        
+        // Create a new work item
+        async create(uid, itemData) {
+            const ref = this._ref(uid);
+            if (!ref) return null;
+            
+            const item = {
+                appId: itemData.appId,
+                streamId: itemData.streamId || null,  // Phase 5.3: optional stream assignment
+                title: itemData.title,
+                description: itemData.description || '',
+                type: itemData.type || 'feature',
+                priority: itemData.priority || 'core',
+                milestone: itemData.milestone || 'beta',
+                status: itemData.status || 'idea',
+                effort: itemData.effort || 'session',
+                criteria: itemData.criteria || [],
+                context: {
+                    filesAffected: itemData.context?.filesAffected || [],
+                    sections: itemData.context?.sections || [],
+                    dependencies: itemData.context?.dependencies || [],
+                    notes: itemData.context?.notes || '',
+                    relatedItems: itemData.context?.relatedItems || []
+                },
+                tags: itemData.tags || [],
+                createdAt: new Date().toISOString(),
+                createdBy: itemData.createdBy || 'manual',
+                source: itemData.source || 'manual',
+                startedAt: null,
+                completedAt: null,
+                completedInVersion: null,
+                sessionId: null
+            };
+            
+            await ref.child(itemData.id).set(item);
+            console.log(`[WorkItemService] Created ${itemData.id}: ${item.title}`);
+            return { id: itemData.id, ...item };
+        },
+        
+        // Update a work item (partial)
+        async update(uid, itemId, updates) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(itemId).update(updates);
+        },
+        
+        // Transition status with timestamps
+        async updateStatus(uid, itemId, newStatus, extraData = {}) {
+            const now = new Date().toISOString();
+            const updates = { status: newStatus, ...extraData };
+            
+            // Auto-set timestamps on status transitions
+            switch (newStatus) {
+                case 'in-progress':
+                    updates.startedAt = now;
+                    break;
+                case 'review':
+                    updates.reviewStartedAt = now;
+                    break;
+                case 'done':
+                    updates.completedAt = now;
+                    break;
+                case 'deferred':
+                    updates.deferredAt = now;
+                    break;
+            }
+            
+            await this.update(uid, itemId, updates);
+            console.log(`[WorkItemService] ${itemId} → ${newStatus}`);
+        },
+        
+        // Complete a work item (from deploy close-the-loop)
+        async complete(uid, itemId, version) {
+            await this.updateStatus(uid, itemId, 'done', {
+                completedInVersion: version
+            });
+        },
+        
+        // Check if item has criteria (used for auto-transition suggestions)
+        hasCriteria(item) {
+            return item?.criteria && item.criteria.length > 0 && item.criteria.some(c => c.trim());
+        },
+        
+        // Check if item is stale (in-progress or review for 7+ days)
+        isStale(item) {
+            if (item.status !== 'in-progress' && item.status !== 'review') return false;
+            const startDate = item.status === 'review' ? item.reviewStartedAt : item.startedAt;
+            if (!startDate) return false;
+            return (Date.now() - new Date(startDate).getTime()) > 7 * 24 * 60 * 60 * 1000;
+        },
+        
+        // Get stale days count
+        getStaleDays(item) {
+            const startDate = item.status === 'review' ? item.reviewStartedAt : item.startedAt;
+            if (!startDate) return 0;
+            return Math.floor((Date.now() - new Date(startDate).getTime()) / (24 * 60 * 60 * 1000));
+        },
+        
+        // Get work items filtered by app
+        filterByApp(items, appId) {
+            return items.filter(i => i.appId === appId);
+        },
+        
+        // Get work items filtered by stream (Phase 5.3)
+        filterByStream(items, streamId) {
+            return items.filter(i => i.streamId === streamId);
+        },
+        
+        // Get unassigned work items (no stream) for an app
+        getUnassigned(items, appId) {
+            return items.filter(i => (!i.streamId) && (!appId || i.appId === appId));
+        },
+        
+        // Get work items filtered by milestone
+        filterByMilestone(items, milestone) {
+            return items.filter(i => i.milestone === milestone);
+        },
+        
+        // Get work items filtered by status
+        filterByStatus(items, status) {
+            return items.filter(i => i.status === status);
+        },
+        
+        // Get in-progress items (for deploy close-the-loop)
+        getInProgress(items, appId) {
+            return items.filter(i => i.status === 'in-progress' && (!appId || i.appId === appId));
+        },
+        
+        // Get items in review (for post-deploy completion)
+        getInReview(items, appId) {
+            return items.filter(i => i.status === 'review' && (!appId || i.appId === appId));
+        },
+        
+        // Batch create work items (for scoping flow)
+        async createBatch(uid, itemsData) {
+            const ref = this._ref(uid);
+            if (!ref) return [];
+            
+            const results = [];
+            const updates = {};
+            for (const itemData of itemsData) {
+                const item = {
+                    appId: itemData.appId,
+                    streamId: itemData.streamId || null,  // Phase 5.3
+                    title: itemData.title,
+                    description: itemData.description || '',
+                    type: itemData.type || 'feature',
+                    priority: itemData.priority || 'core',
+                    milestone: itemData.milestone || 'beta',
+                    status: itemData.status || 'idea',
+                    effort: itemData.effort || 'session',
+                    criteria: itemData.criteria || [],
+                    context: {
+                        filesAffected: itemData.context?.filesAffected || [],
+                        sections: itemData.context?.sections || [],
+                        dependencies: itemData.context?.dependencies || [],
+                        notes: itemData.context?.notes || '',
+                        relatedItems: itemData.context?.relatedItems || []
+                    },
+                    tags: itemData.tags || [],
+                    createdAt: new Date().toISOString(),
+                    createdBy: itemData.createdBy || 'manual',
+                    source: itemData.source || 'manual',
+                    startedAt: null,
+                    completedAt: null,
+                    completedInVersion: null,
+                    sessionId: null
+                };
+                updates[itemData.id] = item;
+                results.push({ id: itemData.id, ...item });
+            }
+            await ref.update(updates);
+            console.log(`[WorkItemService] Batch created ${results.length} items`);
+            return results;
+        },
+        
+        // Delete a work item
+        async delete(uid, itemId) {
+            const ref = this._ref(uid);
+            if (!ref) return;
+            await ref.child(itemId).remove();
+            console.log(`[WorkItemService] Deleted ${itemId}`);
+        },
+        
+        // Generate next work item ID from existing list
+        getNextId(currentItems) {
+            const existing = currentItems.map(i => parseInt(i.id?.replace('WI-', '') || '0'));
+            const max = Math.max(0, ...existing);
+            return `WI-${String(max + 1).padStart(3, '0')}`;
+        }
+    };
+
+    // =========================================================================
+    // RELEASE COORDINATION VIEW
+    // =========================================================================
+
+    }
+    
+    // =========================================================================
+    
+    function ReleaseCoordinationView({ apps, config, globalWorkItems, globalSessions, deployments, showAlert, showConfirm, showPrompt, setView }) {
+        const [selectedApp, setSelectedApp] = React.useState('all');
+        const [showTestChecklist, setShowTestChecklist] = React.useState(null); // appId or null
+        const [checklistState, setChecklistState] = React.useState({}); // { itemId: true/false }
+        const [expandedMilestones, setExpandedMilestones] = React.useState({});
+        
+        const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
+        const items = globalWorkItems || [];
+        const sessions = globalSessions || [];
+        const deps = deployments || [];
+        
+        // === Build release data per app ===
+        const releaseData = React.useMemo(() => {
+            const data = {};
+            
+            for (const app of configuredApps) {
+                const appItems = items.filter(wi => wi.appId === app.id);
+                const appSessions = sessions.filter(s => s.appId === app.id);
+                const appDeploys = deps.filter(d => d.appId === app.id);
+                
+                // Group items by milestone
+                const milestones = {};
+                appItems.forEach(wi => {
+                    const ms = wi.milestone || 'unassigned';
+                    if (!milestones[ms]) milestones[ms] = { items: [], done: 0, total: 0, stale: [], blocked: [] };
+                    milestones[ms].items.push(wi);
+                    milestones[ms].total++;
+                    if (wi.status === 'done') milestones[ms].done++;
+                    if (WorkItemService.isStale && WorkItemService.isStale(wi)) milestones[ms].stale.push(wi);
+                });
+                
+                // Current versions
+                const testVer = app.versions?.test || null;
+                const prodVer = app.versions?.prod || null;
+                
+                // Recent deploys (last 5)
+                const recentDeploys = appDeploys
+                    .sort((a, b) => new Date(b.timestamp || b.date || 0) - new Date(a.timestamp || a.date || 0))
+                    .slice(0, 5);
+                
+                // Sessions pending review
+                const pendingReview = appSessions.filter(s => s.status === 'prep' || s.status === 'active' || s.status === 'review');
+                
+                // Items with unmet criteria from reviews
+                const reviewedSessions = appSessions.filter(s => s.review && !s.review.allMet);
+                
+                // Pipeline summary
+                const pipeline = { idea: 0, ready: 0, 'in-progress': 0, review: 0, done: 0 };
+                appItems.forEach(wi => { if (pipeline.hasOwnProperty(wi.status)) pipeline[wi.status]++; });
+                
+                // Overall readiness assessment
+                const activeItems = appItems.filter(wi => wi.status !== 'done' && wi.status !== 'deferred');
+                const blockers = [];
+                if (pipeline['in-progress'] > 0) blockers.push(`${pipeline['in-progress']} item${pipeline['in-progress'] > 1 ? 's' : ''} still in progress`);
+                if (pipeline.review > 0) blockers.push(`${pipeline.review} item${pipeline.review > 1 ? 's' : ''} awaiting review`);
+                const staleAll = appItems.filter(wi => WorkItemService.isStale && WorkItemService.isStale(wi));
+                if (staleAll.length > 0) blockers.push(`${staleAll.length} stale item${staleAll.length > 1 ? 's' : ''}`);
+                if (pendingReview.length > 0) blockers.push(`${pendingReview.length} session${pendingReview.length > 1 ? 's' : ''} not yet completed`);
+                
+                const totalItems = appItems.length;
+                const doneItems = pipeline.done;
+                const completionPct = totalItems > 0 ? Math.round((doneItems / totalItems) * 100) : 0;
+                
+                // Go/No-Go
+                let readiness = 'unknown';
+                if (totalItems === 0) readiness = 'no-items';
+                else if (blockers.length === 0 && completionPct === 100) readiness = 'ready';
+                else if (blockers.length === 0 && completionPct >= 80) readiness = 'almost';
+                else if (blockers.length > 0) readiness = 'blocked';
+                else readiness = 'in-progress';
+                
+                data[app.id] = {
+                    app, milestones, testVer, prodVer, recentDeploys,
+                    pendingReview, reviewedSessions, pipeline, activeItems,
+                    blockers, totalItems, doneItems, completionPct, readiness, staleAll
+                };
+            }
+            
+            return data;
+        }, [configuredApps, items, sessions, deps]);
+        
+        // === Phase 4.5: Generate Test Checklist ===
+        const generateTestChecklist = (appId) => {
+            const rd = releaseData[appId];
+            if (!rd) return [];
+            
+            const checklist = [];
+            let idx = 0;
+            
+            // Section 1: Recently completed work items
+            const doneItems = rd.app ? items.filter(wi => wi.appId === appId && wi.status === 'done') : [];
+            const recentDone = doneItems
+                .filter(wi => wi.completedAt && (Date.now() - new Date(wi.completedAt).getTime()) < 30 * 24 * 60 * 60 * 1000)
+                .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+            
+            if (recentDone.length > 0) {
+                checklist.push({ id: `hdr-${idx++}`, type: 'header', text: 'Recently Shipped Features' });
+                recentDone.forEach(wi => {
+                    checklist.push({ 
+                        id: `feat-${wi.id}`, type: 'check', 
+                        text: `${wi.title}${wi.completedInVersion ? ` (v${wi.completedInVersion})` : ''}`,
+                        detail: wi.description || null
+                    });
+                    // Add acceptance criteria as sub-checks
+                    if (wi.criteria && wi.criteria.length > 0) {
+                        wi.criteria.filter(c => c.trim()).forEach((c, ci) => {
+                            checklist.push({ 
+                                id: `crit-${wi.id}-${ci}`, type: 'subcheck',
+                                text: c
+                            });
+                        });
+                    }
+                });
+            }
+            
+            // Section 2: Items currently in review
+            const inReview = items.filter(wi => wi.appId === appId && wi.status === 'review');
+            if (inReview.length > 0) {
+                checklist.push({ id: `hdr-${idx++}`, type: 'header', text: 'Pending Review — Verify Before Deploy' });
+                inReview.forEach(wi => {
+                    checklist.push({ 
+                        id: `rev-${wi.id}`, type: 'check',
+                        text: `${wi.title} — verify implementation matches spec`
+                    });
+                    if (wi.criteria && wi.criteria.length > 0) {
+                        wi.criteria.filter(c => c.trim()).forEach((c, ci) => {
+                            checklist.push({
+                                id: `revcrit-${wi.id}-${ci}`, type: 'subcheck',
+                                text: c
+                            });
+                        });
+                    }
+                });
+            }
+            
+            // Section 3: Standard user journeys
+            const appCategory = rd.app?.category || 'tool';
+            const journeys = {
+                game: [
+                    'Load app fresh (no cache) — game loads correctly',
+                    'Play a complete round — scoring works as expected',
+                    'Share results — share text formats correctly',
+                    'Return next day — daily reset works, stats preserved',
+                    'Switch between Easy/Hard modes (if applicable)',
+                    'Check responsive layout on mobile (375px width)',
+                    'Verify PWA install prompt and offline behavior'
+                ],
+                tool: [
+                    'Load app fresh — default state is correct',
+                    'Complete primary workflow end-to-end',
+                    'Save data — verify persistence after page reload',
+                    'Error handling — try invalid input, empty states',
+                    'Check responsive layout on mobile (375px width)',
+                    'Verify keyboard navigation works'
+                ],
+                dashboard: [
+                    'Load app — data populates correctly',
+                    'Verify all data sources are connected',
+                    'Check refresh behavior — data updates properly',
+                    'Filter/sort controls work as expected',
+                    'Check responsive layout on mobile (375px width)',
+                    'Verify loading states (slow network)'
+                ],
+                content: [
+                    'Load app — content renders correctly',
+                    'Navigate between sections/pages',
+                    'Verify external links open correctly',
+                    'Check responsive layout on mobile (375px width)',
+                    'Verify images/media load properly'
+                ],
+                admin: [
+                    'Create a new record — verify it appears',
+                    'Edit an existing record — changes persist',
+                    'Delete a record — confirm prompt works',
+                    'Verify data validation (required fields, formats)',
+                    'Check responsive layout on mobile (375px width)',
+                    'Verify access controls (if applicable)'
+                ]
+            };
+            
+            const categoryJourneys = journeys[appCategory] || journeys.tool;
+            checklist.push({ id: `hdr-${idx++}`, type: 'header', text: 'Standard User Journeys' });
+            categoryJourneys.forEach((j, ji) => {
+                checklist.push({ id: `journey-${ji}`, type: 'check', text: j });
+            });
+            
+            // Section 4: Regression checks for recently changed areas
+            const recentSessions = sessions
+                .filter(s => s.appId === appId && s.completedAt)
+                .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+                .slice(0, 3);
+            
+            if (recentSessions.length > 0) {
+                checklist.push({ id: `hdr-${idx++}`, type: 'header', text: 'Regression Checks (Recent Sessions)' });
+                recentSessions.forEach((s, si) => {
+                    const typeLabel = s.type || 'build';
+                    const dateStr = new Date(s.completedAt || s.createdAt).toLocaleDateString();
+                    checklist.push({
+                        id: `regress-${si}`, type: 'check',
+                        text: `${typeLabel} session (${dateStr}) — verify no side effects from changes`
+                    });
+                    if (s.deliverables?.summary) {
+                        checklist.push({
+                            id: `regress-detail-${si}`, type: 'subcheck',
+                            text: `Deliverables: ${s.deliverables.summary}`
+                        });
+                    }
+                });
+            }
+            
+            // Section 5: Deploy verification
+            checklist.push({ id: `hdr-${idx++}`, type: 'header', text: 'Deploy Verification' });
+            checklist.push({ id: 'deploy-test', type: 'check', text: 'Deploy to test environment — verify live site matches local' });
+            checklist.push({ id: 'deploy-version', type: 'check', text: 'Version number displays correctly on deployed site' });
+            if (rd.app?.hasServiceWorker) {
+                checklist.push({ id: 'deploy-sw', type: 'check', text: 'Service worker updates — hard refresh shows new version' });
+                checklist.push({ id: 'deploy-pwa', type: 'check', text: 'PWA install/update works — no stale cache issues' });
+            }
+            checklist.push({ id: 'deploy-console', type: 'check', text: 'Browser console clean — no errors or warnings' });
+            checklist.push({ id: 'deploy-promote', type: 'check', text: 'Promote test → prod (when all checks pass)' });
+            
+            return checklist;
+        };
+        
+        // Checklist completion stats
+        const getChecklistStats = (checklistItems) => {
+            const checkable = checklistItems.filter(c => c.type === 'check' || c.type === 'subcheck');
+            const checked = checkable.filter(c => checklistState[c.id]);
+            return { total: checkable.length, done: checked.length, pct: checkable.length > 0 ? Math.round((checked.length / checkable.length) * 100) : 0 };
+        };
+        
+        const toggleCheck = (id) => {
+            setChecklistState(prev => ({ ...prev, [id]: !prev[id] }));
+        };
+        
+        // Readiness badge
+        const ReadinessBadge = ({ readiness }) => {
+            const styles = {
+                'ready': 'bg-green-500/20 text-green-400 border-green-500/30',
+                'almost': 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+                'blocked': 'bg-red-500/20 text-red-400 border-red-500/30',
+                'in-progress': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+                'no-items': 'bg-slate-500/20 text-slate-400 border-slate-500/30',
+                'unknown': 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+            };
+            const labels = {
+                'ready': '✅ Ready to Ship',
+                'almost': '🟡 Almost Ready',
+                'blocked': '🔴 Blocked',
+                'in-progress': '🔵 In Progress',
+                'no-items': '— No Work Items',
+                'unknown': '— Unknown'
+            };
+            return (
+                <span className={`px-2 py-0.5 rounded-full text-xs border ${styles[readiness] || styles.unknown}`}>
+                    {labels[readiness] || readiness}
+                </span>
+            );
+        };
+        
+        // Pipeline bar (mini)
+        const MiniPipelineBar = ({ pipeline }) => {
+            const total = Object.values(pipeline).reduce((s, v) => s + v, 0);
+            if (total === 0) return <span className="text-xs text-slate-500">No items</span>;
+            const segments = [
+                { key: 'done', color: 'bg-green-500', count: pipeline.done || 0 },
+                { key: 'review', color: 'bg-purple-500', count: pipeline.review || 0 },
+                { key: 'in-progress', color: 'bg-blue-500', count: pipeline['in-progress'] || 0 },
+                { key: 'ready', color: 'bg-amber-500', count: pipeline.ready || 0 },
+                { key: 'idea', color: 'bg-slate-500', count: pipeline.idea || 0 }
+            ].filter(s => s.count > 0);
+            
+            return (
+                <div className="flex items-center gap-2 w-full">
+                    <div className="flex-1 h-2 rounded-full bg-slate-700 overflow-hidden flex">
+                        {segments.map(s => (
+                            <div key={s.key} className={`${s.color} h-full`} 
+                                style={{ width: `${(s.count / total) * 100}%` }}
+                                title={`${s.key}: ${s.count}`} />
+                        ))}
+                    </div>
+                    <span className="text-xs text-slate-400 whitespace-nowrap">{pipeline.done || 0}/{total}</span>
+                </div>
+            );
+        };
+        
+        // Relative time
+        const relTime = (dateStr) => {
+            if (!dateStr) return '';
+            const diff = Date.now() - new Date(dateStr).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            const days = Math.floor(hrs / 24);
+            return `${days}d ago`;
+        };
+        
+        // Filtered apps
+        const visibleApps = selectedApp === 'all' 
+            ? configuredApps 
+            : configuredApps.filter(a => a.id === selectedApp);
+        
+        // === Test Checklist Modal ===
+        if (showTestChecklist) {
+            const checklist = generateTestChecklist(showTestChecklist);
+            const stats = getChecklistStats(checklist);
+            const appName = apps[showTestChecklist]?.name || showTestChecklist;
+            const rd = releaseData[showTestChecklist];
+            const currentVer = rd?.testVer || rd?.prodVer || '?';
+            
+            return (
+                <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h1 className="text-2xl font-bold flex items-center gap-2">
+                                📋 Release Test Checklist
+                            </h1>
+                            <p className="text-sm text-slate-400 mt-1">{appName} — v{currentVer}</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <div className="text-right">
+                                <div className="text-lg font-bold">{stats.pct}%</div>
+                                <div className="text-xs text-slate-400">{stats.done}/{stats.total} checks</div>
+                            </div>
+                            <button onClick={() => { setShowTestChecklist(null); setChecklistState({}); }}
+                                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm">
+                                ← Back
+                            </button>
+                        </div>
+                    </div>
+                    
+                    {/* Progress bar */}
+                    <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden">
+                        <div className={`h-full transition-all duration-300 rounded-full ${
+                            stats.pct === 100 ? 'bg-green-500' : stats.pct >= 75 ? 'bg-amber-500' : 'bg-blue-500'
+                        }`} style={{ width: `${stats.pct}%` }} />
+                    </div>
+                    
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 space-y-1">
+                        {checklist.map(item => {
+                            if (item.type === 'header') {
+                                return (
+                                    <div key={item.id} className="pt-4 pb-2 first:pt-0">
+                                        <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">{item.text}</h3>
+                                    </div>
+                                );
+                            }
+                            
+                            const isSubcheck = item.type === 'subcheck';
+                            const isChecked = checklistState[item.id] || false;
+                            
+                            return (
+                                <label key={item.id} className={`flex items-start gap-3 py-1.5 px-2 rounded cursor-pointer hover:bg-slate-700/50 ${
+                                    isSubcheck ? 'ml-6' : ''
+                                } ${isChecked ? 'opacity-60' : ''}`}>
+                                    <input type="checkbox" checked={isChecked} onChange={() => toggleCheck(item.id)}
+                                        className="mt-0.5 rounded border-slate-600 bg-slate-700 text-indigo-500 focus:ring-indigo-500" />
+                                    <div className="flex-1 min-w-0">
+                                        <span className={`text-sm ${isChecked ? 'line-through text-slate-500' : isSubcheck ? 'text-slate-400' : 'text-slate-200'}`}>
+                                            {item.text}
+                                        </span>
+                                        {item.detail && (
+                                            <div className="text-xs text-slate-500 mt-0.5">{item.detail}</div>
+                                        )}
+                                    </div>
+                                </label>
+                            );
+                        })}
+                    </div>
+                    
+                    {stats.pct === 100 && (
+                        <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 text-center">
+                            <div className="text-lg font-bold text-green-400">✅ All checks passed!</div>
+                            <p className="text-sm text-green-300 mt-1">This release is ready for promotion to production.</p>
+                            <button onClick={() => { setView('smartdeploy'); }}
+                                className="mt-3 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium">
+                                🚀 Go to Smart Deploy
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+        
+        // === Main Release Coordination View ===
+        return (
+            <div className="space-y-6">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                        <h1 className="text-2xl font-bold">🚢 Release Coordination</h1>
+                        <p className="text-sm text-slate-400 mt-1">Track readiness, blockers, and test status per app</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <select value={selectedApp} onChange={e => setSelectedApp(e.target.value)}
+                            className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm">
+                            <option value="all">All Apps ({configuredApps.length})</option>
+                            {configuredApps.map(a => (
+                                <option key={a.id} value={a.id}>{a.icon && a.icon !== 'gs-logo' ? a.icon : '📦'} {a.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+                
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {(() => {
+                        const allRd = Object.values(releaseData);
+                        const readyCount = allRd.filter(r => r.readiness === 'ready').length;
+                        const blockedCount = allRd.filter(r => r.readiness === 'blocked').length;
+                        const totalDone = allRd.reduce((s, r) => s + r.doneItems, 0);
+                        const totalAll = allRd.reduce((s, r) => s + r.totalItems, 0);
+                        const staleTotal = allRd.reduce((s, r) => s + (r.staleAll?.length || 0), 0);
+                        return (
+                            <>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold text-green-400">{readyCount}</div>
+                                    <div className="text-xs text-slate-400">Ready to Ship</div>
+                                </div>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold text-red-400">{blockedCount}</div>
+                                    <div className="text-xs text-slate-400">Blocked</div>
+                                </div>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className="text-2xl font-bold">{totalAll > 0 ? Math.round((totalDone / totalAll) * 100) : 0}%</div>
+                                    <div className="text-xs text-slate-400">Overall Completion</div>
+                                </div>
+                                <div className="bg-slate-800 rounded-lg border border-slate-700 p-3 text-center">
+                                    <div className={`text-2xl font-bold ${staleTotal > 0 ? 'text-amber-400' : 'text-slate-400'}`}>{staleTotal}</div>
+                                    <div className="text-xs text-slate-400">Stale Items</div>
+                                </div>
+                            </>
+                        );
+                    })()}
+                </div>
+                
+                {/* Per-app release cards */}
+                {visibleApps.map(app => {
+                    const rd = releaseData[app.id];
+                    if (!rd) return null;
+                    
+                    return (
+                        <div key={app.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                            {/* App header */}
+                            <div className="p-4 border-b border-slate-700">
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-xl">{app.icon && app.icon !== 'gs-logo' ? app.icon : '📦'}</span>
+                                        <div>
+                                            <h2 className="font-semibold text-lg">{app.name}</h2>
+                                            <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
+                                                {rd.testVer && <span>Test: v{rd.testVer}</span>}
+                                                {rd.prodVer && <span>Prod: v{rd.prodVer}</span>}
+                                                {rd.testVer && rd.prodVer && rd.testVer !== rd.prodVer && (
+                                                    <span className="text-amber-400">⚠ Test ahead of Prod</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <ReadinessBadge readiness={rd.readiness} />
+                                        <button onClick={() => setShowTestChecklist(app.id)}
+                                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium">
+                                            📋 Test Checklist
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="p-4 space-y-4">
+                                {/* Pipeline bar */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs text-slate-400">Pipeline</span>
+                                        <span className="text-xs text-slate-400">{rd.completionPct}% complete</span>
+                                    </div>
+                                    <MiniPipelineBar pipeline={rd.pipeline} />
+                                    <div className="flex items-center gap-4 mt-1.5 text-xs text-slate-500">
+                                        {rd.pipeline.idea > 0 && <span>💡 {rd.pipeline.idea} idea{rd.pipeline.idea > 1 ? 's' : ''}</span>}
+                                        {rd.pipeline.ready > 0 && <span>📋 {rd.pipeline.ready} ready</span>}
+                                        {rd.pipeline['in-progress'] > 0 && <span>🔨 {rd.pipeline['in-progress']} WIP</span>}
+                                        {rd.pipeline.review > 0 && <span>👁 {rd.pipeline.review} review</span>}
+                                        {rd.pipeline.done > 0 && <span>✅ {rd.pipeline.done} done</span>}
+                                    </div>
+                                </div>
+                                
+                                {/* Blockers */}
+                                {rd.blockers.length > 0 && (
+                                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                                        <h4 className="text-xs font-semibold text-red-400 mb-1">Blockers</h4>
+                                        <ul className="space-y-0.5">
+                                            {rd.blockers.map((b, i) => (
+                                                <li key={i} className="text-xs text-red-300">• {b}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                                
+                                {/* Milestone breakdown (expandable) */}
+                                {Object.keys(rd.milestones).length > 0 && (
+                                    <details className="group">
+                                        <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-300">
+                                            ▸ Milestones ({Object.keys(rd.milestones).length})
+                                        </summary>
+                                        <div className="mt-2 space-y-2">
+                                            {Object.entries(rd.milestones)
+                                                .sort((a, b) => {
+                                                    const order = { production: 0, beta: 1, alpha: 2, prototype: 3, unassigned: 4 };
+                                                    return (order[a[0]] ?? 5) - (order[b[0]] ?? 5);
+                                                })
+                                                .map(([ms, msData]) => (
+                                                    <div key={ms} className="bg-slate-700/50 rounded-lg p-3">
+                                                        <div className="flex items-center justify-between mb-1">
+                                                            <span className="text-xs font-medium capitalize">{ms}</span>
+                                                            <span className="text-xs text-slate-400">{msData.done}/{msData.total} done</span>
+                                                        </div>
+                                                        <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-green-500 rounded-full" 
+                                                                style={{ width: `${msData.total > 0 ? (msData.done / msData.total) * 100 : 0}%` }} />
+                                                        </div>
+                                                        {msData.stale.length > 0 && (
+                                                            <div className="text-xs text-amber-400 mt-1">⚠ {msData.stale.length} stale</div>
+                                                        )}
+                                                    </div>
+                                                ))
+                                            }
+                                        </div>
+                                    </details>
+                                )}
+                                
+                                {/* Recent deploys */}
+                                {rd.recentDeploys.length > 0 && (
+                                    <details className="group">
+                                        <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-300">
+                                            ▸ Recent Deploys ({rd.recentDeploys.length})
+                                        </summary>
+                                        <div className="mt-2 space-y-1">
+                                            {rd.recentDeploys.map((d, i) => (
+                                                <div key={i} className="flex items-center justify-between text-xs py-1 px-2 bg-slate-700/30 rounded">
+                                                    <span>v{d.version || '?'} → {d.target || d.environment || '?'}</span>
+                                                    <span className="text-slate-500">{relTime(d.timestamp || d.date)}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </details>
+                                )}
+                                
+                                {/* Go/No-Go summary */}
+                                {rd.readiness === 'ready' && (
+                                    <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3 flex items-center justify-between">
+                                        <span className="text-sm text-green-400">All {rd.totalItems} items complete. Ready to ship.</span>
+                                        <button onClick={() => setView('smartdeploy')}
+                                            className="px-3 py-1 bg-green-600 hover:bg-green-500 rounded text-xs font-medium">
+                                            🚀 Deploy
+                                        </button>
+                                    </div>
+                                )}
+                                
+                                {rd.readiness === 'almost' && (
+                                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                                        <span className="text-sm text-amber-400">{rd.completionPct}% complete — {rd.totalItems - rd.doneItems} item{rd.totalItems - rd.doneItems > 1 ? 's' : ''} remaining.</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+                
+                {visibleApps.length === 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-12 text-center text-slate-400">
+                        No configured apps found. Set up apps with repos in the Configure section.
+                    </div>
+                )}
+            </div>
+        );
+    }
+    
+    
+    // =========================================================================
+    // ISSUES VIEW — Full Issue Tracking & Release Management
+    // =========================================================================
+
+    // =========================================================================
+    // ISSUES VIEW - Full Issue Tracking & Release Management
+    // =========================================================================
+    
+    function IssuesView({ apps, deployments, showAlert, showConfirm, showPrompt, setView, globalWorkItems }) {
+        const [issues, setIssues] = React.useState([]);
+        const [releases, setReleases] = React.useState([]);
+        const [userReports, setUserReports] = React.useState([]);
+        const [userReportsExpanded, setUserReportsExpanded] = React.useState(true);
+        const [firebaseUser, setFirebaseUser] = React.useState(null);
+        const [loading, setLoading] = React.useState(true);
+        const [showNewIssue, setShowNewIssue] = React.useState(false);
+        const [selectedIssue, setSelectedIssue] = React.useState(null);
+        const [selectedUserReport, setSelectedUserReport] = React.useState(null);
+        const [filter, setFilter] = React.useState('open'); // 'all', 'open', 'fixed', 'verified', 'closed'
+        const [appFilter, setAppFilter] = React.useState('all');
+        
+        const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo);
+        
+        // Listen for Firebase auth
+        React.useEffect(() => {
+            if (!firebaseAuth) return;
+            
+            let unsubIssues = () => {};
+            let unsubReleases = () => {};
+            let unsubReports = () => {};
+            
+            const unsubscribe = firebaseAuth.onAuthStateChanged((u) => {
+                setFirebaseUser(u);
+                if (u) {
+                    // Use service listeners
+                    setLoading(true);
+                    unsubIssues = IssueService.listen(u.uid, (list) => {
+                        setIssues(list);
+                        setLoading(false);
+                    });
+                    unsubReleases = ReleaseService.listen(u.uid, setReleases);
+                    unsubReports = UserReportService.listen(setUserReports);
+                }
+            });
+            return () => {
+                unsubscribe();
+                unsubIssues();
+                unsubReleases();
+                unsubReports();
+            };
+        }, []);
+        
+        // Generate next issue ID
+        const getNextIssueId = () => IssueService.getNextId(issues);
+        
+        // Create new issue
+        const createIssue = async (issueData) => {
+            if (!firebaseUser) return;
+            const id = getNextIssueId();
+            await IssueService.create(firebaseUser.uid, { ...issueData, id });
+            setShowNewIssue(false);
+        };
+        
+        // Update issue status
+        const updateIssueStatus = async (issueId, newStatus, extraData = {}) => {
+            if (!firebaseUser) return;
+            await IssueService.updateStatus(firebaseUser.uid, issueId, newStatus, extraData);
+        };
+        
+        // Link issue to version (when deploying fix)
+        const linkIssueToVersion = async (issueId, version, app) => {
+            if (!firebaseUser) return;
+            await IssueService.linkToVersion(firebaseUser.uid, [issueId], version, app);
+        };
+        
+        // Generate "Copy for Claude" text
+        const copyForClaude = (issue) => {
+            const text = `## Issue ${issue.id}: ${issue.title}
+
+**App:** ${issue.app}
+**Severity:** ${issue.severity}
+**Status:** ${issue.status}
+
+### Description
+${issue.description}
+
+### Steps to Reproduce
+${issue.stepsToReproduce?.map((s, i) => `${i + 1}. ${s}`).join('\n') || 'N/A'}
+
+### Expected Behavior
+${issue.expected || 'N/A'}
+
+### Actual Behavior
+${issue.actual || 'N/A'}
+
+---
+When you fix this, please note: "Fixes ${issue.id}" in the code or deploy notes.`;
+            
+            navigator.clipboard.writeText(text);
+        };
+        
+        // Promote issue to work item
+        const promoteToWorkItem = async (issue) => {
+            if (!firebaseUser) {
+                showAlert('Sign in to Firebase to create work items', 'error');
+                return;
+            }
+            
+            // Check if already promoted
+            const existingWI = (globalWorkItems || []).find(wi => 
+                wi.context?.relatedItems?.includes(issue.id) || 
+                wi.tags?.includes(`from-${issue.id}`)
+            );
+            if (existingWI) {
+                const proceed = await showConfirm(`Issue ${issue.id} was already promoted to ${existingWI.id}. Create another work item anyway?`);
+                if (!proceed) return;
+            }
+            
+            // Generate next work item ID
+            const existingIds = (globalWorkItems || []).map(i => parseInt(i.id?.replace('WI-', '') || '0'));
+            const nextNum = Math.max(0, ...existingIds) + 1;
+            const newId = `WI-${String(nextNum).padStart(3, '0')}`;
+            
+            // Map severity to priority
+            const priorityMap = { 'critical': 'core', 'major': 'core', 'minor': 'nice-to-have', 'cosmetic': 'nice-to-have' };
+            
+            const workItemData = {
+                id: newId,
+                appId: issue.app,
+                title: issue.title,
+                description: [
+                    issue.description || '',
+                    issue.stepsToReproduce?.length ? '\n**Steps to Reproduce:**\n' + issue.stepsToReproduce.map((s, i) => `${i + 1}. ${s}`).join('\n') : '',
+                    issue.expected ? `\n**Expected:** ${issue.expected}` : '',
+                    issue.actual ? `\n**Actual:** ${issue.actual}` : ''
+                ].filter(Boolean).join('\n'),
+                type: 'bugfix',
+                priority: priorityMap[issue.severity] || 'core',
+                status: 'ready',
+                effort: issue.severity === 'critical' || issue.severity === 'major' ? 'session' : 'quick',
+                source: 'promoted',
+                tags: ['promoted', `from-${issue.id}`],
+                context: {
+                    filesAffected: [],
+                    sections: [],
+                    dependencies: [],
+                    notes: `Promoted from issue ${issue.id} (${issue.severity})`,
+                    relatedItems: [issue.id]
+                }
+            };
+            
+            try {
+                await WorkItemService.create(firebaseUser.uid, workItemData);
+                
+                // Update the issue to note it was promoted
+                await IssueService.update(firebaseUser.uid, issue.id, {
+                    promotedTo: newId,
+                    promotedAt: new Date().toISOString()
+                });
+                
+                showAlert(`Promoted ${issue.id} → ${newId} in Backlog`, 'success');
+            } catch (e) {
+                showAlert(`Error promoting issue: ${e.message}`, 'error');
+            }
+        };
+        
+        // Get issues ready for release (fixed in TEST, not yet in PROD)
+        const getIssuesForRelease = (app) => {
+            return issues.filter(i => 
+                i.app === app && 
+                (i.status === 'fixed' || i.status === 'verified') &&
+                !i.releasedToProd
+            );
+        };
+        
+        // Generate release notes
+        const generateReleaseNotes = (app) => {
+            const releaseIssues = getIssuesForRelease(app);
+            const appInfo = configuredApps.find(a => a.id === app);
+            const version = appInfo?.currentTestVersion || '?.?.?';
+            
+            const notes = `# ${appInfo?.name || app} v${version} Release Notes
+
+## What's New
+
+${releaseIssues.map(i => `- **${i.id}**: ${i.title}`).join('\n') || 'No tracked issues in this release.'}
+
+## Details
+
+${releaseIssues.map(i => `### ${i.id}: ${i.title}
+${i.description}
+`).join('\n')}
+
+---
+Released: ${new Date().toLocaleDateString()}
+`;
+            return notes;
+        };
+        
+        // Mark issues as released to PROD
+        const markReleasedToProd = async (app) => {
+            if (!firebaseUser) return;
+            
+            const releaseIssues = getIssuesForRelease(app);
+            const appInfo = configuredApps.find(a => a.id === app);
+            const version = appInfo?.currentTestVersion;
+            
+            // Update each issue via IssueService
+            const issueIds = releaseIssues.map(i => i.id);
+            await IssueService.markReleasedToProd(firebaseUser.uid, issueIds, version);
+            
+            // Create release record via ReleaseService
+            await ReleaseService.create(firebaseUser.uid, {
+                app,
+                version,
+                deployedAt: new Date().toISOString(),
+                issues: issueIds,
+                environment: 'prod'
+            });
+            
+            // Copy release notes
+            navigator.clipboard.writeText(generateReleaseNotes(app));
+            showAlert('Release notes copied to clipboard!', 'Copied');
+        };
+        
+        // Convert user report to tracked issue
+        const convertToTrackedIssue = async (report) => {
+            if (!firebaseUser) return;
+            
+            const id = getNextIssueId();
+            const issue = {
+                id,
+                title: report.title || report.description?.substring(0, 50) || 'User reported issue',
+                description: report.description || '',
+                app: report.section || 'gameshelf',
+                severity: report.severity || 'medium',
+                createdBy: 'user-report',
+                originalReport: {
+                    firebaseKey: report.firebaseKey,
+                    type: report.type,
+                    section: report.section,
+                    userAgent: report.userAgent,
+                    appVersion: report.appVersion,
+                    timestamp: report.timestamp,
+                    screenshot: report.screenshot
+                },
+                stepsToReproduce: [],
+                expected: '',
+                actual: report.description || ''
+            };
+            
+            await IssueService.create(firebaseUser.uid, issue);
+            
+            // Mark original report as converted
+            if (firebaseDb) {
+                await firebaseDb.ref(`reported-issues/${report.firebaseKey}`).update({
+                    convertedToIssue: id,
+                    convertedAt: new Date().toISOString()
+                });
+            }
+            
+            setSelectedUserReport(null);
+        };
+        
+        // Dismiss user report (archive without tracking)
+        const dismissUserReport = async (report) => {
+            if (!firebaseDb) return;
+            
+            await firebaseDb.ref(`reported-issues/${report.firebaseKey}`).update({
+                dismissed: true,
+                dismissedAt: new Date().toISOString()
+            });
+        };
+        
+        // Delete user report permanently
+        const deleteUserReport = async (report) => {
+            if (!firebaseDb) return;
+            const confirmed = await showConfirm('Permanently delete this report?', 'Confirm Delete');
+            if (!confirmed) return;
+            
+            await firebaseDb.ref(`reported-issues/${report.firebaseKey}`).remove();
+        };
+        
+        // Get active (non-dismissed, non-converted) user reports
+        const activeUserReports = userReports.filter(r => !r.dismissed && !r.convertedToIssue);
+        
+        // Filter issues
+        const filteredIssues = issues.filter(i => {
+            if (filter !== 'all' && i.status !== filter) return false;
+            if (appFilter !== 'all' && i.app !== appFilter) return false;
+            return true;
+        });
+        
+        // Status badge
+        const StatusBadge = ({ status }) => {
+            const colors = {
+                open: 'bg-red-900/50 text-red-300 border-red-700',
+                'in-progress': 'bg-yellow-900/50 text-yellow-300 border-yellow-700',
+                fixed: 'bg-blue-900/50 text-blue-300 border-blue-700',
+                verified: 'bg-green-900/50 text-green-300 border-green-700',
+                closed: 'bg-slate-700 text-slate-400 border-slate-600'
+            };
+            return (
+                <span className={`px-2 py-0.5 rounded border text-xs ${colors[status] || colors.open}`}>
+                    {status}
+                </span>
+            );
+        };
+        
+        // Severity badge
+        const SeverityBadge = ({ severity }) => {
+            const colors = {
+                critical: 'text-red-400',
+                high: 'text-orange-400',
+                medium: 'text-yellow-400',
+                low: 'text-slate-400'
+            };
+            const icons = { critical: '🔴', high: '🟠', medium: '🟡', low: '⚪' };
+            return <span className={colors[severity]}>{icons[severity]} {severity}</span>;
+        };
+        
+        if (!firebaseUser) {
+            return (
+                <div className="bg-amber-900/30 border border-amber-700 rounded-xl p-6 text-center">
+                    <div className="text-amber-400 mb-2">⚠️ Sign in Required</div>
+                    <div className="text-sm text-slate-400">Go to the Firebase tab to sign in and enable issue tracking.</div>
+                </div>
+            );
+        }
+        
+        return (
+            <div className="space-y-6">
+                {/* Header & Stats */}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-bold">🐛 Issue Tracker</h2>
+                        <div className="text-sm text-slate-400">
+                            {issues.filter(i => i.status === 'open').length} open • 
+                            {issues.filter(i => i.status === 'fixed').length} fixed • 
+                            {issues.filter(i => i.status === 'verified').length} verified
+                            {activeUserReports.length > 0 && (
+                                <span className="text-orange-400"> • {activeUserReports.length} user reports</span>
+                            )}
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => setShowNewIssue(true)}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-lg flex items-center gap-2">
+                        + New Issue
+                    </button>
+                </div>
+                
+                {/* Filters */}
+                <div className="flex gap-2 flex-wrap">
+                    {['all', 'open', 'in-progress', 'fixed', 'verified', 'closed'].map(f => (
+                        <button
+                            key={f}
+                            onClick={() => setFilter(f)}
+                            className={`px-3 py-1 rounded text-sm ${filter === f ? 'bg-indigo-600' : 'bg-slate-700 hover:bg-slate-600'}`}>
+                            {f}
+                        </button>
+                    ))}
+                    <select
+                        value={appFilter}
+                        onChange={e => setAppFilter(e.target.value)}
+                        className="px-3 py-1 rounded text-sm bg-slate-700 border-none">
+                        <option value="all">All Apps</option>
+                        {configuredApps.map(app => (
+                            <option key={app.id} value={app.id}>{app.name}</option>
+                        ))}
+                    </select>
+                </div>
+                
+                {/* User-Reported Issues Section */}
+                {activeUserReports.length > 0 && (
+                    <div className="bg-orange-900/30 border border-orange-700 rounded-xl overflow-hidden">
+                        <button 
+                            onClick={() => setUserReportsExpanded(!userReportsExpanded)}
+                            className="w-full p-4 flex items-center justify-between hover:bg-orange-900/20 transition-colors"
+                        >
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">📬</span>
+                                <div className="text-left">
+                                    <div className="font-semibold text-orange-300">
+                                        {activeUserReports.length} User Report{activeUserReports.length !== 1 ? 's' : ''} Pending
+                                    </div>
+                                    <div className="text-sm text-slate-400">
+                                        Submitted from Game Shelf app
+                                    </div>
+                                </div>
+                            </div>
+                            <span className="text-xl">{userReportsExpanded ? '▼' : '▶'}</span>
+                        </button>
+                        
+                        {userReportsExpanded && (
+                            <div className="border-t border-orange-800 p-4 space-y-3">
+                                {activeUserReports.slice(0, 10).map(report => (
+                                    <div key={report.firebaseKey} className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                    <span className={`px-2 py-0.5 rounded text-xs ${
+                                                        report.type === 'bug' ? 'bg-red-900/50 text-red-300' :
+                                                        report.type === 'feature' ? 'bg-blue-900/50 text-blue-300' :
+                                                        report.type === 'ux' ? 'bg-purple-900/50 text-purple-300' :
+                                                        'bg-slate-700 text-slate-300'
+                                                    }`}>
+                                                        {report.type === 'bug' && '🐛'}
+                                                        {report.type === 'feature' && '💡'}
+                                                        {report.type === 'ux' && '🎨'}
+                                                        {report.type === 'other' && '📝'}
+                                                        {' '}{report.type || 'report'}
+                                                    </span>
+                                                    {report.section && (
+                                                        <span className="px-2 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
+                                                            📍 {report.section}
+                                                        </span>
+                                                    )}
+                                                    {report.severity && (
+                                                        <span className={`px-2 py-0.5 rounded text-xs ${
+                                                            report.severity === 'critical' ? 'bg-red-900 text-red-200' :
+                                                            report.severity === 'major' ? 'bg-orange-900 text-orange-200' :
+                                                            report.severity === 'minor' ? 'bg-yellow-900 text-yellow-200' :
+                                                            'bg-slate-700 text-slate-300'
+                                                        }`}>
+                                                            {report.severity}
+                                                        </span>
+                                                    )}
+                                                    {report.appVersion && (
+                                                        <span className="text-xs text-slate-500">
+                                                            v{report.appVersion}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="font-medium truncate">
+                                                    {report.title || report.description?.substring(0, 60) || 'No description'}
+                                                </div>
+                                                {report.description && report.title && (
+                                                    <div className="text-sm text-slate-400 mt-1 line-clamp-2">
+                                                        {report.description}
+                                                    </div>
+                                                )}
+                                                <div className="text-xs text-slate-500 mt-2">
+                                                    📅 {new Date(report.timestamp || report.createdAt).toLocaleString()}
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col gap-1">
+                                                <button
+                                                    onClick={() => setSelectedUserReport(report)}
+                                                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-xs whitespace-nowrap"
+                                                >
+                                                    👁️ View
+                                                </button>
+                                                <button
+                                                    onClick={() => convertToTrackedIssue(report)}
+                                                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs whitespace-nowrap"
+                                                >
+                                                    ➕ Track
+                                                </button>
+                                                <button
+                                                    onClick={() => dismissUserReport(report)}
+                                                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-400 whitespace-nowrap"
+                                                >
+                                                    ✕ Dismiss
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {report.screenshot && (
+                                            <div className="mt-3 pt-3 border-t border-slate-700">
+                                                <img 
+                                                    src={report.screenshot} 
+                                                    alt="Screenshot" 
+                                                    className="max-h-32 rounded cursor-pointer hover:opacity-80"
+                                                    onClick={() => window.open(report.screenshot, '_blank')}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                                {activeUserReports.length > 10 && (
+                                    <div className="text-center text-sm text-slate-400">
+                                        + {activeUserReports.length - 10} more reports
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* User Report Detail Modal */}
+                {selectedUserReport && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setSelectedUserReport(null)}>
+                        <div className="bg-slate-800 rounded-xl border border-slate-600 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                            <div className="p-6 border-b border-slate-700 flex items-center justify-between">
+                                <h3 className="text-lg font-semibold">📬 User Report</h3>
+                                <button onClick={() => setSelectedUserReport(null)} className="text-slate-400 hover:text-white">✕</button>
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="flex flex-wrap gap-2">
+                                    <span className={`px-3 py-1 rounded ${
+                                        selectedUserReport.type === 'bug' ? 'bg-red-900/50 text-red-300' :
+                                        selectedUserReport.type === 'feature' ? 'bg-blue-900/50 text-blue-300' :
+                                        'bg-slate-700'
+                                    }`}>
+                                        {selectedUserReport.type || 'report'}
+                                    </span>
+                                    {selectedUserReport.section && (
+                                        <span className="px-3 py-1 rounded bg-slate-700">📍 {selectedUserReport.section}</span>
+                                    )}
+                                    {selectedUserReport.severity && (
+                                        <span className="px-3 py-1 rounded bg-slate-700">{selectedUserReport.severity}</span>
+                                    )}
+                                </div>
+                                
+                                {selectedUserReport.title && (
+                                    <div>
+                                        <div className="text-sm text-slate-400 mb-1">Title</div>
+                                        <div className="font-medium">{selectedUserReport.title}</div>
+                                    </div>
+                                )}
+                                
+                                <div>
+                                    <div className="text-sm text-slate-400 mb-1">Description</div>
+                                    <div className="bg-slate-900 rounded p-3 whitespace-pre-wrap">
+                                        {selectedUserReport.description || 'No description provided'}
+                                    </div>
+                                </div>
+                                
+                                {selectedUserReport.screenshot && (
+                                    <div>
+                                        <div className="text-sm text-slate-400 mb-1">Screenshot</div>
+                                        <img 
+                                            src={selectedUserReport.screenshot} 
+                                            alt="Screenshot" 
+                                            className="max-w-full rounded cursor-pointer"
+                                            onClick={() => window.open(selectedUserReport.screenshot, '_blank')}
+                                        />
+                                    </div>
+                                )}
+                                
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <div className="text-slate-400">Submitted</div>
+                                        <div>{new Date(selectedUserReport.timestamp || selectedUserReport.createdAt).toLocaleString()}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-slate-400">App Version</div>
+                                        <div>{selectedUserReport.appVersion || 'Unknown'}</div>
+                                    </div>
+                                </div>
+                                
+                                {selectedUserReport.userAgent && (
+                                    <div>
+                                        <div className="text-sm text-slate-400 mb-1">Device/Browser</div>
+                                        <div className="text-xs bg-slate-900 rounded p-2 font-mono break-all">
+                                            {selectedUserReport.userAgent}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="p-6 border-t border-slate-700 flex gap-3">
+                                <button
+                                    onClick={() => convertToTrackedIssue(selectedUserReport)}
+                                    className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg"
+                                >
+                                    ➕ Convert to Tracked Issue
+                                </button>
+                                <button
+                                    onClick={() => { dismissUserReport(selectedUserReport); setSelectedUserReport(null); }}
+                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg"
+                                >
+                                    Dismiss
+                                </button>
+                                <button
+                                    onClick={() => { deleteUserReport(selectedUserReport); setSelectedUserReport(null); }}
+                                    className="px-4 py-2 bg-red-900 hover:bg-red-800 rounded-lg"
+                                >
+                                    🗑️
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Release Ready Banner */}
+                {configuredApps.map(app => {
+                    const ready = getIssuesForRelease(app.id);
+                    if (ready.length === 0) return null;
+                    return (
+                        <div key={app.id} className="bg-green-900/30 border border-green-700 rounded-xl p-4 flex items-center justify-between">
+                            <div>
+                                <div className="font-medium text-green-300 flex items-center gap-1">
+                                    <AppIcon icon={app.icon} size={18} /> {app.name}: {ready.length} issue{ready.length !== 1 ? 's' : ''} ready for PROD
+                                </div>
+                                <div className="text-sm text-slate-400">
+                                    {ready.map(i => i.id).join(', ')}
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => navigator.clipboard.writeText(generateReleaseNotes(app.id))}
+                                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm">
+                                    📋 Copy Notes
+                                </button>
+                                <button
+                                    onClick={() => markReleasedToProd(app.id)}
+                                    className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded text-sm">
+                                    🚀 Mark Released
+                                </button>
+                            </div>
+                        </div>
+                    );
+                })}
+                
+                {/* Issues List */}
+                <div className="space-y-3">
+                    {loading ? (
+                        <div className="text-center text-slate-400 py-8">Loading issues...</div>
+                    ) : filteredIssues.length === 0 ? (
+                        <div className="text-center text-slate-400 py-8">No issues found</div>
+                    ) : (
+                        filteredIssues.map(issue => (
+                            <div
+                                key={issue.id}
+                                className="bg-slate-800 border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition-colors">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="font-mono text-sm text-indigo-400">{issue.id}</span>
+                                            <StatusBadge status={issue.status} />
+                                            <SeverityBadge severity={issue.severity} />
+                                        </div>
+                                        <div className="font-medium">{issue.title}</div>
+                                        <div className="text-sm text-slate-400 mt-1">
+                                            {issue.app && <span className="mr-3">📱 {configuredApps.find(a => a.id === issue.app)?.name || issue.app}</span>}
+                                            <span>📅 {new Date(issue.createdAt).toLocaleDateString()}</span>
+                                            {issue.fixedInVersion && <span className="ml-3 text-blue-400">🔧 Fixed in v{issue.fixedInVersion}</span>}
+                                            {issue.promotedTo && <span className="ml-3 text-emerald-400">📋 → {issue.promotedTo}</span>}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <button
+                                            onClick={() => promoteToWorkItem(issue)}
+                                            className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs"
+                                            title="Promote to Work Item">
+                                            📋
+                                        </button>
+                                        <button
+                                            onClick={() => copyForClaude(issue)}
+                                            className="px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-xs"
+                                            title="Copy for Claude">
+                                            🤖
+                                        </button>
+                                        <button
+                                            onClick={() => setSelectedIssue(issue)}
+                                            className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">
+                                            Edit
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {/* Quick status buttons */}
+                                <div className="flex gap-2 mt-3 pt-3 border-t border-slate-700">
+                                    {issue.status === 'open' && (
+                                        <button
+                                            onClick={() => updateIssueStatus(issue.id, 'in-progress')}
+                                            className="px-2 py-1 bg-yellow-700 hover:bg-yellow-600 rounded text-xs">
+                                            Start Working
+                                        </button>
+                                    )}
+                                    {(issue.status === 'open' || issue.status === 'in-progress') && (
+                                        <button
+                                            onClick={async () => {
+                                                const version = await showPrompt('Fixed in version:', '', 'Enter Version');
+                                                if (version) linkIssueToVersion(issue.id, version, issue.app);
+                                            }}
+                                            className="px-2 py-1 bg-blue-700 hover:bg-blue-600 rounded text-xs">
+                                            Mark Fixed
+                                        </button>
+                                    )}
+                                    {issue.status === 'fixed' && (
+                                        <button
+                                            onClick={() => updateIssueStatus(issue.id, 'verified')}
+                                            className="px-2 py-1 bg-green-700 hover:bg-green-600 rounded text-xs">
+                                            ✓ Verify Fixed
+                                        </button>
+                                    )}
+                                    {!issue.promotedTo && (issue.status === 'open' || issue.status === 'in-progress') && (
+                                        <button
+                                            onClick={() => promoteToWorkItem(issue)}
+                                            className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs ml-auto">
+                                            📋 Promote to Work Item
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+                
+                {/* Recent Releases */}
+                {releases.length > 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                        <h3 className="text-lg font-semibold mb-4">📦 Recent Releases</h3>
+                        <div className="space-y-2">
+                            {releases.slice(0, 5).map(rel => (
+                                <div key={rel.id} className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+                                    <div>
+                                        <span className="font-medium">{configuredApps.find(a => a.id === rel.app)?.name || rel.app}</span>
+                                        <span className="ml-2 font-mono text-green-400">v{rel.version}</span>
+                                        <span className="ml-2 text-xs text-slate-400">→ {rel.environment?.toUpperCase()}</span>
+                                    </div>
+                                    <div className="text-sm text-slate-400">
+                                        {rel.issues?.length || 0} issues • {new Date(rel.deployedAt).toLocaleDateString()}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                
+                {/* Test Plan Integration */}
+                {firebaseUser && (
+                    <div className="bg-purple-900/30 border border-purple-700 rounded-xl p-6">
+                        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-purple-300">
+                            🧪 Test Plan Integration
+                        </h3>
+                        <p className="text-sm text-slate-400 mb-4">
+                            The Test Plan app can automatically push issues here when tests fail.
+                        </p>
+                        
+                        <div className="space-y-3">
+                            <div className="p-3 bg-slate-800 rounded-lg">
+                                <div className="text-xs text-slate-500 mb-1">Firebase Path:</div>
+                                <code className="text-sm text-purple-300 break-all">
+                                    command-center/{firebaseUser.uid}/issues/
+                                </code>
+                            </div>
+                            
+                            <details className="bg-slate-800 rounded-lg">
+                                <summary className="p-3 cursor-pointer text-sm font-medium">
+                                    📋 Test Plan Integration Code
+                                </summary>
+                                <pre className="p-3 text-xs overflow-auto border-t border-slate-700 bg-slate-900">
+{`// Add to Test Plan - Push issue when test fails
+const pushIssueToCommandCenter = async (testResult) => {
+  const uid = '${firebaseUser.uid}';
+  const issueId = 'ISS-' + String(Date.now()).slice(-6);
+  
+  await firebase.database()
+    .ref(\`command-center/\${uid}/issues/\${issueId}\`)
+    .set({
+      id: issueId,
+      title: testResult.testName + ' failed',
+      description: testResult.error || 'Test failed',
+      app: testResult.appId, // 'gameshelf', 'quotle', etc
+      severity: testResult.critical ? 'high' : 'medium',
+      status: 'open',
+      createdAt: new Date().toISOString(),
+      createdBy: 'test-plan',
+      stepsToReproduce: testResult.steps || [],
+      expected: testResult.expected,
+      actual: testResult.actual,
+      testId: testResult.testId
+    });
+};`}
+                                </pre>
+                            </details>
+                            
+                            <div className="flex gap-2">
+                                <a href="https://stewartdavidp-ship-it.github.io/gameshelf-testplan/"
+                                   target="_blank"
+                                   className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-center text-sm">
+                                    📋 Open Test Plan
+                                </a>
+                                <a href="https://stewartdavidp-ship-it.github.io/gameshelf-testplan/issue-tracker.html"
+                                   target="_blank"
+                                   className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-center text-sm">
+                                    🐛 Legacy Tracker
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {/* New Issue Modal */}
+                {showNewIssue && (
+                    <NewIssueModal
+                        apps={configuredApps}
+                        onSave={createIssue}
+                        onCancel={() => setShowNewIssue(false)}
+                    />
+                )}
+                
+                {/* Edit Issue Modal */}
+                {selectedIssue && (
+                    <EditIssueModal
+                        issue={selectedIssue}
+                        apps={configuredApps}
+                        onSave={async (updated) => {
+                            if (firebaseUser) {
+                                await IssueService.update(firebaseUser.uid, updated.id, updated);
+                            }
+                            setSelectedIssue(null);
+                        }}
+                        onCancel={() => setSelectedIssue(null)}
+                    />
+                )}
+            </div>
+        );
+    }
+    
+    // New Issue Modal
+    function NewIssueModal({ apps, onSave, onCancel }) {
+        const [title, setTitle] = React.useState('');
+        const [description, setDescription] = React.useState('');
+        const [app, setApp] = React.useState(apps[0]?.id || '');
+        const [severity, setSeverity] = React.useState('medium');
+        const [stepsText, setStepsText] = React.useState('');
+        const [expected, setExpected] = React.useState('');
+        const [actual, setActual] = React.useState('');
+        
+        const handleSubmit = () => {
+            if (!title.trim()) return;
+            onSave({
+                title: title.trim(),
+                description: description.trim(),
+                app,
+                severity,
+                stepsToReproduce: stepsText.split('\n').filter(s => s.trim()),
+                expected: expected.trim(),
+                actual: actual.trim()
+            });
+        };
+        
+        return (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div className="p-6 border-b border-slate-700">
+                        <h3 className="text-lg font-semibold">New Issue</h3>
+                    </div>
+                    <div className="p-6 space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Title *</label>
+                            <input
+                                value={title}
+                                onChange={e => setTitle(e.target.value)}
+                                className="w-full p-2 bg-slate-900 border border-slate-600 rounded"
+                                placeholder="Brief description of the issue"
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">App</label>
+                                <select
+                                    value={app}
+                                    onChange={e => setApp(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded">
+                                    {apps.map(a => (
+                                        <option key={a.id} value={a.id}>{a.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Severity</label>
+                                <select
+                                    value={severity}
+                                    onChange={e => setSeverity(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded">
+                                    <option value="critical">🔴 Critical</option>
+                                    <option value="high">🟠 High</option>
+                                    <option value="medium">🟡 Medium</option>
+                                    <option value="low">⚪ Low</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Description</label>
+                            <textarea
+                                value={description}
+                                onChange={e => setDescription(e.target.value)}
+                                className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-20"
+                                placeholder="Detailed description"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Steps to Reproduce (one per line)</label>
+                            <textarea
+                                value={stepsText}
+                                onChange={e => setStepsText(e.target.value)}
+                                className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-20 font-mono text-sm"
+                                placeholder="1. Go to...&#10;2. Click on...&#10;3. Observe..."
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Expected</label>
+                                <textarea
+                                    value={expected}
+                                    onChange={e => setExpected(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-16"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Actual</label>
+                                <textarea
+                                    value={actual}
+                                    onChange={e => setActual(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-16"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    <div className="p-6 border-t border-slate-700 flex justify-end gap-3">
+                        <button onClick={onCancel} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded">
+                            Cancel
+                        </button>
+                        <button onClick={handleSubmit} className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded">
+                            Create Issue
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    // Edit Issue Modal
+    function EditIssueModal({ issue, apps, onSave, onCancel }) {
+        const [title, setTitle] = React.useState(issue.title || '');
+        const [description, setDescription] = React.useState(issue.description || '');
+        const [app, setApp] = React.useState(issue.app || apps[0]?.id || '');
+        const [severity, setSeverity] = React.useState(issue.severity || 'medium');
+        const [stepsText, setStepsText] = React.useState(issue.stepsToReproduce?.join('\n') || '');
+        const [expected, setExpected] = React.useState(issue.expected || '');
+        const [actual, setActual] = React.useState(issue.actual || '');
+        
+        const handleSubmit = () => {
+            onSave({
+                ...issue,
+                title: title.trim(),
+                description: description.trim(),
+                app,
+                severity,
+                stepsToReproduce: stepsText.split('\n').filter(s => s.trim()),
+                expected: expected.trim(),
+                actual: actual.trim()
+            });
+        };
+        
+        return (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div className="p-6 border-b border-slate-700">
+                        <h3 className="text-lg font-semibold">Edit {issue.id}</h3>
+                    </div>
+                    <div className="p-6 space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Title</label>
+                            <input
+                                value={title}
+                                onChange={e => setTitle(e.target.value)}
+                                className="w-full p-2 bg-slate-900 border border-slate-600 rounded"
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">App</label>
+                                <select
+                                    value={app}
+                                    onChange={e => setApp(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded">
+                                    {apps.map(a => (
+                                        <option key={a.id} value={a.id}>{a.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Severity</label>
+                                <select
+                                    value={severity}
+                                    onChange={e => setSeverity(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded">
+                                    <option value="critical">🔴 Critical</option>
+                                    <option value="high">🟠 High</option>
+                                    <option value="medium">🟡 Medium</option>
+                                    <option value="low">⚪ Low</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Description</label>
+                            <textarea
+                                value={description}
+                                onChange={e => setDescription(e.target.value)}
+                                className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-20"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Steps to Reproduce</label>
+                            <textarea
+                                value={stepsText}
+                                onChange={e => setStepsText(e.target.value)}
+                                className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-20 font-mono text-sm"
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Expected</label>
+                                <textarea
+                                    value={expected}
+                                    onChange={e => setExpected(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-16"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Actual</label>
+                                <textarea
+                                    value={actual}
+                                    onChange={e => setActual(e.target.value)}
+                                    className="w-full p-2 bg-slate-900 border border-slate-600 rounded h-16"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    <div className="p-6 border-t border-slate-700 flex justify-end gap-3">
+                        <button onClick={onCancel} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded">
+                            Cancel
+                        </button>
+                        <button onClick={handleSubmit} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded">
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // CONFIG VIEW (v7.0.0) - Dynamic Environment & App Configuration
+    // =========================================================================
+    
+    
+    // =========================================================================
+    // ARCHIVE VIEW — gs-active Archive Management
+    // =========================================================================
+
+    // gs-active repo configuration
+    const GS_ACTIVE_REPO = 'stewartdavidp-ship-it/gs-active';
+    const GS_ACTIVE_APPS = ['gameshelf', 'quotle', 'rungs', 'slate', 'wordboxing', 'command-center', 'testplan', 'firebase-functions'];
+    
+    function ArchiveView({ apps, config, github, showAlert, showConfirm, showPrompt, globalIssues, sessionLog, deployments }) {
+        const [activeTab, setActiveTab] = React.useState('upload'); // 'upload', 'download', 'briefing'
+        const [archiveFiles, setArchiveFiles] = React.useState([]); // Parsed files from uploaded zip
+        const [archiveContext, setArchiveContext] = React.useState(null); // CONTEXT.md content
+        const [archiveStandards, setArchiveStandards] = React.useState(null); // STANDARDS.md content
+        const [validationResults, setValidationResults] = React.useState(null); // Version comparison results
+        const [loading, setLoading] = React.useState(false);
+        const [uploadProgress, setUploadProgress] = React.useState('');
+        const [repoFiles, setRepoFiles] = React.useState(null); // Files from gs-active repo
+        const [repoLoading, setRepoLoading] = React.useState(false);
+        const [briefingText, setBriefingText] = React.useState('');
+        
+        // Get deployed versions for all apps
+        const getDeployedVersions = async () => {
+            if (!github) return {};
+            const versions = {};
+            
+            for (const [appId, app] of Object.entries(apps)) {
+                versions[appId] = { test: null, prod: null };
+                // Use effectiveSubPath with fallback to defaults (localStorage may have empty string)
+                const effectiveSubPath = app.subPath || '';
+                const indexPath = effectiveSubPath ? `${effectiveSubPath}/index.html` : 'index.html';
+                
+                if (app.testRepo) {
+                    try {
+                        const fileData = await github.getFileContent(app.testRepo, indexPath);
+                        if (fileData) {
+                            versions[appId].test = extractVersionFromHTML(fileData.textContent);
+                        }
+                    } catch (e) { console.log(`Could not fetch ${appId} test version from ${indexPath}`); }
+                }
+                
+                if (app.prodRepo) {
+                    try {
+                        const fileData = await github.getFileContent(app.prodRepo, indexPath);
+                        if (fileData) {
+                            versions[appId].prod = extractVersionFromHTML(fileData.textContent);
+                        }
+                    } catch (e) { console.log(`Could not fetch ${appId} prod version from ${indexPath}`); }
+                }
+            }
+            
+            return versions;
+        };
+        
+        // Handle zip file upload
+        const handleZipUpload = async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            
+            setLoading(true);
+            setUploadProgress('Reading zip file...');
+            setArchiveFiles([]);
+            setValidationResults(null);
+            
+            try {
+                const zip = await JSZip.loadAsync(file);
+                const files = [];
+                
+                setUploadProgress('Extracting files...');
+                
+                // Extract all files
+                for (const [path, zipEntry] of Object.entries(zip.files)) {
+                    if (zipEntry.dir) continue;
+                    
+                    // Detect if file is binary
+                    const isBinary = /\.(png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot|svg)$/i.test(path);
+                    
+                    let content;
+                    let base64Content = null;
+                    
+                    if (isBinary) {
+                        // Read binary files as base64
+                        base64Content = await zipEntry.async('base64');
+                        content = `[Binary file: ${path}]`; // Placeholder for display
+                    } else {
+                        content = await zipEntry.async('string');
+                    }
+                    
+                    const relativePath = path.replace(/^gs-active\//, '');
+                    
+                    // Extract version from HTML files
+                    let version = null;
+                    if (path.endsWith('.html')) {
+                        version = extractVersionFromHTML(content);
+                    }
+                    
+                    // Detect app from path
+                    const pathParts = relativePath.split('/');
+                    const appFolder = pathParts[0];
+                    
+                    files.push({
+                        path: relativePath,
+                        fullPath: path,
+                        appFolder,
+                        content,
+                        base64Content,
+                        isBinary,
+                        version,
+                        size: isBinary ? (base64Content?.length || 0) : content.length,
+                        isHtml: path.endsWith('.html'),
+                        isMarkdown: path.endsWith('.md'),
+                        isJson: path.endsWith('.json'),
+                        isJs: path.endsWith('.js')
+                    });
+                    
+                    // Capture special files
+                    if (relativePath === 'CONTEXT.md') {
+                        setArchiveContext(content);
+                    } else if (relativePath === 'STANDARDS.md') {
+                        setArchiveStandards(content);
+                    }
+                }
+                
+                setArchiveFiles(files);
+                setUploadProgress('Validating versions...');
+                
+                // Validate against deployed versions
+                const deployedVersions = await getDeployedVersions();
+                const validation = [];
+                
+                // Map app folders to app IDs
+                const folderToAppId = {
+                    'gameshelf': 'gameshelf',
+                    'quotle': 'quotle', 
+                    'rungs': 'rungs',
+                    'slate': 'slate',
+                    'wordboxing': 'wordboxing',
+                    'command-center': 'command-center',
+                    'testplan': 'testplan'
+                };
+                
+                // Check each app folder
+                const appFolders = [...new Set(files.map(f => f.appFolder))];
+                
+                for (const folder of appFolders) {
+                    const appId = folderToAppId[folder];
+                    const indexFile = files.find(f => f.appFolder === folder && f.path.endsWith('index.html'));
+                    
+                    if (!indexFile || !appId) continue;
+                    
+                    const archiveVersion = indexFile.version;
+                    const deployed = deployedVersions[appId] || {};
+                    
+                    let status = 'unknown';
+                    let message = '';
+                    
+                    if (!archiveVersion) {
+                        status = 'warning';
+                        message = 'No version found in archive';
+                    } else if (deployed.prod && archiveVersion === deployed.prod) {
+                        status = 'match';
+                        message = `v${archiveVersion} matches PROD`;
+                    } else if (deployed.test && archiveVersion === deployed.test) {
+                        status = 'match-test';
+                        message = `v${archiveVersion} matches TEST`;
+                    } else if (deployed.prod && archiveVersion !== deployed.prod) {
+                        status = 'mismatch';
+                        message = `Archive v${archiveVersion} ≠ PROD v${deployed.prod}`;
+                    } else if (!deployed.prod && !deployed.test) {
+                        status = 'no-deploy';
+                        message = `v${archiveVersion} (no deployed version found)`;
+                    } else {
+                        status = 'newer';
+                        message = `v${archiveVersion} (PROD: ${deployed.prod || 'none'}, TEST: ${deployed.test || 'none'})`;
+                    }
+                    
+                    validation.push({
+                        folder,
+                        appId,
+                        appName: apps[appId]?.name || folder,
+                        archiveVersion,
+                        deployedProd: deployed.prod,
+                        deployedTest: deployed.test,
+                        status,
+                        message
+                    });
+                }
+                
+                // Check for apps deployed but not in archive
+                for (const [appId, app] of Object.entries(apps)) {
+                    const folder = Object.entries(folderToAppId).find(([f, id]) => id === appId)?.[0];
+                    if (!folder) continue;
+                    
+                    const inArchive = validation.some(v => v.appId === appId);
+                    if (!inArchive && (app.testRepo || app.prodRepo)) {
+                        const deployed = deployedVersions[appId] || {};
+                        if (deployed.prod || deployed.test) {
+                            validation.push({
+                                folder,
+                                appId,
+                                appName: app.name,
+                                archiveVersion: null,
+                                deployedProd: deployed.prod,
+                                deployedTest: deployed.test,
+                                status: 'missing',
+                                message: `Not in archive (PROD: ${deployed.prod || 'none'})`
+                            });
+                        }
+                    }
+                }
+                
+                setValidationResults(validation);
+                setUploadProgress('');
+                
+            } catch (err) {
+                console.error('Error processing zip:', err);
+                await showAlert(`Error processing zip: ${err.message}`, 'Upload Error');
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        // Push archive to gs-active repo
+        const pushToRepo = async () => {
+            if (!github || archiveFiles.length === 0) return;
+            
+            const confirmed = await showConfirm(
+                `Push ${archiveFiles.length} files to gs-active repo?\n\n` +
+                `This will update the archive in GitHub.`,
+                'Push to gs-active'
+            );
+            
+            if (!confirmed) return;
+            
+            setLoading(true);
+            setUploadProgress('Checking repository...');
+            
+            try {
+                // Check if repo exists
+                const [owner, repoName] = GS_ACTIVE_REPO.split('/');
+                const exists = await github.repoExists(owner, repoName);
+                
+                if (!exists) {
+                    setUploadProgress('Creating gs-active repository...');
+                    await github.createRepo('gs-active', 'Game Shelf development archive for Claude sessions', false);
+                    await new Promise(r => setTimeout(r, 2000)); // Wait for repo creation
+                }
+                
+                // Push each file
+                let pushed = 0;
+                for (const file of archiveFiles) {
+                    setUploadProgress(`Pushing ${file.path} (${++pushed}/${archiveFiles.length})...`);
+                    
+                    // Get current file SHA if it exists
+                    let sha = null;
+                    try {
+                        const existing = await github.getFile(GS_ACTIVE_REPO, file.path);
+                        if (existing) sha = existing.sha;
+                    } catch (e) { /* File doesn't exist yet */ }
+                    
+                    // Handle binary vs text files differently
+                    if (file.isBinary && file.base64Content) {
+                        // Binary file - use base64 content directly
+                        const [owner, repoName] = GS_ACTIVE_REPO.split('/');
+                        const body = {
+                            message: `Update ${file.path} - ${new Date().toISOString().split('T')[0]}`,
+                            content: file.base64Content,
+                            committer: { name: 'Command Center', email: 'deploy@gameshelf.app' }
+                        };
+                        if (sha) body.sha = sha;
+                        await github.request(`/repos/${owner}/${repoName}/contents/${file.path}`, { 
+                            method: 'PUT', 
+                            body: JSON.stringify(body) 
+                        });
+                    } else {
+                        // Text file - use normal method
+                        await github.createOrUpdateFile(
+                            GS_ACTIVE_REPO,
+                            file.path,
+                            file.content,
+                            `Update ${file.path} - ${new Date().toISOString().split('T')[0]}`,
+                            sha
+                        );
+                    }
+                }
+                
+                setUploadProgress('');
+                await showAlert(`Successfully pushed ${archiveFiles.length} files to gs-active!`, '✅ Archive Updated');
+                
+            } catch (err) {
+                console.error('Error pushing to repo:', err);
+                await showAlert(`Error: ${err.message}`, 'Push Failed');
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        // Load files from gs-active repo - returns the files array
+        const loadFromRepo = async () => {
+            if (!github) return [];
+            
+            setRepoLoading(true);
+            
+            try {
+                const files = [];
+                
+                // Get root contents
+                const root = await github.listRepoContents(GS_ACTIVE_REPO);
+                
+                for (const item of root) {
+                    if (item.type === 'file') {
+                        files.push({ path: item.path, type: 'file', sha: item.sha, size: item.size });
+                    } else if (item.type === 'dir') {
+                        // Get directory contents
+                        const dirContents = await github.listRepoContents(GS_ACTIVE_REPO, item.path);
+                        for (const subItem of dirContents) {
+                            if (subItem.type === 'file') {
+                                files.push({ path: subItem.path, type: 'file', sha: subItem.sha, size: subItem.size, folder: item.path });
+                            } else if (subItem.type === 'dir') {
+                                // Go one more level (for icons folders, etc)
+                                const subDirContents = await github.listRepoContents(GS_ACTIVE_REPO, subItem.path);
+                                for (const deepItem of subDirContents) {
+                                    if (deepItem.type === 'file') {
+                                        files.push({ path: deepItem.path, type: 'file', sha: deepItem.sha, size: deepItem.size, folder: item.path });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                setRepoFiles(files);
+                return files;
+                
+            } catch (err) {
+                console.error('Error loading repo:', err);
+                if (err.message?.includes('Not Found')) {
+                    await showAlert('gs-active repo not found. Upload an archive first to create it.', 'Repository Not Found');
+                } else {
+                    await showAlert(`Error: ${err.message}`, 'Load Failed');
+                }
+                return [];
+            } finally {
+                setRepoLoading(false);
+            }
+        };
+        
+        // Download gs-active as zip
+        const downloadAsZip = async () => {
+            if (!github) return;
+            
+            setLoading(true);
+            setUploadProgress('Fetching file list from repository...');
+            
+            try {
+                const zip = new JSZip();
+                const gsActive = zip.folder('gs-active');
+                
+                // Always fetch fresh file list
+                const filesToFetch = await loadFromRepo();
+                
+                if (filesToFetch.length === 0) {
+                    await showAlert('No files found in gs-active repository.', 'Empty Repository');
+                    setLoading(false);
+                    return;
+                }
+                
+                let fetched = 0;
+                
+                for (const file of filesToFetch) {
+                    setUploadProgress(`Downloading ${file.path} (${++fetched}/${filesToFetch.length})...`);
+                    
+                    try {
+                        const fileData = await github.getFile(GS_ACTIVE_REPO, file.path);
+                        if (fileData) {
+                            // Determine if binary or text
+                            const isBinary = file.path.match(/\.(png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot|svg)$/i);
+                            
+                            // Check if content is available (GitHub Contents API has 1MB limit)
+                            // For files >1MB, content will be empty but download_url is provided
+                            if (!fileData.content && fileData.download_url) {
+                                console.log(`Large file detected (>1MB): ${file.path}, using download_url`);
+                                const response = await fetch(fileData.download_url);
+                                if (isBinary) {
+                                    const blob = await response.blob();
+                                    gsActive.file(file.path, blob);
+                                } else {
+                                    const text = await response.text();
+                                    gsActive.file(file.path, text);
+                                }
+                            } else if (fileData.content) {
+                                if (isBinary) {
+                                    // Binary files - content is already base64
+                                    gsActive.file(file.path, fileData.content.replace(/[\r\n\s]/g, ''), { base64: true });
+                                } else {
+                                    // Text files - decode from base64
+                                    const content = decodeURIComponent(escape(atob(fileData.content.replace(/[\r\n\s]/g, ''))));
+                                    gsActive.file(file.path, content);
+                                }
+                            } else {
+                                console.warn(`No content or download_url for ${file.path}`);
+                            }
+                        }
+                    } catch (e) {
+                        console.error(`Error fetching ${file.path}:`, e);
+                    }
+                }
+                
+                setUploadProgress('Creating zip file...');
+                
+                const blob = await zip.generateAsync({ type: 'blob' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `gs-active-${new Date().toISOString().split('T')[0]}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                setUploadProgress('');
+                await showAlert(`Downloaded ${filesToFetch.length} files!`, '✅ Download Complete');
+                
+            } catch (err) {
+                console.error('Error downloading:', err);
+                await showAlert(`Error: ${err.message}`, 'Download Failed');
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        // Generate Claude briefing
+        const generateBriefing = async () => {
+            setLoading(true);
+            setUploadProgress('Generating briefing...');
+            
+            try {
+                const deployedVersions = await getDeployedVersions();
+                const today = new Date().toISOString().split('T')[0];
+                const dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+                
+                let briefing = `# Claude Session Briefing - ${dayOfWeek}, ${today}\n\n`;
+                briefing += `Generated by Command Center v${document.querySelector('meta[name="version"]')?.content || '?'}\n\n`;
+                briefing += `---\n\n`;
+                
+                // Deployed Versions
+                briefing += `## 📊 Deployed Versions\n\n`;
+                briefing += `| App | TEST | PROD | Status |\n`;
+                briefing += `|-----|------|------|--------|\n`;
+                
+                let hasVersions = false;
+                for (const [appId, app] of Object.entries(apps)) {
+                    if (!app.testRepo && !app.prodRepo) continue;
+                    hasVersions = true;
+                    const v = deployedVersions[appId] || {};
+                    const status = v.test === v.prod ? '✓ Synced' : (v.test && v.prod ? '⚠️ Differ' : '—');
+                    briefing += `| ${app.name} | ${v.test || '—'} | ${v.prod || '—'} | ${status} |\n`;
+                }
+                
+                if (!hasVersions) {
+                    briefing += `| (No configured apps) | — | — | — |\n`;
+                }
+                
+                briefing += `\n`;
+                
+                // Open Issues
+                const openIssues = globalIssues?.filter(i => i.status === 'open' || i.status === 'in-progress') || [];
+                briefing += `## 🐛 Open Issues (${openIssues.length})\n\n`;
+                if (openIssues.length > 0) {
+                    for (const issue of openIssues.slice(0, 10)) {
+                        const priorityIcon = issue.priority === 'high' ? '🔴' : issue.priority === 'low' ? '🟢' : '🟡';
+                        briefing += `- ${priorityIcon} **${issue.id}**: ${issue.title} (${issue.app || 'General'})\n`;
+                    }
+                    if (openIssues.length > 10) {
+                        briefing += `- _...and ${openIssues.length - 10} more_\n`;
+                    }
+                } else {
+                    briefing += `_No open issues - great job!_\n`;
+                }
+                briefing += `\n`;
+                
+                // Recent Deployments
+                const recentDeploys = deployments?.filter(d => d.status === 'success').slice(0, 5) || [];
+                briefing += `## 🚀 Recent Deployments\n\n`;
+                if (recentDeploys.length > 0) {
+                    for (const d of recentDeploys) {
+                        const time = d.startedAt ? new Date(d.startedAt).toLocaleString() : 'Unknown';
+                        const targetIcon = d.target === 'prod' ? '🟢' : '🔵';
+                        briefing += `- ${targetIcon} **${d.appName}** v${d.version || '?'} → ${d.target?.toUpperCase() || '?'} (${time})\n`;
+                    }
+                } else {
+                    briefing += `_No recent deployments_\n`;
+                }
+                briefing += `\n`;
+                
+                // Session Notes (if any)
+                if (sessionLog?.notes && sessionLog.notes.trim()) {
+                    briefing += `## 📝 Session Notes\n\n`;
+                    briefing += sessionLog.notes + `\n\n`;
+                }
+                
+                // Current Session Log
+                if (sessionLog?.currentSession) {
+                    briefing += `## 🎯 Current Session\n\n`;
+                    briefing += `**Goal:** ${sessionLog.currentSession.goal || 'Not specified'}\n\n`;
+                    if (sessionLog.currentSession.completed?.length > 0) {
+                        briefing += `**Completed:**\n`;
+                        for (const item of sessionLog.currentSession.completed) {
+                            briefing += `- ✅ ${item}\n`;
+                        }
+                        briefing += `\n`;
+                    }
+                    if (sessionLog.currentSession.pending?.length > 0) {
+                        briefing += `**Pending:**\n`;
+                        for (const item of sessionLog.currentSession.pending) {
+                            briefing += `- ⏳ ${item}\n`;
+                        }
+                        briefing += `\n`;
+                    }
+                }
+                
+                // Include archive info if we have it
+                if (archiveContext) {
+                    briefing += `## 📦 Archive CONTEXT.md (Summary)\n\n`;
+                    // Extract just the first section or key info
+                    const contextLines = archiveContext.split('\n').slice(0, 30);
+                    briefing += contextLines.join('\n') + '\n\n';
+                    if (archiveContext.split('\n').length > 30) {
+                        briefing += `_[Truncated - see full CONTEXT.md in gs-active]_\n\n`;
+                    }
+                }
+                
+                // GitHub URLs
+                briefing += `## 🔗 Quick Links\n\n`;
+                briefing += `| App | TEST | PROD |\n`;
+                briefing += `|-----|------|------|\n`;
+                
+                for (const [appId, app] of Object.entries(apps)) {
+                    if (!app.testRepo && !app.prodRepo) continue;
+                    const testUrl = app.testRepo ? `[Link](https://${app.testRepo.split('/')[0]}.github.io/${app.testRepo.split('/')[1]}/)` : '—';
+                    const prodUrl = app.prodRepo ? `[Link](https://${app.prodRepo.split('/')[0]}.github.io/${app.prodRepo.split('/')[1]}/)` : '—';
+                    briefing += `| ${app.name} | ${testUrl} | ${prodUrl} |\n`;
+                }
+                
+                briefing += `\n---\n\n`;
+                briefing += `## 🚀 Getting Started\n\n`;
+                briefing += `1. Download **gs-active.zip** from the Archive → Download tab\n`;
+                briefing += `2. Upload the zip to Claude\n`;
+                briefing += `3. Say: "Please review skills and the gs-active file"\n\n`;
+                briefing += `_Or paste this briefing for a quick overview without the full archive._\n`;
+                
+                setBriefingText(briefing);
+                setUploadProgress('');
+                
+            } catch (err) {
+                console.error('Error generating briefing:', err);
+                await showAlert(`Error: ${err.message}`, 'Briefing Failed');
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        // Copy briefing to clipboard
+        const copyBriefing = async () => {
+            try {
+                await navigator.clipboard.writeText(briefingText);
+                await showAlert('Briefing copied to clipboard!', '✅ Copied');
+            } catch (err) {
+                await showAlert('Failed to copy to clipboard', 'Error');
+            }
+        };
+        
+        // Status badge component
+        const StatusBadge = ({ status }) => {
+            const styles = {
+                'match': 'bg-green-600 text-green-100',
+                'match-test': 'bg-blue-600 text-blue-100',
+                'mismatch': 'bg-red-600 text-red-100',
+                'newer': 'bg-amber-600 text-amber-100',
+                'missing': 'bg-red-800 text-red-200',
+                'warning': 'bg-amber-600 text-amber-100',
+                'no-deploy': 'bg-slate-600 text-slate-300',
+                'unknown': 'bg-slate-600 text-slate-300'
+            };
+            
+            const labels = {
+                'match': '✓ PROD Match',
+                'match-test': '✓ TEST Match',
+                'mismatch': '✗ Mismatch',
+                'newer': '↑ Newer',
+                'missing': '✗ Missing',
+                'warning': '⚠ Warning',
+                'no-deploy': '— Not Deployed',
+                'unknown': '? Unknown'
+            };
+            
+            return (
+                <span className={`px-2 py-0.5 rounded text-xs font-medium ${styles[status] || styles.unknown}`}>
+                    {labels[status] || status}
+                </span>
+            );
+        };
+        
+        return (
+            <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-xl font-bold flex items-center gap-2">
+                        📦 Archive Manager
+                    </h2>
+                    <div className="text-sm text-slate-400">
+                        gs-active repo: <span className="text-indigo-400">{GS_ACTIVE_REPO}</span>
+                    </div>
+                </div>
+                
+                {/* Tab Navigation */}
+                <div className="flex gap-2 border-b border-slate-700 pb-2">
+                    {[
+                        { id: 'upload', label: '⬆️ Upload Archive', icon: 'Upload' },
+                        { id: 'download', label: '⬇️ Download Archive', icon: 'Download' },
+                        { id: 'briefing', label: '📋 Claude Briefing', icon: 'File' }
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                            className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                                activeTab === tab.id 
+                                    ? 'bg-slate-700 text-white' 
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                            }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+                
+                {/* Loading indicator */}
+                {loading && (
+                    <div className="p-4 bg-indigo-900/30 border border-indigo-700 rounded-lg flex items-center gap-3">
+                        <div className="animate-spin w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full"></div>
+                        <span>{uploadProgress || 'Processing...'}</span>
+                    </div>
+                )}
+                
+                {/* Upload Tab */}
+                {activeTab === 'upload' && (
+                    <div className="space-y-6">
+                        {/* Upload Zone */}
+                        <div className="border-2 border-dashed border-slate-600 rounded-lg p-8 text-center hover:border-indigo-500 transition-colors">
+                            <input
+                                type="file"
+                                accept=".zip"
+                                onChange={handleZipUpload}
+                                className="hidden"
+                                id="archive-upload"
+                            />
+                            <label htmlFor="archive-upload" className="cursor-pointer">
+                                <Icons.Upload />
+                                <div className="mt-2 text-lg">Drop gs-active.zip here or click to upload</div>
+                                <div className="text-sm text-slate-400 mt-1">End of session: Upload to validate and push to GitHub</div>
+                            </label>
+                        </div>
+                        
+                        {/* Validation Results */}
+                        {validationResults && (
+                            <div className="bg-slate-800 rounded-lg p-4">
+                                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                    <Icons.Check /> Version Validation
+                                </h3>
+                                
+                                <div className="space-y-2">
+                                    {validationResults.map((v, i) => (
+                                        <div key={i} className="flex items-center justify-between p-3 bg-slate-900 rounded">
+                                            <div className="flex items-center gap-3">
+                                                <AppIcon icon={apps[v.appId]?.icon} size={20} />
+                                                <span className="font-medium">{v.appName}</span>
+                                                {v.archiveVersion && (
+                                                    <span className="text-sm text-slate-400">v{v.archiveVersion}</span>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-sm text-slate-400">{v.message}</span>
+                                                <StatusBadge status={v.status} />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                {/* Summary */}
+                                <div className="mt-4 pt-4 border-t border-slate-700 flex justify-between items-center">
+                                    <div className="text-sm text-slate-400">
+                                        {archiveFiles.length} files in archive • 
+                                        {validationResults.filter(v => v.status === 'match' || v.status === 'match-test').length} matching • 
+                                        {validationResults.filter(v => v.status === 'mismatch' || v.status === 'missing').length} issues
+                                    </div>
+                                    
+                                    <button
+                                        onClick={pushToRepo}
+                                        disabled={loading || !github}
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 rounded font-medium flex items-center gap-2"
+                                    >
+                                        <Icons.Rocket /> Push to gs-active
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Archive Contents */}
+                        {archiveFiles.length > 0 && (
+                            <div className="bg-slate-800 rounded-lg p-4">
+                                <h3 className="text-lg font-semibold mb-4">Archive Contents ({archiveFiles.length} files)</h3>
+                                
+                                <div className="max-h-64 overflow-y-auto space-y-1 text-sm font-mono">
+                                    {archiveFiles.map((f, i) => (
+                                        <div key={i} className="flex items-center gap-2 py-1 px-2 hover:bg-slate-700 rounded">
+                                            {f.isBinary && <span className="text-purple-400">🖼️</span>}
+                                            {!f.isBinary && f.isHtml && <span className="text-orange-400">📄</span>}
+                                            {!f.isBinary && f.isJs && <span className="text-yellow-400">📜</span>}
+                                            {!f.isBinary && f.isJson && <span className="text-green-400">📋</span>}
+                                            {!f.isBinary && f.isMarkdown && <span className="text-blue-400">📝</span>}
+                                            {!f.isBinary && !f.isHtml && !f.isJs && !f.isJson && !f.isMarkdown && <span>📁</span>}
+                                            <span className="text-slate-300">{f.path}</span>
+                                            {f.isBinary && <span className="text-purple-400 text-xs">(binary)</span>}
+                                            {f.version && <span className="text-indigo-400 ml-auto">v{f.version}</span>}
+                                            <span className="text-slate-500 text-xs">{(f.size / 1024).toFixed(1)}KB</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* CONTEXT.md Preview */}
+                        {archiveContext && (
+                            <div className="bg-slate-800 rounded-lg p-4">
+                                <h3 className="text-lg font-semibold mb-2">📄 CONTEXT.md</h3>
+                                <pre className="text-sm text-slate-300 whitespace-pre-wrap max-h-48 overflow-y-auto bg-slate-900 p-3 rounded">
+                                    {archiveContext.substring(0, 2000)}
+                                    {archiveContext.length > 2000 && '...\n(truncated)'}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* Download Tab */}
+                {activeTab === 'download' && (
+                    <div className="space-y-6">
+                        <div className="bg-slate-800 rounded-lg p-6">
+                            <h3 className="text-lg font-semibold mb-4">Download gs-active from GitHub</h3>
+                            <p className="text-slate-400 mb-4">
+                                Start of session: Download the latest archive to provide to Claude.
+                            </p>
+                            
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={loadFromRepo}
+                                    disabled={repoLoading || !github}
+                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 rounded flex items-center gap-2"
+                                >
+                                    <Icons.Refresh /> Refresh File List
+                                </button>
+                                
+                                <button
+                                    onClick={downloadAsZip}
+                                    disabled={loading || !github}
+                                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 rounded font-medium flex items-center gap-2"
+                                >
+                                    <Icons.Download /> Download gs-active.zip
+                                </button>
+                            </div>
+                        </div>
+                        
+                        {/* Repo file list */}
+                        {repoFiles && (
+                            <div className="bg-slate-800 rounded-lg p-4">
+                                <h3 className="text-lg font-semibold mb-4">Files in gs-active repo ({repoFiles.length})</h3>
+                                
+                                <div className="max-h-64 overflow-y-auto space-y-1 text-sm font-mono">
+                                    {repoFiles.map((f, i) => (
+                                        <div key={i} className="flex items-center gap-2 py-1 px-2 hover:bg-slate-700 rounded">
+                                            <Icons.File />
+                                            <span className="text-slate-300">{f.path}</span>
+                                            <span className="text-slate-500 text-xs ml-auto">{(f.size / 1024).toFixed(1)}KB</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {repoFiles === null && !repoLoading && (
+                            <div className="text-center text-slate-400 py-8">
+                                Click "Refresh File List" to see available files
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* Briefing Tab */}
+                {activeTab === 'briefing' && (
+                    <div className="space-y-6">
+                        <div className="bg-slate-800 rounded-lg p-6">
+                            <h3 className="text-lg font-semibold mb-4">Generate Claude Briefing</h3>
+                            <p className="text-slate-400 mb-4">
+                                Create a markdown summary of current project state for quick Claude onboarding.
+                            </p>
+                            
+                            <button
+                                onClick={generateBriefing}
+                                disabled={loading || !github}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 rounded font-medium flex items-center gap-2"
+                            >
+                                <Icons.Zap /> Generate Briefing
+                            </button>
+                        </div>
+                        
+                        {briefingText && (
+                            <div className="bg-slate-800 rounded-lg p-4">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-lg font-semibold">📋 Session Briefing</h3>
+                                    <button
+                                        onClick={copyBriefing}
+                                        className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-sm flex items-center gap-1"
+                                    >
+                                        <Icons.Copy /> Copy
+                                    </button>
+                                </div>
+                                
+                                <pre className="text-sm text-slate-300 whitespace-pre-wrap max-h-96 overflow-y-auto bg-slate-900 p-4 rounded font-mono">
+                                    {briefingText}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* Help Text */}
+                <div className="bg-slate-800/50 rounded-lg p-4 text-sm text-slate-400">
+                    <h4 className="font-medium text-slate-300 mb-2">📖 Workflow</h4>
+                    <ul className="space-y-1 list-disc list-inside">
+                        <li><strong>End of Session:</strong> Upload gs-active.zip → Validate versions → Push to GitHub</li>
+                        <li><strong>Start of Session:</strong> Download gs-active.zip → Upload to Claude → Or copy briefing for quick start</li>
+                        <li>The gs-active repo serves as the single source of truth between Claude sessions</li>
+                    </ul>
+                </div>
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // SETTINGS VIEW
+    // =========================================================================
+    
+    // =========================================================================
+    // PROJECTS TAB (v8.8.0) — Replaces Apps tab in Configure
+    // =========================================================================
+
+    // =========================================================================
+    // QUALITY APP — Main Component
+    // =========================================================================
+
+    function QualityApp() {
+        const [activeTab, setActiveTab] = React.useState('issues');
+        const [dialog, setDialog] = React.useState(null);
+        
+        // GitHub API (from shared secrets)
+        const githubToken = CC.getGitHubToken();
+        const github = React.useMemo(() => githubToken ? new GitHubAPI(githubToken) : null, [githubToken]);
+        
+        // Firebase auth state
+        const [firebaseUser, setFirebaseUser] = React.useState(null);
+        const [firebaseUid, setFirebaseUid] = React.useState(CC.getFirebaseUid());
+        
+        React.useEffect(() => {
+            if (!firebaseAuth) return;
+            const unsub = firebaseAuth.onAuthStateChanged(u => {
+                setFirebaseUser(u);
+                if (u) setFirebaseUid(u.uid);
+            });
+            return () => unsub();
+        }, []);
+        
+        // Config from CC Core
+        const config = React.useMemo(() => CC.getConfig(), []);
+        const apps = React.useMemo(() => {
+            if (!config.apps) return {};
+            const result = {};
+            Object.entries(config.apps).forEach(([id, app]) => {
+                result[id] = { ...app, id };
+            });
+            return result;
+        }, [config]);
+        
+        // Deployments from localStorage
+        const [deployments, setDeployments] = React.useState(() => DeployService.load());
+        
+        // Firebase live data
+        const [globalIssues, setGlobalIssues] = React.useState([]);
+        const [globalWorkItems, setGlobalWorkItems] = React.useState([]);
+        const [globalSessions, setGlobalSessions] = React.useState([]);
+        
+        React.useEffect(() => {
+            if (!firebaseAuth) return;
+            const unsub = firebaseAuth.onAuthStateChanged(u => {
+                if (!u || !firebaseDb) return;
+                
+                // Listen for issues
+                const issueRef = firebaseDb.ref(`command-center/${u.uid}/issues`);
+                issueRef.on('value', snap => {
+                    const data = snap.val();
+                    setGlobalIssues(data ? Object.values(data) : []);
+                });
+                
+                // Listen for work items
+                const wiRef = firebaseDb.ref(`command-center/${u.uid}/backlog`);
+                wiRef.on('value', snap => {
+                    const data = snap.val();
+                    setGlobalWorkItems(data ? Object.values(data) : []);
+                });
+                
+                // Listen for sessions
+                const sessRef = firebaseDb.ref(`command-center/${u.uid}/sessions`);
+                sessRef.on('value', snap => {
+                    const data = snap.val();
+                    setGlobalSessions(data ? Object.values(data) : []);
+                });
+                
+                return () => {
+                    issueRef.off();
+                    wiRef.off();
+                    sessRef.off();
+                };
+            });
+            return () => unsub();
+        }, []);
+        
+        // Session log from localStorage (for ArchiveView briefing)
+        const sessionLog = React.useMemo(() => {
+            try {
+                const s = localStorage.getItem('cc_session_log');
+                return s ? JSON.parse(s) : {};
+            } catch { return {}; }
+        }, []);
+        
+        // Alert/Confirm/Prompt — Promise-based (matching CC Core pattern)
+        const showAlert = (message, title) => {
+            return new Promise((resolve) => {
+                setDialog({ type: 'alert', title, message, onConfirm: () => resolve(true) });
+            });
+        };
+        
+        const showConfirm = (message, title) => {
+            return new Promise((resolve) => {
+                setDialog({ type: 'confirm', title, message, onConfirm: () => resolve(true), onCancel: () => resolve(false) });
+            });
+        };
+        
+        const showPrompt = (message, defaultValue, title) => {
+            return new Promise((resolve) => {
+                setDialog({ type: 'prompt', title, message, defaultValue, onConfirm: (value) => resolve(value), onCancel: () => resolve(null) });
+            });
+        };
+        
+        // setView stub — links to CC Core for cross-app navigation
+        const setView = (view) => {
+            const coreUrl = CC.getCoreUrl();
+            window.open(coreUrl + '#' + view, '_blank');
+        };
+        
+        // Missing credentials check
+        if (!CC.hasCredentials()) {
+            return (
+                <div>
+                    <SatelliteHeader name="Quality" icon="✅" version="1.0.0" />
+                    <MissingCredentials satelliteName="Quality" />
+                </div>
+            );
+        }
+        
+        const tabs = [
+            { id: 'issues', icon: '🐛', label: 'Issues' },
+            { id: 'releases', icon: '🚀', label: 'Releases' },
+            { id: 'archive', icon: '📦', label: 'Archive' },
+        ];
+        
+        return (
+            <div>
+                <SatelliteHeader name="Quality" icon="✅" version="1.0.0" />
+                
+                {/* Tab Navigation */}
+                <div className="bg-slate-800 border-b border-slate-700">
+                    <div className="max-w-6xl mx-auto px-4">
+                        <div className="flex gap-1 py-1">
+                            {tabs.map(tab => (
+                                <button key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`px-4 py-2 text-sm rounded-t-lg flex items-center gap-1.5 transition-colors ${
+                                        activeTab === tab.id 
+                                            ? 'bg-slate-900 text-white border-t-2 border-indigo-500' 
+                                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <span>{tab.icon}</span> {tab.label}
+                                </button>
+                            ))}
+                            
+                            {/* Status indicators */}
+                            <div className="ml-auto flex items-center gap-3 text-xs pr-2">
+                                <span className={`flex items-center gap-1 ${github ? 'text-green-400' : 'text-red-400'}`}>
+                                    <span className={`w-2 h-2 rounded-full ${github ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                                    GitHub
+                                </span>
+                                <span className={`flex items-center gap-1 ${firebaseDb ? 'text-green-400' : 'text-amber-400'}`}>
+                                    <span className={`w-2 h-2 rounded-full ${firebaseDb ? 'bg-green-400' : 'bg-amber-400'}`}></span>
+                                    Firebase
+                                </span>
+                                {firebaseAuth && (
+                                    firebaseUser ? (
+                                        <button onClick={async () => { try { await firebaseAuth.signOut(); } catch {} }}
+                                            className="flex items-center gap-1 text-green-400 hover:text-green-300"
+                                            title={`Signed in as ${firebaseUser.email}`}>
+                                            <img src={firebaseUser.photoURL || ''} className="w-5 h-5 rounded-full" 
+                                                onError={(e) => { e.target.style.display = 'none'; }} />
+                                            <span className="max-w-[100px] truncate">{firebaseUser.displayName?.split(' ')[0] || firebaseUser.email?.split('@')[0]}</span>
+                                        </button>
+                                    ) : (
+                                        <button onClick={async () => {
+                                                if (isFileProtocol) return;
+                                                try { await firebaseAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); } catch (e) { console.error(e); }
+                                            }}
+                                            disabled={isFileProtocol}
+                                            className={`flex items-center gap-1 ${isFileProtocol ? 'text-slate-600' : 'text-slate-400 hover:text-white'}`}>
+                                            Sign In
+                                        </button>
+                                    )
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {/* Main Content */}
+                <main className="max-w-6xl mx-auto px-4 py-6">
+                    {activeTab === 'issues' && (
+                        <IssuesView 
+                            apps={apps} 
+                            deployments={deployments} 
+                            showAlert={showAlert} 
+                            showConfirm={showConfirm} 
+                            showPrompt={showPrompt} 
+                            setView={setView}
+                            globalWorkItems={globalWorkItems}
+                        />
+                    )}
+                    {activeTab === 'releases' && (
+                        <ReleaseCoordinationView 
+                            apps={apps} 
+                            config={config} 
+                            globalWorkItems={globalWorkItems} 
+                            globalSessions={globalSessions} 
+                            deployments={deployments} 
+                            showAlert={showAlert} 
+                            showConfirm={showConfirm} 
+                            showPrompt={showPrompt} 
+                            setView={setView}
+                        />
+                    )}
+                    {activeTab === 'archive' && (
+                        <ArchiveView 
+                            apps={apps} 
+                            config={config} 
+                            github={github} 
+                            showAlert={showAlert} 
+                            showConfirm={showConfirm} 
+                            showPrompt={showPrompt} 
+                            globalIssues={globalIssues} 
+                            sessionLog={sessionLog} 
+                            deployments={deployments}
+                        />
+                    )}
+                </main>
+                
+                {/* Dialog System (Promise-based) */}
+                {dialog && (
+                    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] p-4" 
+                         onClick={() => { if (dialog.type === 'alert') { dialog.onConfirm(); setDialog(null); } }}>
+                        <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+                            {dialog.title && <h3 className="text-lg font-bold mb-2">{dialog.title}</h3>}
+                            <p className="text-slate-300 whitespace-pre-wrap text-sm">{dialog.message}</p>
+                            
+                            {dialog.type === 'prompt' && (
+                                <input id="dialogPromptInput" defaultValue={dialog.defaultValue || ''} 
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm mt-3" autoFocus />
+                            )}
+                            
+                            <div className="mt-4 flex justify-end gap-2">
+                                {dialog.type === 'alert' && (
+                                    <button onClick={() => { dialog.onConfirm(); setDialog(null); }} 
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-medium">OK</button>
+                                )}
+                                {dialog.type === 'confirm' && (<>
+                                    <button onClick={() => { dialog.onCancel(); setDialog(null); }} 
+                                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm">Cancel</button>
+                                    <button onClick={() => { dialog.onConfirm(); setDialog(null); }} 
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-medium">Confirm</button>
+                                </>)}
+                                {dialog.type === 'prompt' && (<>
+                                    <button onClick={() => { dialog.onCancel(); setDialog(null); }} 
+                                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm">Cancel</button>
+                                    <button onClick={() => { dialog.onConfirm(document.getElementById('dialogPromptInput').value); setDialog(null); }} 
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-medium">OK</button>
+                                </>)}
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // =========================================================================
+    // MOUNT
+    // =========================================================================
+    
+    ReactDOM.render(<QualityApp />, document.getElementById('root'));
+    
+    </script>
+</body>
+</html>
