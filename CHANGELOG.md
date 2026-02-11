@@ -1,5 +1,20 @@
 # Command Center — Changelog
 
+## [8.45.0] — 2026-02-10
+
+### Added
+- **ProductBriefGenerator** — Auto-generates PRODUCT_BRIEF.md from scope data, work items, deploys, streams, and lifecycle metadata. PM-language product description for cross-stream context sharing.
+- **PRODUCT_BRIEF.md in Claude Prep packages** — Auto-generated and included in every session package. Design/Research sessions always include it; other session types prefer-include it.
+- **ProductBriefModal** — Lightweight viewer (📄 button on app rows in Projects view) with rendered markdown and copy-to-clipboard
+- **Product decisions formatting** — Scoping category answers translated to human-readable decisions (e.g. dataPersistence: firebase → "Saves to cloud, syncs across devices")
+- **Feature inventory by status** — Shipped, In Progress, Planned, Ideas sections from work items with fallback to scope v1Features
+- **Token estimation** — PRODUCT_BRIEF.md added to Environment Optimization doc listing (~3,000 tokens)
+
+### Changed
+- All 8 SESSION_TYPES context strategies updated to include PRODUCT_BRIEF.md (alwaysInclude for design/research, preferInclude for others)
+- classifyFileAction treats PRODUCT_BRIEF.md as 'skip' (auto-generated, not pushed to repo)
+- alreadyFetched set includes PRODUCT_BRIEF.md to avoid duplicate scanning
+
 ## [8.44.0] — 2026-02-10
 
 ### Added
