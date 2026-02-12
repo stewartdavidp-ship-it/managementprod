@@ -4765,9 +4765,411 @@
     }
 
     // =========================================================================
+    // ODRC CONCEPT SYSTEM (Ideation Platform v1)
+    // =========================================================================
+
+    // Valid ODRC types
+    const ODRC_TYPES = ['OPEN', 'DECISION', 'RULE', 'CONSTRAINT'];
+
+    // Valid concept statuses
+    const CONCEPT_STATUSES = ['active', 'superseded', 'resolved', 'transitioned'];
+
+    // State machine: maps current type to array of valid target types
+    const ODRC_TRANSITIONS = {
+        'OPEN':       ['DECISION', 'RULE', 'CONSTRAINT'],
+        'DECISION':   ['RULE'],
+        'CONSTRAINT': ['DECISION', 'RULE'],
+        'RULE':       ['OPEN']
+    };
+
+    // Validate a type transition is allowed
+    function isValidODRCTransition(fromType, toType) {
+        if (!ODRC_TRANSITIONS[fromType]) return false;
+        return ODRC_TRANSITIONS[fromType].includes(toType);
+    }
+
+    // ODRC Concept Manager — Firebase CRUD + state machine
+    const ConceptManager = {
+        // Get Firebase ref for concepts under a user
+        _ref(uid) {
+            return firebaseDb.ref(`command-center/${uid}/concepts`);
+        },
+
+        // Create a new concept
+        async create(uid, { type, content, ideaOrigin, scopeTags = [] }) {
+            if (!ODRC_TYPES.includes(type)) {
+                throw new Error(`Invalid concept type: ${type}. Must be one of: ${ODRC_TYPES.join(', ')}`);
+            }
+            const ref = this._ref(uid).push();
+            const now = new Date().toISOString();
+            const concept = {
+                id: ref.key,
+                type,
+                content,
+                ideaOrigin,
+                status: 'active',
+                resolvedBy: null,
+                transitionedFrom: null,
+                scopeTags,
+                createdAt: now,
+                updatedAt: now
+            };
+            await ref.set(concept);
+            return concept;
+        },
+
+        // Read all concepts for a user
+        async getAll(uid) {
+            const snapshot = await this._ref(uid).once('value');
+            const data = snapshot.val();
+            if (!data) return [];
+            return Object.values(data);
+        },
+
+        // Read concepts filtered by ideaOrigin
+        async getByIdea(uid, ideaId) {
+            const all = await this.getAll(uid);
+            return all.filter(c => c.ideaOrigin === ideaId);
+        },
+
+        // Read all active concepts for an app (across all its ideas)
+        async getActiveForApp(uid, ideaIds) {
+            const all = await this.getAll(uid);
+            return all.filter(c => ideaIds.includes(c.ideaOrigin) && c.status === 'active');
+        },
+
+        // Update a concept's content, scopeTags, or other editable fields
+        async update(uid, conceptId, updates) {
+            const allowed = ['content', 'scopeTags'];
+            const filtered = {};
+            for (const key of allowed) {
+                if (updates[key] !== undefined) filtered[key] = updates[key];
+            }
+            filtered.updatedAt = new Date().toISOString();
+            await this._ref(uid).child(conceptId).update(filtered);
+            return filtered;
+        },
+
+        // Transition a concept to a new type (follows state machine)
+        // Creates a new concept of the target type and marks the original as transitioned
+        async transition(uid, conceptId, newType) {
+            if (!ODRC_TYPES.includes(newType)) {
+                throw new Error(`Invalid target type: ${newType}`);
+            }
+
+            // Fetch current concept
+            const snapshot = await this._ref(uid).child(conceptId).once('value');
+            const concept = snapshot.val();
+            if (!concept) throw new Error(`Concept not found: ${conceptId}`);
+            if (concept.status !== 'active') throw new Error(`Cannot transition non-active concept (status: ${concept.status})`);
+
+            if (!isValidODRCTransition(concept.type, newType)) {
+                throw new Error(`Invalid transition: ${concept.type} → ${newType}. Allowed: ${ODRC_TRANSITIONS[concept.type].join(', ')}`);
+            }
+
+            const now = new Date().toISOString();
+
+            // Create the new concept (inherits content, scopeTags, ideaOrigin)
+            const newRef = this._ref(uid).push();
+            const newConcept = {
+                id: newRef.key,
+                type: newType,
+                content: concept.content,
+                ideaOrigin: concept.ideaOrigin,
+                status: 'active',
+                resolvedBy: null,
+                transitionedFrom: conceptId,
+                scopeTags: concept.scopeTags || [],
+                createdAt: now,
+                updatedAt: now
+            };
+
+            // Mark old concept as transitioned
+            const oldUpdate = {
+                status: 'transitioned',
+                resolvedBy: newRef.key,
+                updatedAt: now
+            };
+
+            // If a CONSTRAINT transitions, flag related concepts for review
+            let flaggedConcepts = [];
+            if (concept.type === 'CONSTRAINT' && concept.scopeTags && concept.scopeTags.length > 0) {
+                flaggedConcepts = await this._flagRelatedConcepts(uid, concept.scopeTags, conceptId);
+            }
+
+            // Write both atomically via multi-path update
+            const updates = {};
+            updates[`${conceptId}/status`] = oldUpdate.status;
+            updates[`${conceptId}/resolvedBy`] = oldUpdate.resolvedBy;
+            updates[`${conceptId}/updatedAt`] = oldUpdate.updatedAt;
+            updates[newRef.key] = newConcept;
+            await this._ref(uid).update(updates);
+
+            return { newConcept, flaggedConcepts };
+        },
+
+        // Flag active DECISIONs and RULEs that share scope tags with a transitioning CONSTRAINT
+        async _flagRelatedConcepts(uid, scopeTags, excludeConceptId) {
+            const all = await this.getAll(uid);
+            const flagged = [];
+            for (const c of all) {
+                if (c.id === excludeConceptId) continue;
+                if (c.status !== 'active') continue;
+                if (c.type !== 'DECISION' && c.type !== 'RULE') continue;
+                const hasOverlap = (c.scopeTags || []).some(tag => scopeTags.includes(tag));
+                if (hasOverlap) {
+                    flagged.push(c);
+                }
+            }
+            return flagged;
+        },
+
+        // Supersede a concept (replace it with a new one, same type)
+        async supersede(uid, conceptId, newContent) {
+            const snapshot = await this._ref(uid).child(conceptId).once('value');
+            const concept = snapshot.val();
+            if (!concept) throw new Error(`Concept not found: ${conceptId}`);
+
+            const now = new Date().toISOString();
+            const newRef = this._ref(uid).push();
+            const newConcept = {
+                id: newRef.key,
+                type: concept.type,
+                content: newContent,
+                ideaOrigin: concept.ideaOrigin,
+                status: 'active',
+                resolvedBy: null,
+                transitionedFrom: conceptId,
+                scopeTags: concept.scopeTags || [],
+                createdAt: now,
+                updatedAt: now
+            };
+
+            const updates = {};
+            updates[`${conceptId}/status`] = 'superseded';
+            updates[`${conceptId}/resolvedBy`] = newRef.key;
+            updates[`${conceptId}/updatedAt`] = now;
+            updates[newRef.key] = newConcept;
+            await this._ref(uid).update(updates);
+
+            return newConcept;
+        },
+
+        // Resolve a concept (typically an OPEN — mark as resolved without transitioning)
+        async resolve(uid, conceptId) {
+            const now = new Date().toISOString();
+            await this._ref(uid).child(conceptId).update({
+                status: 'resolved',
+                updatedAt: now
+            });
+        },
+
+        // Delete a concept
+        async remove(uid, conceptId) {
+            await this._ref(uid).child(conceptId).remove();
+        },
+
+        // Listen for real-time changes to all concepts
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            const handler = (snapshot) => {
+                const data = snapshot.val();
+                callback(data ? Object.values(data) : []);
+            };
+            ref.on('value', handler);
+            return () => ref.off('value', handler);
+        }
+    };
+
+    // =========================================================================
+    // IDEA MANAGEMENT SYSTEM (Ideation Platform v1)
+    // =========================================================================
+
+    // Valid idea statuses
+    const IDEA_STATUSES = ['active', 'graduated', 'archived'];
+
+    // Valid idea types
+    const IDEA_TYPES = ['base', 'addon'];
+
+    // Idea Manager — Firebase CRUD + App relationship
+    const IdeaManager = {
+        // Get Firebase ref for ideas under a user
+        _ref(uid) {
+            return firebaseDb.ref(`command-center/${uid}/ideas`);
+        },
+
+        // Create a new idea
+        async create(uid, { name, description, type = 'base', appId = null, parentIdeaId = null }) {
+            if (!IDEA_TYPES.includes(type)) {
+                throw new Error(`Invalid idea type: ${type}. Must be one of: ${IDEA_TYPES.join(', ')}`);
+            }
+
+            // Calculate sequence number
+            let sequence = 1;
+            if (appId) {
+                const appIdeas = await this.getByApp(uid, appId);
+                sequence = appIdeas.length > 0 ? Math.max(...appIdeas.map(i => i.sequence || 0)) + 1 : 1;
+            }
+
+            const ref = this._ref(uid).push();
+            const now = new Date().toISOString();
+            const idea = {
+                id: ref.key,
+                name,
+                description,
+                type,
+                appId,
+                parentIdeaId,
+                sequence,
+                status: 'active',
+                createdAt: now,
+                updatedAt: now
+            };
+            await ref.set(idea);
+
+            // If linked to an app, update the app's ideas reference
+            if (appId) {
+                await this._addIdeaToApp(uid, appId, ref.key);
+            }
+
+            return idea;
+        },
+
+        // Read all ideas for a user
+        async getAll(uid) {
+            const snapshot = await this._ref(uid).once('value');
+            const data = snapshot.val();
+            if (!data) return [];
+            return Object.values(data);
+        },
+
+        // Read ideas for a specific app, ordered by sequence
+        async getByApp(uid, appId) {
+            const all = await this.getAll(uid);
+            return all
+                .filter(i => i.appId === appId)
+                .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+        },
+
+        // Get the latest active idea for an app
+        async getActiveForApp(uid, appId) {
+            const appIdeas = await this.getByApp(uid, appId);
+            return appIdeas.filter(i => i.status === 'active').pop() || null;
+        },
+
+        // Update editable fields of an idea
+        async update(uid, ideaId, updates) {
+            const allowed = ['name', 'description', 'status'];
+            const filtered = {};
+            for (const key of allowed) {
+                if (updates[key] !== undefined) filtered[key] = updates[key];
+            }
+            filtered.updatedAt = new Date().toISOString();
+            await this._ref(uid).child(ideaId).update(filtered);
+            return filtered;
+        },
+
+        // Graduate an idea — link it to an app and mark as graduated
+        async graduate(uid, ideaId, appId) {
+            const snapshot = await this._ref(uid).child(ideaId).once('value');
+            const idea = snapshot.val();
+            if (!idea) throw new Error(`Idea not found: ${ideaId}`);
+
+            // Calculate sequence for the app
+            const appIdeas = await this.getByApp(uid, appId);
+            const sequence = appIdeas.length > 0 ? Math.max(...appIdeas.map(i => i.sequence || 0)) + 1 : 1;
+
+            // Determine type: first idea for an app is base, rest are addons
+            const type = appIdeas.length === 0 ? 'base' : 'addon';
+            const parentIdeaId = appIdeas.length > 0 ? appIdeas[appIdeas.length - 1].id : null;
+
+            const now = new Date().toISOString();
+            await this._ref(uid).child(ideaId).update({
+                appId,
+                sequence,
+                type,
+                parentIdeaId,
+                status: 'graduated',
+                updatedAt: now
+            });
+
+            // Update app's ideas reference
+            await this._addIdeaToApp(uid, appId, ideaId);
+
+            return { appId, sequence, type, parentIdeaId };
+        },
+
+        // Archive an idea
+        async archive(uid, ideaId) {
+            const now = new Date().toISOString();
+            await this._ref(uid).child(ideaId).update({
+                status: 'archived',
+                updatedAt: now
+            });
+        },
+
+        // Delete an idea (and clean up app reference)
+        async remove(uid, ideaId) {
+            const snapshot = await this._ref(uid).child(ideaId).once('value');
+            const idea = snapshot.val();
+            if (idea && idea.appId) {
+                await this._removeIdeaFromApp(uid, idea.appId, ideaId);
+            }
+            await this._ref(uid).child(ideaId).remove();
+        },
+
+        // Add idea reference to app config in Firebase
+        async _addIdeaToApp(uid, appId, ideaId) {
+            const appIdeasRef = firebaseDb.ref(`command-center/${uid}/appIdeas/${appId}`);
+            const snapshot = await appIdeasRef.once('value');
+            const existing = snapshot.val() || [];
+            if (!existing.includes(ideaId)) {
+                existing.push(ideaId);
+                await appIdeasRef.set(existing);
+            }
+        },
+
+        // Remove idea reference from app config in Firebase
+        async _removeIdeaFromApp(uid, appId, ideaId) {
+            const appIdeasRef = firebaseDb.ref(`command-center/${uid}/appIdeas/${appId}`);
+            const snapshot = await appIdeasRef.once('value');
+            const existing = snapshot.val() || [];
+            const filtered = existing.filter(id => id !== ideaId);
+            await appIdeasRef.set(filtered);
+        },
+
+        // Get idea IDs linked to an app (from the appIdeas index)
+        async getIdeaIdsForApp(uid, appId) {
+            const snapshot = await firebaseDb.ref(`command-center/${uid}/appIdeas/${appId}`).once('value');
+            return snapshot.val() || [];
+        },
+
+        // Listen for real-time changes to all ideas
+        listen(uid, callback) {
+            const ref = this._ref(uid);
+            const handler = (snapshot) => {
+                const data = snapshot.val();
+                callback(data ? Object.values(data) : []);
+            };
+            ref.on('value', handler);
+            return () => ref.off('value', handler);
+        },
+
+        // Listen for real-time changes to app-idea index
+        listenAppIdeas(uid, appId, callback) {
+            const ref = firebaseDb.ref(`command-center/${uid}/appIdeas/${appId}`);
+            const handler = (snapshot) => {
+                callback(snapshot.val() || []);
+            };
+            ref.on('value', handler);
+            return () => ref.off('value', handler);
+        }
+    };
+
+    // =========================================================================
     // MAIN APP
     // =========================================================================
-    
+
     function App() {
         const [view, setView] = React.useState('dashboard');
         // (multi-app zip state managed in DashboardView)
