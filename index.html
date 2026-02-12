@@ -8038,10 +8038,39 @@
                                 // Split files by action type
                                 const deployFiles = files.filter(f => f.fileAction !== 'push-doc');
                                 const docFiles = files.filter(f => f.fileAction === 'push-doc');
-                                
+
                                 // Deploy files to GitHub Pages
+                                // Group by repoKey so _shared files are batched with their app files
+                                const deployBatches = {};
                                 for (const file of deployFiles) {
-                                    await handleDeploy(file, file.suggestedApp || file.appId, file.target || 'test');
+                                    const key = file.repoKey || file.suggestedApp || file.appId || '_default';
+                                    if (!deployBatches[key]) deployBatches[key] = [];
+                                    deployBatches[key].push(file);
+                                }
+                                for (const [, batchFiles] of Object.entries(deployBatches)) {
+                                    const primaryAppId = batchFiles.find(f => f.suggestedApp !== '_shared')?.suggestedApp
+                                        || batchFiles.find(f => f.appId !== '_shared')?.appId;
+                                    if (batchFiles.length > 1 || (!primaryAppId && batchFiles[0]?.suggestedApp === '_shared')) {
+                                        // Batch deploy — includes _shared files alongside app files
+                                        const mapped = batchFiles.map(f => ({
+                                            id: f.id, name: f.name,
+                                            targetPath: f.repoPath || f.targetPath,
+                                            fullRepoPath: !!f.fullRepoPath,
+                                            content: f.content, encoding: f.encoding,
+                                            size: f.size, appId: f.suggestedApp,
+                                            version: f.appVersion || f.version
+                                        }));
+                                        const effectiveAppId = primaryAppId || batchFiles[0]?.suggestedApp;
+                                        if (effectiveAppId && effectiveAppId !== '_shared') {
+                                            await handleBatchDeploy(mapped, effectiveAppId, batchFiles[0].target || 'test');
+                                        } else {
+                                            console.warn('[DeployAll] Skipping batch with no real app — only _shared files with no repoKey');
+                                        }
+                                    } else {
+                                        // Single file deploy
+                                        const file = batchFiles[0];
+                                        await handleDeploy(file, file.suggestedApp || file.appId, file.target || 'test');
+                                    }
                                 }
                                 
                                 // Push doc files to source repo
@@ -9623,7 +9652,20 @@
                                                 if (!repoBatches[f.repoKey]) repoBatches[f.repoKey] = { files: [], repo: f.repo, target: f.deployTarget };
                                                 repoBatches[f.repoKey].files.push(f);
                                             });
-                                            
+
+                                            // Merge _shared-only batches into a batch targeting the same repo
+                                            for (const [rk, batch] of Object.entries(repoBatches)) {
+                                                const hasRealApp = batch.files.some(f => f.suggestedApp !== '_shared');
+                                                if (hasRealApp) continue;
+                                                // Find another batch targeting the same repo to absorb these shared files
+                                                const targetBatch = Object.entries(repoBatches).find(([k, b]) => k !== rk && b.repo === batch.repo && b.files.some(f => f.suggestedApp !== '_shared'));
+                                                if (targetBatch) {
+                                                    console.log(`[SmartDeploy] Merging _shared batch ${rk} into ${targetBatch[0]}`);
+                                                    targetBatch[1].files.push(...batch.files);
+                                                    delete repoBatches[rk];
+                                                }
+                                            }
+
                                             for (const [rk, batch] of Object.entries(repoBatches)) {
                                                 console.log(`[SmartDeploy] Batch: ${rk} → ${batch.repo} (${batch.target}) | ${batch.files.length} files`);
                                                 const batchFiles = batch.files.map(f => ({
