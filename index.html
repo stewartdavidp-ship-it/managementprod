@@ -7856,7 +7856,11 @@
                         const instructionsDismissed = localStorage.getItem('cc_instructions_setup_done');
                         const claudeCodeDismissed = localStorage.getItem('cc_claude_code_setup_done');
 
+                        /* Test mode: shows the wizard with all steps as incomplete so you can walk through the UX */
+                        const [wizardTestMode, setWizardTestMode] = React.useState(false);
+
                         const stepDone = (id) => {
+                            if (wizardTestMode) return false;
                             switch(id) {
                                 case 'auth': return !!firebaseUser;
                                 case 'token': return !!githubToken;
@@ -7869,8 +7873,28 @@
                         };
 
                         const stepIds = ['auth', 'token', 'project', 'mcp', 'instructions', 'claude-code'];
-                        const allDone = stepIds.every(id => stepDone(id));
-                        if (allDone) return null;
+                        const reallyAllDone = stepIds.every(id => {
+                            /* Check actual completion ignoring test mode */
+                            switch(id) {
+                                case 'auth': return !!firebaseUser;
+                                case 'token': return !!githubToken;
+                                case 'project': return !!projectDismissed;
+                                case 'mcp': return !!mcpDismissed;
+                                case 'instructions': return !!instructionsDismissed;
+                                case 'claude-code': return !!claudeCodeDismissed;
+                                default: return false;
+                            }
+                        });
+                        const allDone = !wizardTestMode && reallyAllDone;
+                        /* If truly all done and not in test mode, show a subtle re-entry link */
+                        if (allDone) return (
+                            <div className="mb-4 flex justify-end">
+                                <button onClick={() => { setWizardTestMode(true); setWizardStep(0); }}
+                                    className="text-xs text-slate-600 hover:text-slate-400 transition-colors">
+                                    Preview setup wizard
+                                </button>
+                            </div>
+                        );
 
                         /* Wizard state: 0 = welcome, 1-6 = individual steps */
                         const [wizardStep, setWizardStep] = React.useState(0);
@@ -7965,6 +7989,15 @@
                                             <span className="text-xs text-slate-500">{completedCount}/{stepIds.length} complete</span>
                                         )}
                                     </div>
+                                    {/* Preview as new user link — for testing */}
+                                    {completedCount > 0 && (
+                                        <div className="mt-4 pt-3 border-t border-slate-700/30">
+                                            <button onClick={() => { setWizardTestMode(true); setWizardStep(0); }}
+                                                className="text-xs text-slate-600 hover:text-slate-400 transition-colors">
+                                                Preview as new user (test mode)
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         }
@@ -8015,6 +8048,14 @@
 
                         return (
                             <div className="mb-6 p-5 bg-gradient-to-r from-indigo-900/40 to-purple-900/30 border border-indigo-700/50 rounded-xl">
+                                {/* Test mode banner */}
+                                {wizardTestMode && (
+                                    <div className="flex items-center justify-between mb-4 p-2.5 bg-amber-900/30 border border-amber-700/40 rounded-lg">
+                                        <span className="text-xs text-amber-300">Test mode — viewing as a new user. Actions won't change your actual setup.</span>
+                                        <button onClick={() => { setWizardTestMode(false); setWizardStep(0); }}
+                                            className="px-3 py-1 bg-amber-700/50 hover:bg-amber-700 text-xs text-amber-200 rounded transition-colors">Exit Test Mode</button>
+                                    </div>
+                                )}
                                 {progressDots}
 
                                 {/* ── Step 1: Sign in with Google ── */}
