@@ -7849,22 +7849,15 @@
                         </div>
                     )}
 
-                    {/* Getting Started Checklist — shows on dashboard when setup steps remain */}
+                    {/* Getting Started Wizard — shows on dashboard when setup steps remain */}
                     {view === 'dashboard' && (() => {
                         const mcpDismissed = localStorage.getItem('cc_mcp_setup_done');
                         const projectDismissed = localStorage.getItem('cc_project_setup_done');
                         const instructionsDismissed = localStorage.getItem('cc_instructions_setup_done');
                         const claudeCodeDismissed = localStorage.getItem('cc_claude_code_setup_done');
-                        const steps = [
-                            { id: 'auth', label: 'Sign in with Google', hint: 'Click Sign In to authenticate with your Google account. This connects you to the CC Firebase backend where all your data is stored.' },
-                            { id: 'token', label: 'Add a GitHub personal access token', hint: 'CC uses GitHub to deploy your apps. Click the link below to create a token with the right permissions, then paste it here.' },
-                            { id: 'project', label: 'Create a Project in Claude.ai', hint: 'Go to claude.ai. On the left sidebar, click "Projects", then "+ Create Project". Name it "Command Center" (or whatever you like). This project is where all your CC conversations will live.' },
-                            { id: 'mcp', label: 'Connect the CC MCP server to your project', hint: 'Inside your Claude.ai project, go to Project settings (gear icon) → Integrations → Add custom MCP integration. Paste the MCP URL below. When prompted, sign in with the same Google account you used in Step 1.' },
-                            { id: 'instructions', label: 'Add project instructions', hint: 'Click "Copy Instructions" below, then go to your Claude.ai project page and paste into the "Instructions" text field (it\'s at the top of the project page, not in settings). Every conversation in the project will inherit these instructions.' },
-                            { id: 'claude-code', label: 'Connect Claude Code (CLI) — optional', hint: 'If you use Claude Code (the CLI tool), go to CC Settings to generate an API key and copy the .mcp.json config. This gives Claude Code the same CC tools that Claude.ai Chat has.' },
-                        ];
-                        const stepDone = (step) => {
-                            switch(step.id) {
+
+                        const stepDone = (id) => {
+                            switch(id) {
                                 case 'auth': return !!firebaseUser;
                                 case 'token': return !!githubToken;
                                 case 'project': return !!projectDismissed;
@@ -7874,10 +7867,13 @@
                                 default: return false;
                             }
                         };
-                        const stepsWithDone = steps.map(s => ({ ...s, done: stepDone(s) }));
-                        const remaining = stepsWithDone.filter(s => !s.done);
-                        if (remaining.length === 0) return null;
 
+                        const stepIds = ['auth', 'token', 'project', 'mcp', 'instructions', 'claude-code'];
+                        const allDone = stepIds.every(id => stepDone(id));
+                        if (allDone) return null;
+
+                        /* Wizard state: 0 = welcome, 1-6 = individual steps */
+                        const [wizardStep, setWizardStep] = React.useState(0);
                         const [setupTokenInput, setSetupTokenInput] = React.useState('');
                         const [setupTokenTesting, setSetupTokenTesting] = React.useState(false);
                         const [setupTokenResult, setSetupTokenResult] = React.useState(null);
@@ -7900,118 +7896,341 @@
                             setSetupTokenTesting(false);
                         };
 
+                        const completedCount = stepIds.filter(id => stepDone(id)).length;
+
+                        /* Auto-advance: if current step is already done, find the next incomplete one */
+                        const autoAdvance = () => {
+                            for (let i = 0; i < stepIds.length; i++) {
+                                if (!stepDone(stepIds[i])) return i + 1; /* wizard steps are 1-indexed */
+                            }
+                            return 0; /* all done */
+                        };
+
+                        /* ============ WELCOME PAGE (step 0) ============ */
+                        if (wizardStep === 0) {
+                            const previewSteps = [
+                                { icon: '🔐', label: 'Sign in with Google', desc: 'Connect to the CC data store' },
+                                { icon: '🔗', label: 'Connect GitHub', desc: 'Same account you already use — nothing new to create' },
+                                { icon: '📂', label: 'Create a Claude.ai Project', desc: 'A dedicated workspace — your other chats stay untouched' },
+                                { icon: '🧩', label: 'Add an MCP connector', desc: 'Bridges Claude Chat & Claude Code to Command Center' },
+                                { icon: '📋', label: 'Load project instructions', desc: 'Gives Claude context about how CC works' },
+                                { icon: '💻', label: 'Connect Claude Code (optional)', desc: 'Give the CLI the same CC tools' },
+                            ];
+                            return (
+                                <div className="mb-6 p-6 bg-gradient-to-br from-indigo-900/50 to-purple-900/30 border border-indigo-700/50 rounded-xl">
+                                    <h2 className="text-lg font-semibold mb-2">Welcome to Command Center</h2>
+                                    <p className="text-sm text-slate-400 mb-4 leading-relaxed">
+                                        Command Center is an AI-powered platform that connects Claude to a structured ideation and build system.
+                                        We need to wire a few things together so Claude Chat and Claude Code can both talk to the CC data store.
+                                    </p>
+                                    {/* Prerequisites callout */}
+                                    <div className="mb-5 p-3.5 bg-amber-900/15 border border-amber-700/30 rounded-lg space-y-2">
+                                        <h4 className="text-xs font-semibold text-amber-300 uppercase tracking-wide">Before you begin</h4>
+                                        <ul className="text-xs text-slate-400 space-y-1.5 list-none m-0 p-0">
+                                            <li className="flex gap-2">
+                                                <span className="text-amber-400 shrink-0">*</span>
+                                                <span><strong className="text-slate-300">Claude Pro plan or higher required.</strong> MCP integrations are not available on the free tier of Claude.</span>
+                                            </li>
+                                            <li className="flex gap-2">
+                                                <span className="text-amber-400 shrink-0">*</span>
+                                                <span><strong className="text-slate-300">Corporate/Enterprise users:</strong> your organization admin will need to deploy the MCP connector first. Check with your team before proceeding.</span>
+                                            </li>
+                                            <li className="flex gap-2">
+                                                <span className="text-amber-400 shrink-0">*</span>
+                                                <span><strong className="text-slate-300">Claude Code (CLI) strongly recommended.</strong> CC is designed for both Chat and Code working together. You can use ideation features with Chat alone, but the full build lifecycle requires Claude Code installed locally.</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+
+                                    <p className="text-sm text-slate-400 mb-5 leading-relaxed">
+                                        Here's what we'll set up — it only takes a few minutes:
+                                    </p>
+                                    <div className="space-y-2 mb-6">
+                                        {previewSteps.map((ps, i) => (
+                                            <div key={i} className={`flex items-center gap-3 p-2.5 rounded-lg ${stepDone(stepIds[i]) ? 'bg-green-900/20 border border-green-800/30' : 'bg-slate-800/40 border border-slate-700/30'}`}>
+                                                <span className="text-base w-6 text-center">{stepDone(stepIds[i]) ? '✓' : ps.icon}</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <span className={`text-sm font-medium ${stepDone(stepIds[i]) ? 'text-green-300 line-through opacity-60' : 'text-slate-200'}`}>{ps.label}</span>
+                                                    <span className={`text-xs ml-2 ${stepDone(stepIds[i]) ? 'text-green-400/50' : 'text-slate-500'}`}>— {ps.desc}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={() => setWizardStep(autoAdvance())}
+                                            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition-colors"
+                                        >{completedCount > 0 ? 'Continue Setup' : 'Get Started'}</button>
+                                        {completedCount > 0 && (
+                                            <span className="text-xs text-slate-500">{completedCount}/{stepIds.length} complete</span>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        }
+
+                        /* ============ WIZARD STEP RENDERER ============ */
+                        const stepIndex = wizardStep - 1; /* 0-based index into stepIds */
+                        const currentStepId = stepIds[stepIndex];
+                        const currentDone = stepDone(currentStepId);
+
+                        /* Progress dots */
+                        const progressDots = (
+                            <div className="flex items-center gap-1.5 mb-5">
+                                {stepIds.map((id, i) => (
+                                    <button key={id} onClick={() => setWizardStep(i + 1)} title={`Step ${i + 1}`}
+                                        className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                                            stepDone(id) ? 'bg-green-500' :
+                                            i === stepIndex ? 'bg-indigo-400 ring-2 ring-indigo-400/30' :
+                                            'bg-slate-600'
+                                        }`} />
+                                ))}
+                                <span className="text-xs text-slate-500 ml-2">Step {wizardStep} of {stepIds.length}</span>
+                            </div>
+                        );
+
+                        /* Navigation buttons */
+                        const navButtons = (showNext = true) => (
+                            <div className="flex items-center justify-between mt-5 pt-4 border-t border-slate-700/50">
+                                <button onClick={() => setWizardStep(wizardStep === 1 ? 0 : wizardStep - 1)}
+                                    className="px-3 py-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+                                    ← {wizardStep === 1 ? 'Overview' : 'Back'}
+                                </button>
+                                {showNext && wizardStep < stepIds.length && (
+                                    <button onClick={() => setWizardStep(wizardStep + 1)}
+                                        className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+                                            currentDone ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-slate-700 hover:bg-slate-600 text-slate-400'
+                                        }`}>
+                                        {currentDone ? 'Next →' : 'Skip for now →'}
+                                    </button>
+                                )}
+                                {wizardStep === stepIds.length && (
+                                    <button onClick={() => setWizardStep(0)}
+                                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium transition-colors">
+                                        Back to Overview
+                                    </button>
+                                )}
+                            </div>
+                        );
+
                         return (
                             <div className="mb-6 p-5 bg-gradient-to-r from-indigo-900/40 to-purple-900/30 border border-indigo-700/50 rounded-xl">
-                                <div className="flex items-center justify-between mb-3">
-                                    <h3 className="text-base font-semibold flex items-center gap-2">
-                                        🚀 Getting Started
-                                        <span className="text-xs font-normal text-slate-400">({stepsWithDone.filter(s => s.done).length}/{stepsWithDone.length} complete)</span>
-                                    </h3>
-                                </div>
-                                <p className="text-xs text-slate-500 mb-3">Command Center connects Claude.ai to a structured ideation and build system. Complete these steps to get everything wired up.</p>
-                                <div className="space-y-2">
-                                    {stepsWithDone.map((step, idx) => (
-                                        <div key={step.id} className="space-y-0">
-                                            <div className={`flex items-center gap-3 p-2.5 rounded-lg ${step.done ? 'bg-green-900/20 border border-green-800/30' : 'bg-slate-800/60 border border-slate-700/50'} ${!step.done && (step.id === 'token' || step.id === 'mcp' || step.id === 'instructions') ? 'rounded-b-none border-b-0' : ''}`}>
-                                                <span className={`text-sm ${step.done ? 'text-green-400' : 'text-slate-500'}`}>{step.done ? '✓' : `${idx + 1}`}</span>
-                                                <span className={`flex-1 text-sm ${step.done ? 'text-green-300 line-through opacity-60' : 'text-slate-300'}`}>{step.label}</span>
-                                                {!step.done && step.id === 'auth' && (
-                                                    <button onClick={() => { if (typeof firebaseAuth !== 'undefined') { const provider = new firebase.auth.GoogleAuthProvider(); firebaseAuth.signInWithPopup(provider); } }}
-                                                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium">Sign In</button>
+                                {progressDots}
+
+                                {/* ── Step 1: Sign in with Google ── */}
+                                {currentStepId === 'auth' && (
+                                    <div>
+                                        <h3 className="text-base font-semibold mb-1">Sign in with Google</h3>
+                                        <p className="text-sm text-slate-400 mb-4 leading-relaxed">
+                                            Command Center stores all your data in Firebase. Sign in with your Google account to connect to your personal CC workspace.
+                                            This is a one-time setup — you'll stay signed in across sessions.
+                                        </p>
+                                        {currentDone ? (
+                                            <div className="flex items-center gap-2 p-3 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                                <span className="text-green-400 text-sm">✓</span>
+                                                <span className="text-sm text-green-300">Signed in as {firebaseUser?.email || firebaseUser?.displayName || 'Google user'}</span>
+                                            </div>
+                                        ) : (
+                                            <button onClick={() => { if (typeof firebaseAuth !== 'undefined') { const provider = new firebase.auth.GoogleAuthProvider(); firebaseAuth.signInWithPopup(provider); } }}
+                                                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition-colors">
+                                                Sign In with Google
+                                            </button>
+                                        )}
+                                        {navButtons()}
+                                    </div>
+                                )}
+
+                                {/* ── Step 2: GitHub Personal Access Token ── */}
+                                {currentStepId === 'token' && (
+                                    <div>
+                                        <h3 className="text-base font-semibold mb-1">Connect GitHub</h3>
+                                        <p className="text-sm text-slate-400 mb-1 leading-relaxed">
+                                            CC uses GitHub to deploy your apps. If you're using Claude Code, this is the <strong className="text-slate-300">same GitHub account</strong> you already have — you just need to create an access token so CC can talk to it.
+                                        </p>
+                                        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                                            Click the link below to go directly to your GitHub token settings. Create a token with <strong className="text-slate-400">repo</strong> scope, copy it, and paste it here.
+                                        </p>
+                                        {currentDone ? (
+                                            <div className="flex items-center gap-2 p-3 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                                <span className="text-green-400 text-sm">✓</span>
+                                                <span className="text-sm text-green-300">GitHub connected{setupTokenResult?.ok ? ` — ${setupTokenResult.count} repos found` : ''}</span>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener"
+                                                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-sm text-indigo-300 hover:text-indigo-200 no-underline transition-colors">
+                                                    Open GitHub Token Settings ↗
+                                                </a>
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="password"
+                                                        value={setupTokenInput}
+                                                        onChange={e => { setSetupTokenInput(e.target.value); setSetupTokenResult(null); }}
+                                                        placeholder="Paste your token here (ghp_xxxx or github_pat_xxxx)"
+                                                        className="flex-1 p-2.5 bg-slate-900 border border-slate-600 rounded-lg font-mono text-sm"
+                                                        onKeyDown={e => { if (e.key === 'Enter') testAndSaveToken(); }}
+                                                    />
+                                                    <button
+                                                        onClick={testAndSaveToken}
+                                                        disabled={setupTokenTesting || !setupTokenInput.trim()}
+                                                        className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg text-sm font-medium whitespace-nowrap transition-colors"
+                                                    >{setupTokenTesting ? 'Testing...' : 'Test & Save'}</button>
+                                                </div>
+                                                {setupTokenResult && !setupTokenResult.ok && (
+                                                    <p className="text-xs text-red-400">Token didn't work: {setupTokenResult.error}. Double-check you copied the full token and that it has "repo" scope.</p>
                                                 )}
-                                                {step.done && step.id === 'token' && setupTokenResult?.ok && (
-                                                    <span className="text-xs text-green-400">{setupTokenResult.count} repos found</span>
-                                                )}
-                                                {!step.done && step.id === 'project' && (
-                                                    <div className="flex gap-2">
-                                                        <a href="https://claude.ai/projects" target="_blank" rel="noopener"
-                                                            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium no-underline text-white">Open Claude.ai Projects ↗</a>
-                                                        <button onClick={() => { localStorage.setItem('cc_project_setup_done', 'true'); setSettings(prev => ({...prev, _projRefresh: Date.now()})); }}
-                                                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium text-slate-400">Done ✓</button>
-                                                    </div>
-                                                )}
-                                                {!step.done && step.id === 'claude-code' && (
-                                                    <div className="flex gap-2">
-                                                        <button onClick={() => { setView('settings'); }}
-                                                            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium">Set up in Settings →</button>
-                                                        <button onClick={() => { localStorage.setItem('cc_claude_code_setup_done', 'true'); setSettings(prev => ({...prev, _codeRefresh: Date.now()})); }}
-                                                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium text-slate-400">Skip</button>
-                                                    </div>
+                                                {setupTokenResult?.ok && (
+                                                    <p className="text-xs text-green-400">Connected — found {setupTokenResult.count} repos.</p>
                                                 )}
                                             </div>
-                                            {/* Inline hint text — always visible for incomplete steps */}
-                                            {!step.done && step.id !== 'token' && step.id !== 'mcp' && step.id !== 'instructions' && (
-                                                <div className="bg-slate-800/40 border border-slate-700/30 border-t-0 rounded-b-lg px-3 py-2">
-                                                    <p className="text-xs text-slate-500">{step.hint}</p>
+                                        )}
+                                        {navButtons()}
+                                    </div>
+                                )}
+
+                                {/* ── Step 3: Create a Claude.ai Project ── */}
+                                {currentStepId === 'project' && (
+                                    <div>
+                                        <h3 className="text-base font-semibold mb-1">Create a Claude.ai Project</h3>
+                                        <p className="text-sm text-slate-400 mb-1 leading-relaxed">
+                                            All CC work happens inside a dedicated Claude.ai Project. This keeps your CC conversations organized and separate from your other chats — <strong className="text-slate-300">it won't affect anything you already have in Claude</strong>.
+                                        </p>
+                                        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                                            In Claude.ai: on the left sidebar, click <strong className="text-slate-400">Projects</strong>, then <strong className="text-slate-400">+ Create Project</strong>. Name it "Command Center" (or whatever you like).
+                                        </p>
+                                        {currentDone ? (
+                                            <div className="flex items-center gap-2 p-3 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                                <span className="text-green-400 text-sm">✓</span>
+                                                <span className="text-sm text-green-300">Project created</span>
+                                            </div>
+                                        ) : (
+                                            <div className="flex items-center gap-3">
+                                                <a href="https://claude.ai/projects" target="_blank" rel="noopener"
+                                                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium no-underline text-white transition-colors">
+                                                    Open Claude.ai Projects ↗
+                                                </a>
+                                                <button onClick={() => { localStorage.setItem('cc_project_setup_done', 'true'); setSettings(prev => ({...prev, _projRefresh: Date.now()})); }}
+                                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium text-slate-300 transition-colors">
+                                                    I've created the project ✓
+                                                </button>
+                                            </div>
+                                        )}
+                                        {navButtons()}
+                                    </div>
+                                )}
+
+                                {/* ── Step 4: Connect the MCP Server ── */}
+                                {currentStepId === 'mcp' && (
+                                    <div>
+                                        <h3 className="text-base font-semibold mb-1">Connect the MCP Server</h3>
+                                        <p className="text-sm text-slate-400 mb-1 leading-relaxed">
+                                            The MCP (Model Context Protocol) server is the bridge that connects Claude Chat and Claude Code to the Command Center data store.
+                                            By adding it as an integration, Claude gains access to CC's tools — ideas, concepts, sessions, jobs, and more.
+                                        </p>
+                                        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                                            In your Claude.ai project: click the <strong className="text-slate-400">gear icon</strong> (settings), go to <strong className="text-slate-400">Integrations</strong> → <strong className="text-slate-400">Add custom MCP integration</strong>. Paste the URL below. When prompted, sign in with the same Google account from Step 1.
+                                        </p>
+                                        {currentDone ? (
+                                            <div className="flex items-center gap-2 p-3 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                                <span className="text-green-400 text-sm">✓</span>
+                                                <span className="text-sm text-green-300">MCP server connected</span>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-2 p-3 bg-slate-800/80 border border-slate-600/50 rounded-lg">
+                                                    <code className="flex-1 text-xs text-indigo-300 font-mono select-all">https://cc-mcp-server-300155036194.us-central1.run.app/mcp</code>
+                                                    <button onClick={() => { navigator.clipboard.writeText('https://cc-mcp-server-300155036194.us-central1.run.app/mcp'); showAlert('MCP URL copied!', '📋'); }}
+                                                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium whitespace-nowrap transition-colors">
+                                                        Copy URL
+                                                    </button>
                                                 </div>
-                                            )}
-                                            {/* Inline GitHub token input */}
-                                            {!step.done && step.id === 'token' && (
-                                                <div className="bg-slate-800/60 border border-slate-700/50 border-t-0 rounded-b-lg p-3 space-y-2">
-                                                    <p className="text-xs text-slate-500 mb-2">{step.hint}</p>
-                                                    <div className="flex gap-2">
-                                                        <input
-                                                            type="password"
-                                                            value={setupTokenInput}
-                                                            onChange={e => { setSetupTokenInput(e.target.value); setSetupTokenResult(null); }}
-                                                            placeholder="ghp_xxxx"
-                                                            className="flex-1 p-2 bg-slate-900 border border-slate-600 rounded font-mono text-sm"
-                                                            onKeyDown={e => { if (e.key === 'Enter') testAndSaveToken(); }}
-                                                        />
-                                                        <button
-                                                            onClick={testAndSaveToken}
-                                                            disabled={setupTokenTesting || !setupTokenInput.trim()}
-                                                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded text-xs font-medium whitespace-nowrap"
-                                                        >{setupTokenTesting ? 'Testing...' : 'Test & Save'}</button>
-                                                    </div>
-                                                    <a href="https://github.com/settings/tokens/new?scopes=repo&description=Command+Center" target="_blank" rel="noopener" className="text-xs text-indigo-400 hover:text-indigo-300">Create a token on GitHub ↗</a>
-                                                    {setupTokenResult && !setupTokenResult.ok && (
-                                                        <span className="text-xs text-red-400">❌ {setupTokenResult.error}</span>
-                                                    )}
-                                                    {setupTokenResult?.ok && (
-                                                        <span className="text-xs text-green-400">✅ Connected — {setupTokenResult.count} repos found</span>
-                                                    )}
+                                                <button onClick={() => { localStorage.setItem('cc_mcp_setup_done', 'true'); setSettings(prev => ({...prev, _mcpRefresh: Date.now()})); }}
+                                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium text-slate-300 transition-colors">
+                                                    I've added the integration ✓
+                                                </button>
+                                            </div>
+                                        )}
+                                        {navButtons()}
+                                    </div>
+                                )}
+
+                                {/* ── Step 5: Add Project Instructions ── */}
+                                {currentStepId === 'instructions' && (
+                                    <div>
+                                        <h3 className="text-base font-semibold mb-1">Add Project Instructions</h3>
+                                        <p className="text-sm text-slate-400 mb-1 leading-relaxed">
+                                            Project instructions tell Claude how Command Center works — the vocabulary, lifecycle, and tools.
+                                            Every conversation in your project will automatically inherit these instructions.
+                                        </p>
+                                        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                                            Copy the instructions below, then go to your Claude.ai project page. You'll see a text field labeled <strong className="text-slate-400">"Instructions"</strong> at the top of the project page (not in settings — it's right on the main page). Paste there.
+                                        </p>
+                                        {currentDone ? (
+                                            <div className="flex items-center gap-2 p-3 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                                <span className="text-green-400 text-sm">✓</span>
+                                                <span className="text-sm text-green-300">Instructions loaded</span>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-3">
+                                                    <button onClick={async () => {
+                                                        try {
+                                                            const uid = firebaseUser?.uid;
+                                                            if (!uid || !firebaseDb) { showAlert('Sign in first (Step 1)', '⚠️'); return; }
+                                                            const snap = await firebaseDb.ref(`command-center/${uid}/documents`).orderByChild('type').equalTo('cc-instructions').limitToLast(1).once('value');
+                                                            const docs = snap.val();
+                                                            if (!docs) { showAlert('No project instructions found in Firebase. Ask Chat to generate them.', '⚠️'); return; }
+                                                            const docId = Object.keys(docs)[0];
+                                                            const content = docs[docId].content || '';
+                                                            await navigator.clipboard.writeText(content);
+                                                            showAlert('Instructions copied! Paste them into the "Instructions" field on your project page.', '📋');
+                                                        } catch (e) { showAlert('Copy failed: ' + e.message, '❌'); }
+                                                    }}
+                                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors">
+                                                        Copy Instructions to Clipboard
+                                                    </button>
+                                                    <button onClick={() => { localStorage.setItem('cc_instructions_setup_done', 'true'); setSettings(prev => ({...prev, _instrRefresh: Date.now()})); }}
+                                                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium text-slate-300 transition-colors">
+                                                        I've pasted them ✓
+                                                    </button>
                                                 </div>
-                                            )}
-                                            {/* Inline MCP connection */}
-                                            {!step.done && step.id === 'mcp' && (
-                                                <div className="bg-slate-800/60 border border-slate-700/50 border-t-0 rounded-b-lg p-3 space-y-2">
-                                                    <p className="text-xs text-slate-500 mb-2">{step.hint}</p>
-                                                    <div className="flex gap-2">
-                                                        <button onClick={() => { navigator.clipboard.writeText('https://cc-mcp-server-300155036194.us-central1.run.app/mcp'); showAlert('MCP URL copied to clipboard!', '📋'); }}
-                                                            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium">📋 Copy MCP URL</button>
-                                                        <button onClick={() => { localStorage.setItem('cc_mcp_setup_done', 'true'); setSettings(prev => ({...prev, _mcpRefresh: Date.now()})); }}
-                                                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium text-slate-400">Done ✓</button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {/* Inline instructions copy-to-clipboard */}
-                                            {!step.done && step.id === 'instructions' && (
-                                                <div className="bg-slate-800/60 border border-slate-700/50 border-t-0 rounded-b-lg p-3 space-y-2">
-                                                    <p className="text-xs text-slate-500 mb-2">{step.hint}</p>
-                                                    <div className="flex gap-2">
-                                                        <button onClick={async () => {
-                                                            try {
-                                                                const uid = firebaseUser?.uid;
-                                                                if (!uid || !firebaseDb) { showAlert('Sign in first', '⚠️'); return; }
-                                                                const snap = await firebaseDb.ref(`command-center/${uid}/documents`).orderByChild('type').equalTo('cc-instructions').limitToLast(1).once('value');
-                                                                const docs = snap.val();
-                                                                if (!docs) { showAlert('No project instructions found in Firebase. Ask Chat to generate them.', '⚠️'); return; }
-                                                                const docId = Object.keys(docs)[0];
-                                                                const content = docs[docId].content || '';
-                                                                await navigator.clipboard.writeText(content);
-                                                                showAlert('Instructions copied! Now go to your Claude.ai project page and paste into the "Instructions" text field at the top.', '📋');
-                                                            } catch (e) { showAlert('Copy failed: ' + e.message, '❌'); }
-                                                        }}
-                                                            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium">📋 Copy Instructions to Clipboard</button>
-                                                        <button onClick={() => { localStorage.setItem('cc_instructions_setup_done', 'true'); setSettings(prev => ({...prev, _instrRefresh: Date.now()})); }}
-                                                            className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium text-slate-400">Done ✓</button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
+                                            </div>
+                                        )}
+                                        {navButtons()}
+                                    </div>
+                                )}
+
+                                {/* ── Step 6: Connect Claude Code (optional) ── */}
+                                {currentStepId === 'claude-code' && (
+                                    <div>
+                                        <h3 className="text-base font-semibold mb-1">Connect Claude Code (optional)</h3>
+                                        <p className="text-sm text-slate-400 mb-1 leading-relaxed">
+                                            If you use Claude Code (the CLI tool), you can give it the same CC tools that Claude Chat has.
+                                            This means both Chat and Code share the same data store — ideas, concepts, jobs, and everything else stay in sync.
+                                        </p>
+                                        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                                            Go to CC Settings to generate an API key and copy the <code className="text-xs text-indigo-300">.mcp.json</code> config for Claude Code. If you don't use Claude Code, skip this step.
+                                        </p>
+                                        {currentDone ? (
+                                            <div className="flex items-center gap-2 p-3 bg-green-900/20 border border-green-800/30 rounded-lg">
+                                                <span className="text-green-400 text-sm">✓</span>
+                                                <span className="text-sm text-green-300">Claude Code configured</span>
+                                            </div>
+                                        ) : (
+                                            <div className="flex items-center gap-3">
+                                                <button onClick={() => { setView('settings'); }}
+                                                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors">
+                                                    Open Settings →
+                                                </button>
+                                                <button onClick={() => { localStorage.setItem('cc_claude_code_setup_done', 'true'); setSettings(prev => ({...prev, _codeRefresh: Date.now()})); }}
+                                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium text-slate-300 transition-colors">
+                                                    Skip this step
+                                                </button>
+                                            </div>
+                                        )}
+                                        {navButtons()}
+                                    </div>
+                                )}
                             </div>
                         );
                     })()}
