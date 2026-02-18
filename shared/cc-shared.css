@@ -1,0 +1,51 @@
+/**
+ * CC Shared — Satellite Base Styles (v1.0.0)
+ * Minimal shared styles for CC satellite apps.
+ * Most styling is handled by Tailwind CDN loaded in each satellite.
+ */
+
+/* Base resets */
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* Shared animations */
+.animate-spin { animation: cc-spin 1s linear infinite; }
+@keyframes cc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.fade-in { animation: cc-fadeIn 0.2s ease-out; }
+@keyframes cc-fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Status dots */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.status-dot.connected { background: #22c55e; }
+.status-dot.error { background: #ef4444; }
+.status-dot.pending { background: #eab308; }
+
+/* Code/pre blocks */
+pre, code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+/* Selection */
+::selection {
+    background: rgba(99, 102, 241, 0.3);
+    color: #e2e8f0;
+}
