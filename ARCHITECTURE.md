@@ -324,15 +324,54 @@ Line numbers are approximate and shift with edits. Use search patterns to locate
 
 ---
 
+## Repository Structure
+
+CC follows a **test → prod** deployment workflow using separate GitHub repos per environment. Each repo is served by GitHub Pages.
+
+### Command Center Repos
+
+| Repo | Environment | GitHub Pages URL | Custom Domain |
+|------|-------------|-----------------|---------------|
+| `command-center-test` | Test | `stewartdavidp-ship-it.github.io/command-center-test/` | — |
+| `command-center` | Prod | `stewartdavidp-ship-it.github.io/command-center/` | `aicommandcenter.dev` |
+
+### Repo Pattern Matching
+
+Each app definition includes `repoPatterns` that map environment names to repo name patterns. CC uses these to auto-resolve which repo to deploy to:
+
+```javascript
+'command-center': {
+    repoPatterns: {
+        test: ['command-center-test'],
+        prod: ['command-center']
+    }
+}
+```
+
+### Deployment Rule
+
+**Always deploy to test first.** Never push code directly to prod.
+
+```
+Local Development → Test Repo → Verify on Test Site → Promote to Prod
+                    (GitHub API)                       (handlePromote)
+```
+
+- **Deploy to test**: Push `index.html` to the test repo via GitHub API (`PUT /repos/:owner/:repo/contents/:path`)
+- **Verify on test**: Check the test site at `stewartdavidp-ship-it.github.io/command-center-test/`
+- **Promote to prod**: Use CC's `handlePromote()` which copies files from the test repo to the prod repo via GitHub API
+
+---
+
 ## Deploy Flow
 
 ```
-1. User drops file onto Dashboard
+1. User drops file onto Dashboard (or Claude deploys via GitHub API)
 2. File content read, version extracted from <meta> tag
 3. App auto-detected via detectionPatterns
-4. User confirms app + target environment
+4. User confirms app + target environment (should be TEST)
 5. handleDeploy():
-   a. Resolve target repo
+   a. Resolve target repo (test or prod via repoPatterns)
    b. Get existing file SHA
    c. PUT file via GitHub API
    d. Create git tag
@@ -340,6 +379,19 @@ Line numbers are approximate and shift with edits. Use search patterns to locate
    f. Verify deployed version
    g. Update state + localStorage
    h. Log to deploy history
+```
+
+### Promote Flow (Test → Prod)
+
+```
+1. handlePromote(appId):
+   a. Read all files from test repo (index.html, sw.js if PWA, etc.)
+   b. For each file, get existing prod SHA
+   c. PUT each file to prod repo
+   d. Create git tag on prod
+   e. Enable Pages + force rebuild
+   f. Verify promoted version
+   g. Update state + deploy history
 ```
 
 ---
