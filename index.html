@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.71.3">
+    <meta name="version" content="8.71.4">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -1693,8 +1693,8 @@
         },
         
         // Listen for all work items (returns unsubscribe function)
-        // v8.70.10: limitToLast(200) — prevents unbounded sync of old done/deferred items
-        listen(uid, callback, limit = 200) {
+        // v8.71.4: reduced from 200→20 to cut Firebase bandwidth costs
+        listen(uid, callback, limit = 20) {
             const ref = this._ref(uid);
             if (!ref) return () => {};
             const query = ref.orderByChild('createdAt').limitToLast(limit);
@@ -1936,8 +1936,8 @@
             return firebaseDb.ref(`${this.BASE_PATH}/${uid}/sessions`);
         },
         
-        // v8.70.10: limitToLast(100) — sessions are large (~3KB each), bounded sync
-        listen(uid, callback, limit = 100) {
+        // v8.71.4: reduced from 100→15 to cut Firebase bandwidth (was ~300KB per trigger, now ~45KB)
+        listen(uid, callback, limit = 15) {
             const ref = this._ref(uid);
             if (!ref) return () => {};
             const query = ref.orderByChild('createdAt').limitToLast(limit);
@@ -2056,7 +2056,9 @@
             return firebaseDb.ref(`${this.BASE_PATH}/${uid}/jobs`);
         },
 
-        listen(uid, callback, limit = 200) {
+        // v8.71.4: reduced from 200→10 — jobs carry heavy payloads (instructions, attachments, events)
+        // Each trigger at 200 was re-downloading ~20MB. At 10, it's ~1MB.
+        listen(uid, callback, limit = 10) {
             const ref = this._ref(uid);
             if (!ref) return () => {};
             const query = ref.orderByChild('createdAt').limitToLast(limit);
@@ -2072,6 +2074,23 @@
             });
 
             return () => query.off();
+        },
+
+        // v8.71.4: On-demand fetch of older jobs (for "Load More" in JobsView)
+        async loadBefore(uid, oldestCreatedAt, limit = 10) {
+            const ref = this._ref(uid);
+            if (!ref) return [];
+            const snapshot = await ref
+                .orderByChild('createdAt')
+                .endAt(oldestCreatedAt)
+                .limitToLast(limit + 1)
+                .once('value');
+            const data = snapshot.val();
+            if (!data) return [];
+            return Object.entries(data)
+                .map(([id, j]) => ({ id, ...j }))
+                .filter(j => j.createdAt < oldestCreatedAt)
+                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
         }
     };
 
@@ -4661,15 +4680,17 @@
             await this._ref(uid).child(conceptId).remove();
         },
 
-        // Listen for real-time changes to all concepts
+        // v8.71.4: added limitToLast(50) — was unbounded, downloading ALL concepts on every change
+        // CLAUDE.md generation and aggregate views should use dedicated .once() reads
         listen(uid, callback) {
             const ref = this._ref(uid);
+            const query = ref.orderByChild('updatedAt').limitToLast(50);
             const handler = (snapshot) => {
                 const data = snapshot.val();
                 callback(data ? Object.values(data) : []);
             };
-            ref.on('value', handler);
-            return () => ref.off('value', handler);
+            query.on('value', handler);
+            return () => query.off('value', handler);
         }
     };
 
@@ -4982,15 +5003,16 @@
             return snapshot.val() || [];
         },
 
-        // Listen for real-time changes to all ideas
+        // v8.71.4: added limitToLast(20) — was unbounded, downloading ALL ideas on every change
         listen(uid, callback) {
             const ref = this._ref(uid);
+            const query = ref.orderByChild('updatedAt').limitToLast(20);
             const handler = (snapshot) => {
                 const data = snapshot.val();
                 callback(data ? Object.values(data) : []);
             };
-            ref.on('value', handler);
-            return () => ref.off('value', handler);
+            query.on('value', handler);
+            return () => query.off('value', handler);
         },
 
         // Listen for real-time changes to app-idea index
@@ -13212,6 +13234,9 @@ ${repoStr || '- *No repos configured*'}
         const [typeFilter, setTypeFilter] = React.useState('all');
         const [expandedId, setExpandedId] = React.useState(null);
         const [showFullInstructions, setShowFullInstructions] = React.useState({});
+        const [olderJobs, setOlderJobs] = React.useState([]);
+        const [loadingMore, setLoadingMore] = React.useState(false);
+        const [hasMore, setHasMore] = React.useState(true);
 
         const JOB_STATUS_STYLES = {
             'draft': 'bg-slate-700 text-slate-400',
@@ -13236,31 +13261,38 @@ ${repoStr || '- *No repos configured*'}
             'deploy': 'bg-teal-900/50 text-teal-300'
         };
 
+        // v8.71.4: Merge live listener jobs with on-demand older jobs (deduplicated)
+        const allJobs = React.useMemo(() => {
+            const liveIds = new Set(globalJobs.map(j => j.id));
+            const merged = [...globalJobs, ...olderJobs.filter(j => !liveIds.has(j.id))];
+            return merged.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        }, [globalJobs, olderJobs]);
+
         // Build unique app list from jobs
         const appOptions = React.useMemo(() => {
-            const ids = [...new Set(globalJobs.map(j => j.appId).filter(Boolean))];
+            const ids = [...new Set(allJobs.map(j => j.appId).filter(Boolean))];
             return ids.map(id => {
                 const app = apps && apps[id];
                 return { id, name: app ? app.name : id };
             }).sort((a, b) => a.name.localeCompare(b.name));
-        }, [globalJobs, apps]);
+        }, [allJobs, apps]);
 
         // Build unique status list from jobs
         const statusOptions = React.useMemo(() => {
-            return [...new Set(globalJobs.map(j => j.status).filter(Boolean))].sort();
-        }, [globalJobs]);
+            return [...new Set(allJobs.map(j => j.status).filter(Boolean))].sort();
+        }, [allJobs]);
 
         // Build unique type list from jobs
         const typeOptions = React.useMemo(() => {
-            return [...new Set(globalJobs.map(j => j.type).filter(Boolean))].sort();
-        }, [globalJobs]);
+            return [...new Set(allJobs.map(j => j.type).filter(Boolean))].sort();
+        }, [allJobs]);
 
         const filtered = React.useMemo(() => {
-            return globalJobs
+            return allJobs
                 .filter(j => appFilter === 'all' || j.appId === appFilter)
                 .filter(j => statusFilter === 'all' || j.status === statusFilter)
                 .filter(j => typeFilter === 'all' || j.type === typeFilter);
-        }, [globalJobs, appFilter, statusFilter, typeFilter]);
+        }, [allJobs, appFilter, statusFilter, typeFilter]);
 
         const resolveAppName = (appId) => {
             if (!appId) return 'Unlinked';
@@ -13443,6 +13475,31 @@ ${repoStr || '- *No repos configured*'}
                         );
                     })}
                 </div>
+
+                {/* v8.71.4: Load More — on-demand fetch of older jobs to avoid heavy persistent listener */}
+                {hasMore && filtered.length > 0 && (
+                    <div className="text-center pt-4">
+                        <button
+                            onClick={async () => {
+                                setLoadingMore(true);
+                                const oldest = allJobs.reduce((min, j) =>
+                                    !min || (j.createdAt && j.createdAt < min) ? j.createdAt : min, null);
+                                if (!oldest) { setHasMore(false); setLoadingMore(false); return; }
+                                const more = await JobService.loadBefore(firebaseUid, oldest, 10);
+                                if (more.length === 0) setHasMore(false);
+                                else setOlderJobs(prev => {
+                                    const ids = new Set(prev.map(j => j.id));
+                                    return [...prev, ...more.filter(j => !ids.has(j.id))];
+                                });
+                                setLoadingMore(false);
+                            }}
+                            disabled={loadingMore}
+                            className="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                        >
+                            {loadingMore ? '⏳ Loading...' : '📂 Load older jobs'}
+                        </button>
+                    </div>
+                )}
             </div>
         );
     }
