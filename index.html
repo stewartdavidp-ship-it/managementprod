@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.71.0">
+    <meta name="version" content="8.71.1">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -16563,14 +16563,13 @@ The developer uses Claude for iterative development — each session should:
                 </div>
 
                 {/* ═══ INFRASTRUCTURE SECTION ═══ */}
-                {settingsSection === 'infrastructure' && (
+                <div style={{ display: settingsSection === 'infrastructure' ? 'block' : 'none' }}>
                 <div className="space-y-6">
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-                    <h2 className="text-lg font-semibold mb-4">🔧 Infrastructure</h2>
-                    <p className="text-sm text-slate-400">Infrastructure components loading test — if you see this, the tab switch works.</p>
+                    <FirebaseRulesManager showAlert={showAlert} showConfirm={showConfirm} />
+                    <DomainsView apps={apps} config={config} githubToken={token} showAlert={showAlert} showConfirm={showConfirm} />
+                    <AuthorizedDomainsManager showAlert={showAlert} />
                 </div>
                 </div>
-                )}
 
                 {/* ═══ CREDENTIALS SECTION ═══ */}
                 <div className="space-y-6" style={{ display: settingsSection === 'credentials' ? 'flex' : 'none', flexDirection: 'column', gap: '1.5rem' }}>
