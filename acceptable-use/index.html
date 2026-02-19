@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command Center — Acceptable Use Policy</title>
+    <style>
+        :root {
+            --amber: #e8a838;
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --text: #e0e0e0;
+            --text-muted: #a0a0b0;
+            --border: #2a2a4a;
+            --red: #e85454;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+        }
+        .container {
+            max-width: 780px;
+            margin: 0 auto;
+            padding: 48px 24px 80px;
+        }
+        .header {
+            border-bottom: 2px solid var(--amber);
+            padding-bottom: 24px;
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+        .header .effective {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--amber);
+            margin: 36px 0 16px;
+        }
+        h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            margin: 24px 0 12px;
+        }
+        p { margin-bottom: 14px; }
+        ul {
+            margin: 0 0 14px 24px;
+            list-style: disc;
+        }
+        li { margin-bottom: 6px; }
+        .highlight {
+            background: var(--surface);
+            border-left: 3px solid var(--amber);
+            padding: 16px 20px;
+            margin: 20px 0;
+            border-radius: 0 6px 6px 0;
+        }
+        .warning {
+            background: var(--surface);
+            border-left: 3px solid var(--red);
+            padding: 16px 20px;
+            margin: 20px 0;
+            border-radius: 0 6px 6px 0;
+        }
+        a { color: var(--amber); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .footer {
+            margin-top: 60px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Acceptable Use Policy</h1>
+            <div class="effective">Effective Date: February 19, 2026 &nbsp;|&nbsp; Command Center by Dave Stewart</div>
+        </div>
+
+        <p>This Acceptable Use Policy ("AUP") defines the boundaries of acceptable behavior when using Command Center ("CC"). This policy is incorporated into and subject to the <a href="../terms/">Terms of Service</a>.</p>
+
+        <div class="highlight">
+            <strong>Principle:</strong> CC is a development tool for managing legitimate software ideation and build processes. Use it for that purpose, respect other users' data, and take responsibility for the credentials you configure.
+        </div>
+
+        <h2>1. Permitted Use</h2>
+        <p>CC is intended for:</p>
+        <ul>
+            <li>Managing software ideation using the ODRC framework (concepts, ideas, sessions)</li>
+            <li>Tracking development jobs and build lifecycle</li>
+            <li>Generating and delivering development specifications and documentation</li>
+            <li>Coordinating work between AI assistants (Claude Chat and Claude Code) via the MCP server</li>
+            <li>Configuring integrations with third-party development services (GitHub, domain providers)</li>
+        </ul>
+
+        <h2>2. Prohibited Conduct</h2>
+
+        <h3>2.1 Security and Access</h3>
+        <p>You must not:</p>
+        <ul>
+            <li>Attempt to access, read, modify, or delete another user's data</li>
+            <li>Circumvent, disable, or interfere with Firebase security rules or authentication mechanisms</li>
+            <li>Use CC to store credentials for unauthorized access to any system</li>
+            <li>Probe, scan, or test the vulnerability of the MCP server or any connected infrastructure</li>
+            <li>Share your account access or API keys configured in CC with unauthorized individuals</li>
+        </ul>
+
+        <h3>2.2 Content</h3>
+        <p>You must not use CC to create, store, or transmit:</p>
+        <ul>
+            <li>Content that is illegal under applicable law</li>
+            <li>Malware, exploit code, or instructions for unauthorized system access</li>
+            <li>Personal data of third parties without their consent</li>
+            <li>Content that infringes the intellectual property rights of others</li>
+            <li>Deceptive content intended to impersonate others or misrepresent its origin</li>
+        </ul>
+
+        <h3>2.3 Resource Usage</h3>
+        <p>You must not:</p>
+        <ul>
+            <li>Abuse the MCP server with excessive automated requests beyond normal tool usage patterns</li>
+            <li>Use CC as a general-purpose data storage system unrelated to development management</li>
+            <li>Deliberately create excessive Firebase database load (e.g., rapid-fire writes, large data dumps)</li>
+            <li>Use the document delivery system to push content to repositories you don't control</li>
+        </ul>
+
+        <h3>2.4 Third-Party Services</h3>
+        <p>When using API keys configured in CC, you must:</p>
+        <ul>
+            <li>Comply with the terms of service of each third-party provider (GitHub, Anthropic, domain registrars)</li>
+            <li>Use API access only for purposes those services authorize</li>
+            <li>Respect rate limits and usage quotas of connected services</li>
+            <li>Promptly revoke and replace any credentials you suspect have been compromised</li>
+        </ul>
+
+        <h2>3. Credential Responsibility</h2>
+
+        <div class="warning">
+            <strong>Important:</strong> API keys stored in CC's localStorage provide direct access to external services. A compromised browser or shared device can expose these credentials. Treat your CC session with the same care you would any system that stores sensitive credentials.
+        </div>
+
+        <p>You are responsible for:</p>
+        <ul>
+            <li>Understanding the access scope of each API key you configure (e.g., a GitHub PAT with repo access can read/write all your repositories)</li>
+            <li>Using appropriately scoped credentials (principle of least privilege)</li>
+            <li>Rotating credentials periodically</li>
+            <li>Clearing credentials when using shared or public devices</li>
+            <li>Monitoring your connected accounts for unauthorized activity</li>
+        </ul>
+
+        <h2>4. AI-Assisted Workflows</h2>
+        <p>CC facilitates AI-assisted development through Claude. When using AI features:</p>
+        <ul>
+            <li>You remain responsible for all actions taken based on AI-generated suggestions</li>
+            <li>Review AI-generated code, specifications, and configurations before deploying them</li>
+            <li>Do not use AI features to generate harmful, deceptive, or illegal content</li>
+            <li>Comply with <a href="https://www.anthropic.com/policies">Anthropic's Usage Policies</a> when interacting with Claude through CC</li>
+        </ul>
+
+        <h2>5. Reporting Violations</h2>
+        <p>If you discover a security vulnerability or become aware of conduct that violates this policy, please contact us immediately at <a href="mailto:security@commandcenter.dev">security@commandcenter.dev</a>. We take reports seriously and will investigate promptly.</p>
+
+        <h2>6. Enforcement</h2>
+        <p>Violations of this AUP may result in:</p>
+        <ul>
+            <li>A warning and request to correct the behavior</li>
+            <li>Temporary suspension of access</li>
+            <li>Permanent termination of access</li>
+            <li>Deletion of offending content</li>
+        </ul>
+        <p>We will make reasonable efforts to provide notice before taking enforcement action, except in cases of severe or ongoing violations that threaten the security or integrity of the Service or other users' data.</p>
+
+        <h2>7. Changes to This Policy</h2>
+        <p>We may update this AUP from time to time. Changes will be posted on this page with an updated effective date. Material changes will be communicated to active users.</p>
+
+        <h2>8. Contact</h2>
+        <p>For questions about this Acceptable Use Policy, contact:</p>
+        <p>Dave Stewart<br>Email: <a href="mailto:legal@commandcenter.dev">legal@commandcenter.dev</a></p>
+
+        <div class="footer">
+            &copy; 2026 Dave Stewart. Command Center is a development tool provided as-is.<br>
+            <a href="../privacy/">Privacy Policy</a> · <a href="../terms/">Terms of Service</a> · <a href="../acceptable-use/">Acceptable Use Policy</a>
+        </div>
+    </div>
+</body>
+</html>

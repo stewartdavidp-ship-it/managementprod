@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.70.16">
+    <meta name="version" content="8.70.17">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -6719,6 +6719,20 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                         />
                     )}
                 </main>
+
+                {/* v8.70.17: Footer with policy page links */}
+                <footer className="border-t border-slate-700/50 mt-12">
+                    <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between text-xs text-slate-500">
+                        <span>© 2026 Dave Stewart</span>
+                        <div className="flex items-center gap-3">
+                            <a href="/privacy/" className="hover:text-slate-300 transition-colors">Privacy Policy</a>
+                            <span>·</span>
+                            <a href="/terms/" className="hover:text-slate-300 transition-colors">Terms of Service</a>
+                            <span>·</span>
+                            <a href="/acceptable-use/" className="hover:text-slate-300 transition-colors">Acceptable Use</a>
+                        </div>
+                    </div>
+                </footer>
             </div>
         );
     }

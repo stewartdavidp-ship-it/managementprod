@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command Center — Privacy Policy</title>
+    <style>
+        :root {
+            --amber: #e8a838;
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --text: #e0e0e0;
+            --text-muted: #a0a0b0;
+            --border: #2a2a4a;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+        }
+        .container {
+            max-width: 780px;
+            margin: 0 auto;
+            padding: 48px 24px 80px;
+        }
+        .header {
+            border-bottom: 2px solid var(--amber);
+            padding-bottom: 24px;
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+        .header .effective {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--amber);
+            margin: 36px 0 16px;
+        }
+        h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            margin: 24px 0 12px;
+        }
+        p { margin-bottom: 14px; }
+        ul {
+            margin: 0 0 14px 24px;
+            list-style: disc;
+        }
+        li { margin-bottom: 6px; }
+        .highlight {
+            background: var(--surface);
+            border-left: 3px solid var(--amber);
+            padding: 16px 20px;
+            margin: 20px 0;
+            border-radius: 0 6px 6px 0;
+        }
+        a { color: var(--amber); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .footer {
+            margin-top: 60px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Privacy Policy</h1>
+            <div class="effective">Effective Date: February 19, 2026 &nbsp;|&nbsp; Command Center by Dave Stewart</div>
+        </div>
+
+        <p>Command Center ("CC", "the Service") is an AI-powered ideation and development management platform. This Privacy Policy explains what data CC collects, how it is used, and your rights regarding that data.</p>
+
+        <div class="highlight">
+            <strong>Summary:</strong> CC collects minimal data needed to operate. Your ideation content belongs to you. We don't sell data, run analytics trackers, or serve ads. API keys you provide are stored locally on your device and are never transmitted to CC servers.
+        </div>
+
+        <h2>1. Information We Collect</h2>
+
+        <h3>1.1 Account Information</h3>
+        <p>CC uses Firebase Authentication via Google Sign-In. When you authenticate, we receive and store:</p>
+        <ul>
+            <li>Google account email address</li>
+            <li>Display name</li>
+            <li>Firebase User ID (UID)</li>
+            <li>Authentication tokens (managed by Firebase)</li>
+        </ul>
+        <p>We do not access your Google password or any Google account data beyond what is provided through the standard sign-in flow.</p>
+
+        <h3>1.2 User-Created Content</h3>
+        <p>CC stores the ideation and development management content you create, including:</p>
+        <ul>
+            <li>Ideas, concepts (OPENs, Decisions, Rules, Constraints), and their metadata</li>
+            <li>Session records (goals, summaries, configuration, timestamps)</li>
+            <li>Job records (instructions, status, events, completion data)</li>
+            <li>App and project configuration</li>
+            <li>Documents queued for delivery between agents</li>
+        </ul>
+        <p>All user-created content is stored in Firebase Realtime Database under user-scoped paths (<code>command-center/{your-uid}/</code>), isolated from other users' data.</p>
+
+        <h3>1.3 API Keys and Credentials</h3>
+        <p>CC allows you to configure API keys for third-party services. These are stored exclusively in your browser's localStorage and are <strong>never transmitted to CC servers or Firebase</strong>:</p>
+        <ul>
+            <li>GitHub Personal Access Token</li>
+            <li>Firebase Service Account JSON</li>
+            <li>Domain provider credentials (Porkbun, GoDaddy)</li>
+            <li>Anthropic API key</li>
+        </ul>
+        <p>These credentials are used by your browser to make direct API calls to the respective services. CC's servers have no access to them.</p>
+
+        <h3>1.4 MCP Server Request Data</h3>
+        <p>CC includes an MCP (Model Context Protocol) server hosted on Google Cloud Run that processes tool calls from AI assistants (Claude Chat and Claude Code). When tool calls are made:</p>
+        <ul>
+            <li>Request parameters are processed to read/write your Firebase data</li>
+            <li>Standard Cloud Run infrastructure logs may include request metadata (timestamps, HTTP headers, response codes)</li>
+            <li>Request content is not logged or stored beyond what is needed to process the request</li>
+        </ul>
+
+        <h3>1.5 Information We Do Not Collect</h3>
+        <ul>
+            <li>No analytics or tracking scripts</li>
+            <li>No cookies beyond Firebase authentication</li>
+            <li>No advertising identifiers</li>
+            <li>No device fingerprinting</li>
+            <li>No usage telemetry</li>
+        </ul>
+
+        <h2>2. How We Use Your Information</h2>
+        <p>Your information is used solely to operate the Service:</p>
+        <ul>
+            <li><strong>Authentication:</strong> To verify your identity and scope data access to your account</li>
+            <li><strong>Service delivery:</strong> To store, retrieve, and display your ideation content</li>
+            <li><strong>MCP tool processing:</strong> To execute tool calls that read and write your data on your behalf</li>
+        </ul>
+        <p>We do not use your data for advertising, profiling, training AI models, or any purpose beyond operating the Service as described.</p>
+
+        <h2>3. Data Storage and Security</h2>
+
+        <h3>3.1 Where Data Is Stored</h3>
+        <ul>
+            <li><strong>Firebase Realtime Database:</strong> User content, hosted on Google Cloud infrastructure</li>
+            <li><strong>Google Cloud Run:</strong> MCP server processing (stateless — no persistent storage)</li>
+            <li><strong>GitHub:</strong> Document delivery to repositories you configure</li>
+            <li><strong>Your browser (localStorage):</strong> API keys and credentials</li>
+        </ul>
+
+        <h3>3.2 Data Isolation</h3>
+        <p>User data in Firebase is scoped to your authenticated user ID. Firebase security rules enforce that users can only read and write data under their own path. Shared configuration paths have restricted write access.</p>
+
+        <h3>3.3 Security Measures</h3>
+        <ul>
+            <li>All data in transit is encrypted via HTTPS/TLS</li>
+            <li>Firebase Authentication handles session management and token security</li>
+            <li>The MCP server authenticates requests via Firebase tokens</li>
+            <li>API keys in localStorage are accessible only to the CC application running in your browser</li>
+        </ul>
+
+        <h2>4. Third-Party Services</h2>
+        <p>CC integrates with the following third-party services, each governed by their own privacy policies:</p>
+        <ul>
+            <li><strong>Google Firebase:</strong> Authentication, database hosting — <a href="https://firebase.google.com/support/privacy">Firebase Privacy</a></li>
+            <li><strong>Google Cloud Run:</strong> MCP server hosting — <a href="https://cloud.google.com/terms/cloud-privacy-notice">Google Cloud Privacy</a></li>
+            <li><strong>GitHub:</strong> Repository access and document delivery — <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy</a></li>
+            <li><strong>Anthropic:</strong> AI processing when using Claude — <a href="https://www.anthropic.com/privacy">Anthropic Privacy</a></li>
+        </ul>
+        <p>When you provide API keys for these services, your browser communicates directly with them. CC does not proxy, intercept, or log these communications.</p>
+
+        <h2>5. Data Retention and Deletion</h2>
+
+        <h3>5.1 Active Accounts</h3>
+        <p>Your data is retained as long as your account is active. Some data types have automatic lifecycle management (e.g., ephemeral messages are deleted after delivery, short-lived documents expire after 7 days).</p>
+
+        <h3>5.2 Data Deletion</h3>
+        <p>You may request deletion of your account and all associated data by contacting us. Upon request:</p>
+        <ul>
+            <li>All data under your Firebase user path will be deleted</li>
+            <li>Your Firebase Authentication account will be removed</li>
+            <li>Documents delivered to GitHub repositories are under your control and must be deleted separately by you</li>
+            <li>API keys in localStorage can be cleared by you at any time through browser settings or the CC Settings page</li>
+        </ul>
+
+        <h2>6. Your Rights</h2>
+        <p>You have the right to:</p>
+        <ul>
+            <li><strong>Access</strong> your data — all your content is visible through the CC interface and can be queried via the MCP tools</li>
+            <li><strong>Export</strong> your data — you can retrieve your content through the CC interface or Firebase directly</li>
+            <li><strong>Delete</strong> your data — contact us or use the CC interface to remove specific content; full account deletion is available on request</li>
+            <li><strong>Withdraw consent</strong> — you may stop using the Service at any time</li>
+        </ul>
+
+        <h2>7. Children's Privacy</h2>
+        <p>CC is not intended for use by anyone under the age of 13. We do not knowingly collect data from children. If you believe a child has provided us with data, please contact us and we will delete it promptly.</p>
+
+        <h2>8. Changes to This Policy</h2>
+        <p>We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated effective date. Continued use of the Service after changes constitutes acceptance of the revised policy.</p>
+
+        <h2>9. Contact</h2>
+        <p>For questions about this Privacy Policy or to exercise your data rights, contact:</p>
+        <p>Dave Stewart<br>Email: <a href="mailto:privacy@commandcenter.dev">privacy@commandcenter.dev</a></p>
+
+        <div class="footer">
+            &copy; 2026 Dave Stewart. Command Center is a development tool, not a consumer product. This policy applies to all users of the Command Center platform.<br>
+            <a href="../privacy/">Privacy Policy</a> · <a href="../terms/">Terms of Service</a> · <a href="../acceptable-use/">Acceptable Use Policy</a>
+        </div>
+    </div>
+</body>
+</html>
