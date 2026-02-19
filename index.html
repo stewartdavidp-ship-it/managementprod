@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.70.10">
+    <meta name="version" content="8.70.11">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -7703,40 +7703,44 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                     if (storedToken) setGithubToken(storedToken);
                     // Check if setup is complete (GitHub token = minimum viable credential)
                     setSetupComplete(SecretManager.has('token'));
-                    // Listen for issues changes via IssueService
-                    unsubscribeIssues = IssueService.listen(u.uid, setGlobalIssues);
-                    // Listen for work items via WorkItemService (v8.22.0)
-                    unsubscribeWorkItems = WorkItemService.listen(u.uid, setGlobalWorkItems);
-                    // Listen for sessions via SessionService (v8.27.0)
+                    // v8.70.11: Listener audit — only enable listeners for collections with data
+                    // or core features. Empty collections (issues, workItems, streams, interfaces,
+                    // dependencies, dependencyAlerts, team, teamMembership, activity) are suspended
+                    // to eliminate unnecessary Firebase re-syncs. Re-enable when features are used.
+
+                    // --- ESSENTIAL LISTENERS (collections with data, core features) ---
+                    // Sessions (17 records, 25 KB, limitToLast=100)
                     unsubscribeSessions = SessionService.listen(u.uid, setGlobalSessions);
-                    // Listen for activity via ActivityLogService (v8.39.0 — Phase 3.4)
-                    unsubscribeActivity = ActivityLogService.listen(u.uid, setGlobalActivity);
-                    // Listen for streams via WorkStreamService (v8.43.0 — Phase 5.2)
-                    unsubscribeStreams = WorkStreamService.listen(u.uid, setGlobalStreams);
-                    // Listen for interfaces via StreamInterfaceService (v8.43.0 — Phase 5.4)
-                    unsubscribeInterfaces = StreamInterfaceService.listen(u.uid, setGlobalInterfaces);
-                    // Listen for dependencies via DependencyService (v8.43.0 — Phase 5.4)
-                    unsubscribeDependencies = DependencyService.listen(u.uid, setGlobalDependencies);
-                    // Listen for dependency alerts via DependencyAlertService (v8.44.0 — Phase 5.4)
-                    unsubscribeDependencyAlerts = DependencyAlertService.listen(u.uid, setGlobalDependencyAlerts);
-                    // Listen for team members via TeamService (v8.46.0 — Phase 5.7)
-                    unsubscribeTeam = TeamService.listen(u.uid, setTeamMembers);
-                    unsubscribeTeamMembership = TeamService.listenMemberships(u.uid, setTeamMembership);
-                    // Listen for ODRC concepts and ideas (Ideation Platform)
+                    // ODRC concepts and ideas (core ideation platform)
                     unsubscribeConcepts = ConceptManager.listen(u.uid, setGlobalConcepts);
                     unsubscribeIdeas = IdeaManager.listen(u.uid, setGlobalIdeas);
                     // v8.64.0 A1: Backfill missing fields on existing Ideas (idempotent, async)
                     IdeaManager.backfillMissingFields(u.uid).catch(e =>
                         console.error('[CC] Idea backfill failed:', e)
                     );
-                    // Listen for completion jobs and settings (Ingestion Pipeline)
+                    // Completion jobs (1586 records, 2.8 MB, limitToLast=50) and settings
                     unsubscribeCompletionJobs = CompletionFileService.listen(u.uid, (jobs) => {
                         setGlobalCompletionJobs(jobs);
                         completionJobsLoadedRef.current = true;
                     });
                     unsubscribeCompletionSettings = CompletionFileSettings.listen(u.uid, setCompletionFileSettings);
-                    // Listen for orphan commits (Phase 3)
-                    unsubscribeOrphans = OrphanDetectionService.listen(u.uid, setGlobalOrphanCommits);
+
+                    // --- SUSPENDED LISTENERS (empty collections, no data) ---
+                    // Re-enable these when the features are actively used:
+                    // unsubscribeIssues = IssueService.listen(u.uid, setGlobalIssues);
+                    // unsubscribeWorkItems = WorkItemService.listen(u.uid, setGlobalWorkItems);
+                    // unsubscribeActivity = ActivityLogService.listen(u.uid, setGlobalActivity);
+                    // unsubscribeStreams = WorkStreamService.listen(u.uid, setGlobalStreams);
+                    // unsubscribeInterfaces = StreamInterfaceService.listen(u.uid, setGlobalInterfaces);
+                    // unsubscribeDependencies = DependencyService.listen(u.uid, setGlobalDependencies);
+                    // unsubscribeDependencyAlerts = DependencyAlertService.listen(u.uid, setGlobalDependencyAlerts);
+                    // unsubscribeTeam = TeamService.listen(u.uid, setTeamMembers);
+                    // unsubscribeTeamMembership = TeamService.listenMemberships(u.uid, setTeamMembership);
+
+                    // --- ORPHAN COMMITS: DISABLED (5.2 MB, 13K records, feature is off by default) ---
+                    // This was the #1 bandwidth consumer (62% of all listener data).
+                    // Only enable when orphanDetectionEnabled is turned on in settings.
+                    // unsubscribeOrphans = OrphanDetectionService.listen(u.uid, setGlobalOrphanCommits);
                 } else {
                     setFirebaseUid(null);
                     // v8.70.0: Clear SecretManager + ConfigSync UIDs (secrets persist in localStorage)
