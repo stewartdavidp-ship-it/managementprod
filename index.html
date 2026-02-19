@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.70.20">
+    <meta name="version" content="8.71.0">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -37,33 +37,8 @@
     if (IS_TEST_MODE) console.log('[CC] Running in TEST MODE — using mock services');
 
     // =========================================================================
-    // SATELLITE SECRETS BOOTSTRAP (v8.49.0)
-    // Populate gs_* keys from existing cc_* keys for satellite app access.
-    // Dual-write: all future writes go to both cc_* and gs_* keys.
-    // =========================================================================
-    
-    (function bootstrapSatelliteKeys() {
-        const migrations = [
-            ['cc_token',         'gs_github_token'],
-            ['cc_firebase_sa',   'gs_firebase_sa'],
-            ['cc_firebase_uid',  'gs_firebase_uid'],
-            ['cc_api_key',       'gs_api_key'],
-            ['cc_token_expires', 'gs_token_expires'],
-            ['commandCenterConfig', 'gs_config']
-        ];
-        let count = 0;
-        for (const [oldKey, newKey] of migrations) {
-            try {
-                const val = localStorage.getItem(oldKey);
-                if (val && !localStorage.getItem(newKey)) {
-                    localStorage.setItem(newKey, val);
-                    count++;
-                }
-            } catch {}
-        }
-        if (count > 0) console.log(`[Satellite Bootstrap] Migrated ${count} keys to gs_* namespace`);
-    })();
-    
+    // v8.71.0: bootstrapSatelliteKeys IIFE removed (satellites eliminated — Phase 4)
+
     // =========================================================================
     // FIREBASE CONFIG
     // =========================================================================
@@ -303,15 +278,33 @@
         
         // ---- RTDB Rules API (v8.70.4) ----
 
-        // Quick test — tries to get a token to verify admin access
+        // Quick test — tries to read RTDB rules and auth config to verify admin access
         async testConnection() {
-            const results = { token: false, errors: [] };
+            const results = { token: false, rules: false, authConfig: false, errors: [] };
+
             try {
                 await this.getAccessToken();
                 results.token = true;
             } catch (e) {
                 results.errors.push(`Token: ${e.message}`);
+                return results;
             }
+
+            try {
+                const rules = await this.getRules();
+                results.rules = rules && typeof rules === 'object';
+            } catch (e) {
+                results.errors.push(`Rules: ${e.message}`);
+            }
+
+            try {
+                const domains = await this.getAuthorizedDomains();
+                results.authConfig = Array.isArray(domains);
+                results.authorizedDomains = domains;
+            } catch (e) {
+                results.errors.push(`Auth Config: ${e.message}`);
+            }
+
             return results;
         }
 
@@ -344,10 +337,668 @@
             console.log('[FirebaseAdmin] ✅ RTDB rules deployed successfully');
             return true;
         }
+
+        // Deploy rules and return parsed JSON (used by FirebaseRulesManager)
+        async putRules(rules) {
+            const token = await this.getAccessToken();
+            const dbUrl = 'https://word-boxing-default-rtdb.firebaseio.com';
+            const body = typeof rules === 'string' ? rules : JSON.stringify(rules);
+            const response = await fetch(`${dbUrl}/.settings/rules.json?access_token=${encodeURIComponent(token)}`, {
+                method: 'PUT',
+                body: body
+            });
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Failed to deploy rules: ${response.status} — ${err}`);
+            }
+            return await response.json();
+        }
+
+        // ---- Firebase Auth Config API (Identity Toolkit v2) ----
+
+        // Get Firebase Auth project config (includes authorizedDomains)
+        async getAuthConfig() {
+            const token = await this.getAccessToken();
+            const projectId = this.serviceAccount.project_id;
+            const response = await fetch(
+                `https://identitytoolkit.googleapis.com/v2/projects/${projectId}/config`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Failed to fetch auth config: ${response.status} — ${err}`);
+            }
+            return await response.json();
+        }
+
+        // Get current authorized domains list
+        async getAuthorizedDomains() {
+            const config = await this.getAuthConfig();
+            return config.authorizedDomains || [];
+        }
+
+        // Update authorized domains (replaces entire list — always include existing domains)
+        async updateAuthorizedDomains(domains) {
+            const token = await this.getAccessToken();
+            const projectId = this.serviceAccount.project_id;
+            const response = await fetch(
+                `https://identitytoolkit.googleapis.com/v2/projects/${projectId}/config?updateMask=authorizedDomains`,
+                {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ authorizedDomains: domains })
+                }
+            );
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Failed to update authorized domains: ${response.status} — ${err}`);
+            }
+            return await response.json();
+        }
+
+        // Add a domain to authorized domains (safe — reads current list first)
+        async addAuthorizedDomain(domain) {
+            const current = await this.getAuthorizedDomains();
+            if (current.includes(domain)) {
+                console.log(`[FirebaseAdmin] Domain ${domain} already authorized`);
+                return { authorizedDomains: current, alreadyExists: true };
+            }
+            const updated = [...current, domain];
+            const result = await this.updateAuthorizedDomains(updated);
+            console.log(`[FirebaseAdmin] Added ${domain} to authorized domains`);
+            return { authorizedDomains: result.authorizedDomains || updated, alreadyExists: false };
+        }
+
+        // Remove a domain from authorized domains
+        async removeAuthorizedDomain(domain) {
+            const current = await this.getAuthorizedDomains();
+            const updated = current.filter(d => d !== domain);
+            if (updated.length === current.length) {
+                console.log(`[FirebaseAdmin] Domain ${domain} not found in authorized domains`);
+                return { authorizedDomains: current, notFound: true };
+            }
+            const result = await this.updateAuthorizedDomains(updated);
+            console.log(`[FirebaseAdmin] Removed ${domain} from authorized domains`);
+            return { authorizedDomains: result.authorizedDomains || updated, notFound: false };
+        }
     }
     
     // Global instance
     const firebaseAdmin = new FirebaseAdmin();
+
+    // =========================================================================
+    // DOMAIN SERVICES (Porkbun, GoDaddy, Registry) — ported from Infrastructure satellite
+    // =========================================================================
+
+    // DOMAIN SERVICES (Porkbun, GoDaddy, Registry)
+    // =========================================================================
+
+    const PorkbunService = {
+        CONFIG_KEY: 'cc_domain_config',
+        PRICE_CACHE_KEY: 'cc_tld_prices',
+        HEALTH_CACHE_KEY: 'cc_domain_health',
+        BASE_URL: 'https://api.porkbun.com/api/json/v3',
+        PROXY_URL: 'https://us-central1-word-boxing.cloudfunctions.net/domainProxy',
+        
+        // GitHub Pages IP addresses (current as of 2025)
+        GITHUB_PAGES_IPS: [
+            '185.199.108.153',
+            '185.199.109.153',
+            '185.199.110.153',
+            '185.199.111.153'
+        ],
+        
+        // Preferred TLDs for domain search (ordered by relevance for dev tools)
+        PREFERRED_TLDS: ['com', 'dev', 'app', 'io', 'co', 'ai', 'sh', 'tools', 'site', 'net'],
+        
+        // ─── Configuration ───
+        
+        getConfig() {
+            try { return JSON.parse(localStorage.getItem(this.CONFIG_KEY) || '{}'); }
+            catch { return {}; }
+        },
+        
+        saveConfig(config) {
+            localStorage.setItem(this.CONFIG_KEY, JSON.stringify(config));
+        },
+        
+        isConfigured() {
+            const cfg = this.getConfig();
+            return !!(cfg.apiKey && cfg.secretApiKey);
+        },
+        
+        // ─── Core API Call (via Firebase proxy to avoid CORS) ───
+        
+        async _call(endpoint, extraBody = {}) {
+            const cfg = this.getConfig();
+            if (!cfg.apiKey || !cfg.secretApiKey) {
+                throw new Error('Porkbun API keys not configured. Go to Settings → Domain Registrar.');
+            }
+            
+            const response = await fetch(this.PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    provider: 'porkbun',
+                    endpoint: endpoint,
+                    method: 'POST',
+                    body: {
+                        apikey: cfg.apiKey,
+                        secretapikey: cfg.secretApiKey,
+                        ...extraBody
+                    }
+                })
+            });
+            
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`Porkbun API error (${response.status}): ${text}`);
+            }
+            
+            const data = await response.json();
+            if (data.status === 'ERROR') {
+                throw new Error(data.message || 'Porkbun API returned an error');
+            }
+            return data;
+        },
+        
+        // ─── Connection Test ───
+        
+        async ping() {
+            return await this._call('/ping');
+            // Returns: { status: "SUCCESS", yourIp: "x.x.x.x" }
+        },
+        
+        // ─── Domain Operations ───
+        
+        async listDomains() {
+            const data = await this._call('/domain/listAll');
+            return data.domains || [];
+            // Returns: [{ domain, status, tld, createDate, expireDate, autoRenew, ... }]
+        },
+        
+        async checkAvailability(domain) {
+            const data = await this._call(`/domain/checkDomain/${domain}`);
+            return {
+                domain,
+                available: data.response?.avail === 'yes',
+                price: parseFloat(data.response?.price || 0),
+                regularPrice: parseFloat(data.response?.regularPrice || 0),
+                renewalPrice: parseFloat(data.response?.additional?.renewal?.price || 0),
+                premium: data.response?.premium === 'yes',
+                firstYearPromo: data.response?.firstYearPromo === 'yes',
+                limits: data.limits
+            };
+        },
+        
+        async checkMultipleTLDs(keyword) {
+            // Check availability across preferred TLDs
+            // Rate limited: 1 check per 10 seconds at Porkbun
+            const results = [];
+            for (const tld of this.PREFERRED_TLDS) {
+                const domain = keyword.includes('.') ? keyword : `${keyword}.${tld}`;
+                try {
+                    const result = await this.checkAvailability(domain);
+                    results.push(result);
+                } catch (e) {
+                    results.push({ domain, available: false, error: e.message });
+                }
+                // Respect rate limits
+                if (results.length < this.PREFERRED_TLDS.length) {
+                    await this._rateLimit(10500); // 10.5s between checks
+                }
+            }
+            return results;
+        },
+        
+        async registerDomain(domain, costInPennies) {
+            return await this._call(`/domain/create/${domain}`, {
+                cost: costInPennies,
+                agreeToTerms: 'yes'
+            });
+            // Returns: { status, domain, cost, orderId, balance }
+        },
+        
+        async updateAutoRenew(domain, on = true) {
+            return await this._call(`/domain/updateAutoRenew/${domain}`, {
+                status: on ? 'on' : 'off'
+            });
+        },
+        
+        // ─── DNS Record Management ───
+        
+        async listDNSRecords(domain) {
+            const data = await this._call(`/dns/retrieve/${domain}`);
+            return data.records || [];
+            // Returns: [{ id, name, type, content, ttl, prio, notes }]
+        },
+        
+        async createDNSRecord(domain, type, name, content, ttl = 600, prio = null) {
+            const body = { type, content, ttl: String(ttl) };
+            if (name) body.name = name;
+            if (prio !== null) body.prio = String(prio);
+            const data = await this._call(`/dns/create/${domain}`, body);
+            return { id: data.id, type, name: name || '@', content };
+        },
+        
+        async editDNSRecord(domain, recordId, type, name, content, ttl = 600) {
+            return await this._call(`/dns/edit/${domain}/${recordId}`, {
+                type, content, ttl: String(ttl),
+                ...(name ? { name } : {})
+            });
+        },
+        
+        async deleteDNSRecord(domain, recordId, allRecords) {
+            // allRecords param unused — Porkbun supports individual record delete by ID
+            return await this._call(`/dns/delete/${domain}/${recordId}`);
+        },
+        
+        async deleteDNSByType(domain, type, subdomain) {
+            const endpoint = subdomain 
+                ? `/dns/deleteByNameType/${domain}/${type}/${subdomain}`
+                : `/dns/deleteByNameType/${domain}/${type}`;
+            return await this._call(endpoint);
+        },
+        
+        // ─── TLD Pricing (cached) ───
+        
+        async getTLDPrices(forceRefresh = false) {
+            // Check cache first
+            if (!forceRefresh) {
+                try {
+                    const cached = JSON.parse(localStorage.getItem(this.PRICE_CACHE_KEY) || '{}');
+                    if (cached.timestamp && Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) {
+                        return cached.prices;
+                    }
+                } catch {}
+            }
+            
+            // Pricing endpoint via proxy (no auth needed but still has CORS issues)
+            const response = await fetch(this.PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    provider: 'porkbun',
+                    endpoint: '/pricing/get',
+                    method: 'POST',
+                    body: {}
+                })
+            });
+            const data = await response.json();
+            
+            if (data.status === 'SUCCESS' && data.pricing) {
+                localStorage.setItem(this.PRICE_CACHE_KEY, JSON.stringify({
+                    timestamp: Date.now(),
+                    prices: data.pricing
+                }));
+                return data.pricing;
+            }
+            throw new Error('Failed to fetch TLD pricing');
+        },
+        
+        // ─── GitHub Pages DNS Configuration ───
+        
+        async configureForGitHubPages(domain, githubUsername) {
+            const results = [];
+            const log = [];
+            
+            // Step 1: Get existing records and remove conflicting ones
+            log.push('Fetching existing DNS records...');
+            const existing = await this.listDNSRecords(domain);
+            
+            // Delete existing A, AAAA, and root CNAME records that would conflict
+            for (const record of existing) {
+                const isRoot = record.name === domain || record.name === '';
+                const isWww = record.name === `www.${domain}` || record.name === 'www';
+                if ((isRoot && (record.type === 'A' || record.type === 'AAAA' || record.type === 'CNAME' || record.type === 'ALIAS')) ||
+                    (isWww && record.type === 'CNAME')) {
+                    log.push(`Deleting conflicting ${record.type} record: ${record.content}`);
+                    await this.deleteDNSRecord(domain, record.id);
+                    await this._rateLimit(1100);
+                }
+            }
+            
+            // Step 2: Create 4 A records for apex domain
+            for (const ip of this.GITHUB_PAGES_IPS) {
+                log.push(`Creating A record → ${ip}`);
+                const result = await this.createDNSRecord(domain, 'A', '', ip, 600);
+                results.push(result);
+                await this._rateLimit(1100);
+            }
+            
+            // Step 3: Create CNAME for www → username.github.io
+            log.push(`Creating CNAME www → ${githubUsername}.github.io`);
+            const cnameResult = await this.createDNSRecord(
+                domain, 'CNAME', 'www', `${githubUsername}.github.io`, 600
+            );
+            results.push(cnameResult);
+            
+            return { 
+                success: true, 
+                recordsCreated: results.length, 
+                records: results,
+                log
+            };
+        },
+        
+        // ─── Domain Health Caching ───
+        
+        getHealthCache() {
+            try { return JSON.parse(localStorage.getItem(this.HEALTH_CACHE_KEY) || '{}'); }
+            catch { return {}; }
+        },
+        
+        setHealthCache(domain, result) {
+            const cache = this.getHealthCache();
+            cache[domain] = { lastCheck: new Date().toISOString(), result };
+            localStorage.setItem(this.HEALTH_CACHE_KEY, JSON.stringify(cache));
+        },
+        
+        // ─── Utility ───
+        
+        _rateLimit(ms = 1100) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        },
+        
+        // Format price from string to display
+        formatPrice(price) {
+            const num = typeof price === 'string' ? parseFloat(price) : price;
+            return isNaN(num) ? '—' : `$${num.toFixed(2)}`;
+        }
+    };
+
+    const GoDaddyService = {
+        CONFIG_KEY: 'cc_godaddy_config',
+        BASE_URL: 'https://api.godaddy.com/v1',
+        PROXY_URL: 'https://us-central1-word-boxing.cloudfunctions.net/domainProxy',
+        
+        GITHUB_PAGES_IPS: [
+            '185.199.108.153',
+            '185.199.109.153',
+            '185.199.110.153',
+            '185.199.111.153'
+        ],
+        
+        // ─── Configuration ───
+        
+        getConfig() {
+            try { return JSON.parse(localStorage.getItem(this.CONFIG_KEY) || '{}'); }
+            catch { return {}; }
+        },
+        
+        saveConfig(config) {
+            localStorage.setItem(this.CONFIG_KEY, JSON.stringify(config));
+        },
+        
+        isConfigured() {
+            const cfg = this.getConfig();
+            return !!(cfg.apiKey && cfg.apiSecret);
+        },
+        
+        // ─── Core API Call (via Firebase proxy to avoid CORS) ───
+        
+        async _call(endpoint, method = 'GET', body = null) {
+            const cfg = this.getConfig();
+            if (!cfg.apiKey || !cfg.apiSecret) {
+                throw new Error('GoDaddy API keys not configured. Go to Settings → Domain Registrar.');
+            }
+            
+            const proxyBody = {
+                provider: 'godaddy',
+                endpoint: endpoint,
+                method: method,
+                headers: {
+                    'Authorization': `sso-key ${cfg.apiKey}:${cfg.apiSecret}`
+                }
+            };
+            if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+                proxyBody.body = body;
+            }
+            
+            const response = await fetch(this.PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(proxyBody)
+            });
+            
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.message || `GoDaddy API error (${response.status})`);
+            }
+            
+            const text = await response.text();
+            return text ? JSON.parse(text) : { status: 'SUCCESS' };
+        },
+        
+        // ─── Connection Test ───
+        
+        async ping() {
+            // GoDaddy has no explicit ping — we list domains as a test
+            const domains = await this._call('/domains?limit=1');
+            return { status: 'SUCCESS', yourIp: 'N/A', domainCount: domains.length };
+        },
+        
+        // ─── Domain Operations ───
+        
+        async listDomains() {
+            const data = await this._call('/domains');
+            // Normalize to match PorkbunService format
+            return data.map(d => ({
+                domain: d.domain,
+                status: d.status,
+                tld: d.domain.split('.').pop(),
+                createDate: d.createdAt,
+                expireDate: d.expires,
+                autoRenew: d.renewAuto,
+                provider: 'godaddy'
+            }));
+        },
+        
+        // ─── DNS Record Management ───
+        // GoDaddy uses type+name to identify records, NOT unique IDs
+        // Records have: type, name, data (not content), ttl, priority
+        
+        async listDNSRecords(domain) {
+            const data = await this._call(`/domains/${domain}/records`);
+            // Normalize to match Porkbun format
+            return data.map((r, i) => ({
+                id: `${r.type}-${r.name}-${i}`,  // Synthetic ID (GoDaddy has none)
+                name: r.name === '@' ? domain : `${r.name}.${domain}`,
+                type: r.type,
+                content: r.data,
+                ttl: String(r.ttl),
+                prio: r.priority ? String(r.priority) : '0',
+                notes: '',
+                _gdName: r.name,  // Keep original GoDaddy name for API calls
+                _gdData: r.data
+            }));
+        },
+        
+        async createDNSRecord(domain, type, name, content, ttl = 600, prio = null) {
+            // GoDaddy uses PATCH to add records (append)
+            const record = {
+                type,
+                name: name || '@',
+                data: content,
+                ttl: parseInt(ttl) || 600
+            };
+            if (prio !== null) record.priority = parseInt(prio);
+            
+            await this._call(`/domains/${domain}/records`, 'PATCH', [record]);
+            return { id: `${type}-${name || '@'}-new`, type, name: name || '@', content };
+        },
+        
+        async deleteDNSRecord(domain, recordId, allRecords) {
+            // GoDaddy has no individual delete — we must replace all records of that type/name
+            // OR replace ALL records minus the one we want to remove
+            // We need the full record list to do this
+            if (!allRecords) {
+                allRecords = await this.listDNSRecords(domain);
+            }
+            
+            const toKeep = allRecords.filter(r => r.id !== recordId);
+            
+            // Rebuild in GoDaddy's format
+            const gdRecords = toKeep
+                .filter(r => !['NS', 'SOA'].includes(r.type)) // Can't replace NS/SOA
+                .map(r => ({
+                    type: r.type,
+                    name: r._gdName || (r.name === domain ? '@' : r.name.replace(`.${domain}`, '')),
+                    data: r._gdData || r.content,
+                    ttl: parseInt(r.ttl) || 600,
+                    ...(r.prio && r.prio !== '0' ? { priority: parseInt(r.prio) } : {})
+                }));
+            
+            if (gdRecords.length === 0) {
+                throw new Error('Cannot delete all records. At least one record must remain.');
+            }
+            
+            await this._call(`/domains/${domain}/records`, 'PUT', gdRecords);
+            return { status: 'SUCCESS' };
+        },
+        
+        // ─── GitHub Pages DNS Configuration ───
+        
+        async configureForGitHubPages(domain, githubUsername) {
+            const log = [];
+            
+            // Step 1: Get existing records
+            log.push('Fetching existing DNS records...');
+            const existing = await this.listDNSRecords(domain);
+            
+            // Step 2: Build new record set — keep non-conflicting, replace A/CNAME
+            const keepRecords = existing
+                .filter(r => !['NS', 'SOA'].includes(r.type))
+                .filter(r => {
+                    const isRoot = r._gdName === '@' || r.name === domain;
+                    const isWww = r._gdName === 'www';
+                    if (isRoot && (r.type === 'A' || r.type === 'AAAA' || r.type === 'CNAME' || r.type === 'ALIAS')) {
+                        log.push(`Removing conflicting ${r.type} record: ${r.content}`);
+                        return false;
+                    }
+                    if (isWww && r.type === 'CNAME') {
+                        log.push(`Removing conflicting CNAME www record: ${r.content}`);
+                        return false;
+                    }
+                    return true;
+                })
+                .map(r => ({
+                    type: r.type,
+                    name: r._gdName || '@',
+                    data: r._gdData || r.content,
+                    ttl: parseInt(r.ttl) || 600,
+                    ...(r.prio && r.prio !== '0' ? { priority: parseInt(r.prio) } : {})
+                }));
+            
+            // Step 3: Add GitHub Pages records
+            const ghRecords = this.GITHUB_PAGES_IPS.map(ip => {
+                log.push(`Adding A record → ${ip}`);
+                return { type: 'A', name: '@', data: ip, ttl: 600 };
+            });
+            
+            log.push(`Adding CNAME www → ${githubUsername}.github.io`);
+            ghRecords.push({ type: 'CNAME', name: 'www', data: `${githubUsername}.github.io`, ttl: 600 });
+            
+            // Step 4: Replace all records at once (GoDaddy's approach)
+            const allRecords = [...keepRecords, ...ghRecords];
+            await this._call(`/domains/${domain}/records`, 'PUT', allRecords);
+            
+            return {
+                success: true,
+                recordsCreated: ghRecords.length,
+                records: ghRecords.map(r => ({ type: r.type, name: r.name, content: r.data })),
+                log
+            };
+        },
+        
+        // ─── Utility ───
+        formatPrice(price) {
+            const num = typeof price === 'string' ? parseFloat(price) : price;
+            return isNaN(num) ? '—' : `$${num.toFixed(2)}`;
+        }
+    };
+
+    const DomainProviderRegistry = {
+        PROVIDERS: {
+            porkbun: {
+                id: 'porkbun',
+                name: 'Porkbun',
+                icon: '🐷',
+                service: PorkbunService,
+                configKey: PorkbunService.CONFIG_KEY,
+                keyFields: [
+                    { key: 'apiKey', label: 'API Key', placeholder: 'pk1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' },
+                    { key: 'secretApiKey', label: 'Secret API Key', placeholder: 'sk1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' }
+                ],
+                setupUrl: 'https://porkbun.com/account/api',
+                setupNote: 'Generate API keys, then enable API access per domain in Domain Management → Details.',
+                hasRegistration: true
+            },
+            godaddy: {
+                id: 'godaddy',
+                name: 'GoDaddy',
+                icon: '🟢',
+                service: GoDaddyService,
+                configKey: GoDaddyService.CONFIG_KEY,
+                keyFields: [
+                    { key: 'apiKey', label: 'API Key', placeholder: 'Your GoDaddy API Key' },
+                    { key: 'apiSecret', label: 'API Secret', placeholder: 'Your GoDaddy API Secret' }
+                ],
+                setupUrl: 'https://developer.godaddy.com/keys',
+                setupNote: 'Requires 10+ domains or Domain Pro Plan. Create a Production API key (not OTE/Test).',
+                hasRegistration: false
+            }
+        },
+        
+        getAll() {
+            return Object.values(this.PROVIDERS);
+        },
+        
+        get(providerId) {
+            return this.PROVIDERS[providerId] || null;
+        },
+        
+        getService(providerId) {
+            const provider = this.get(providerId);
+            return provider ? provider.service : null;
+        },
+        
+        // Get all configured providers
+        getConfigured() {
+            return this.getAll().filter(p => p.service.isConfigured());
+        },
+        
+        // Get all domains across all configured providers
+        async getAllDomains() {
+            const results = [];
+            for (const provider of this.getConfigured()) {
+                try {
+                    const domains = await provider.service.listDomains();
+                    domains.forEach(d => {
+                        d.provider = provider.id;
+                        d.providerName = provider.name;
+                        d.providerIcon = provider.icon;
+                    });
+                    results.push(...domains);
+                } catch (e) {
+                    console.warn(`Failed to fetch domains from ${provider.name}:`, e);
+                }
+            }
+            return results;
+        },
+        
+        // Get the service for a specific domain (by checking which provider owns it)
+        getServiceForDomain(domain, allDomains) {
+            const match = allDomains.find(d => d.domain === domain);
+            if (match) return this.getService(match.provider);
+            // Default to first configured
+            const configured = this.getConfigured();
+            return configured.length > 0 ? configured[0].service : null;
+        }
+    };
     
     // =========================================================================
     // FIREBASE CONFIG SYNC (v8.17.0 — Server-Side Config Storage)
@@ -652,7 +1303,7 @@
 
     /**
      * IssueService — Minimal issues interface (full UI in Quality satellite)
-     * Retained methods: listen (for globalIssues), update, linkToVersion (for deploy flow)
+     * Retained methods: update, linkToVersion (for deploy flow)
      */
     const IssueService = {
         _ref(uid) {
@@ -1552,264 +2203,9 @@
         filterByApp(streams, appId) { return (streams || []).filter(s => s.appId === appId || (s.appIds && s.appIds.includes(appId))); }
     };
     
-    /**
-     * StreamInterfaceService — Minimal stub (full implementation in Analytics satellite)
-     */
-    const StreamInterfaceService = {
-        BASE_PATH: 'command-center',
-        _ref(uid) { if (!firebaseDb || !uid) return null; return firebaseDb.ref(`${this.BASE_PATH}/${uid}/interfaces`); },
-        listen(uid, callback) {
-            const ref = this._ref(uid);
-            if (!ref) return () => {};
-            ref.on('value', (snapshot) => {
-                const data = snapshot.val();
-                callback(data ? Object.entries(data).map(([id, i]) => ({ id, ...i })) : []);
-            });
-            return () => ref.off();
-        },
-        async update(uid, interfaceId, updates) {
-            const ref = this._ref(uid);
-            if (!ref) return;
-            await ref.child(interfaceId).update(updates);
-        },
-        getByStream(interfaces, streamId) { return (interfaces || []).filter(i => i.streamId === streamId); }
-    };
-    
-    /**
-     * DependencyService — Minimal stub (full implementation in Analytics satellite)
-     */
-    const DependencyService = {
-        BASE_PATH: 'command-center',
-        _ref(uid) { if (!firebaseDb || !uid) return null; return firebaseDb.ref(`${this.BASE_PATH}/${uid}/dependencies`); },
-        listen(uid, callback) {
-            const ref = this._ref(uid);
-            if (!ref) return () => {};
-            ref.on('value', (snapshot) => {
-                const data = snapshot.val();
-                callback(data ? Object.entries(data).map(([id, d]) => ({ id, ...d })) : []);
-            });
-            return () => ref.off();
-        },
-        async update(uid, depId, updates) {
-            const ref = this._ref(uid);
-            if (!ref) return;
-            await ref.child(depId).update(updates);
-        }
-    };
+    // v8.71.0: StreamInterfaceService, DependencyService, DependencyAlertService removed (satellites eliminated — Phase 4)
+    // Retained: IssueService (linkToVersion), WorkStreamService (update), ActivityLogService (logDeploy), WorkItemService (create)
 
-    
-    /**
-     * DependencyAlertService — Auto-remediation alerts (Phase 5.4)
-     * Wraps: Firebase RTDB `command-center/{uid}/dependencyAlerts` path
-     * 
-     * When a session changes a provided interface, alerts are generated
-     * for every dependent stream. Each alert auto-creates a work item
-     * in the dependent stream with change context for prompt chaining.
-     * 
-     *   id: 'DA-NNN'
-     *   dependencyId: which dependency was affected
-     *   interfaceId: which interface changed
-     *   triggeredBySession: session ID that caused the change
-     *   triggeredByItem: work item ID that caused the change
-     *   changeDescription: what changed (user-provided)
-     *   changeNotes: detailed notes for the dependent stream's Claude session
-     *   triggeredAt: timestamp
-     *   triggeredBy: actor name
-     *   generatedItemId: auto-created work item in dependent stream
-     *   resolution: pending | updated | no_impact
-     *   resolvedBy, resolvedAt
-     */
-    const DependencyAlertService = {
-        BASE_PATH: 'command-center',
-        
-        _ref(uid) {
-            if (!firebaseDb || !uid) return null;
-            return firebaseDb.ref(`${this.BASE_PATH}/${uid}/dependencyAlerts`);
-        },
-        
-        // v8.70.10: limitToLast(50) — alerts accumulate, never pruned
-        listen(uid, callback, limit = 50) {
-            const ref = this._ref(uid);
-            if (!ref) return () => {};
-            const query = ref.orderByChild('triggeredAt').limitToLast(limit);
-
-            query.on('value', (snapshot) => {
-                const data = snapshot.val();
-                if (data) {
-                    const list = Object.entries(data).map(([id, alert]) => ({ id, ...alert }));
-                    callback(list.sort((a, b) => new Date(b.triggeredAt || 0) - new Date(a.triggeredAt || 0)));
-                } else {
-                    callback([]);
-                }
-            });
-
-            return () => query.off();
-        },
-
-        async create(uid, data) {
-            const ref = this._ref(uid);
-            if (!ref) return null;
-
-            const alert = {
-                dependencyId: data.dependencyId,
-                interfaceId: data.interfaceId,
-                triggeredBySession: data.triggeredBySession || null,
-                triggeredByItem: data.triggeredByItem || null,
-                changeDescription: data.changeDescription,
-                changeNotes: data.changeNotes || '',
-                triggeredAt: new Date().toISOString(),
-                triggeredBy: data.triggeredBy || 'Owner',
-                generatedItemId: data.generatedItemId || null,
-                resolution: 'pending',
-                resolvedBy: null,
-                resolvedAt: null
-            };
-            
-            await ref.child(data.id).set(alert);
-            console.log(`[DependencyAlertService] Created ${data.id}: ${alert.changeDescription}`);
-            return { id: data.id, ...alert };
-        },
-        
-        async resolve(uid, alertId, resolution, resolvedBy) {
-            const ref = this._ref(uid);
-            if (!ref) return;
-            await ref.child(alertId).update({
-                resolution: resolution,  // 'updated' or 'no_impact'
-                resolvedBy: resolvedBy || 'Owner',
-                resolvedAt: new Date().toISOString()
-            });
-            console.log(`[DependencyAlertService] Resolved ${alertId}: ${resolution}`);
-        },
-        
-        async updateGeneratedItem(uid, alertId, itemId) {
-            const ref = this._ref(uid);
-            if (!ref) return;
-            await ref.child(alertId).update({ generatedItemId: itemId });
-        },
-        
-        async delete(uid, alertId) {
-            const ref = this._ref(uid);
-            if (!ref) return;
-            await ref.child(alertId).remove();
-        },
-        
-        // Get pending alerts for a stream (items that need attention)
-        getPendingForStream(alerts, dependencies, streamId) {
-            const streamDepIds = dependencies.filter(d => d.dependentStreamId === streamId).map(d => d.id);
-            return alerts.filter(a => a.resolution === 'pending' && streamDepIds.includes(a.dependencyId));
-        },
-        
-        // Get all pending alerts
-        getPending(alerts) {
-            return alerts.filter(a => a.resolution === 'pending');
-        },
-        
-        // Get alerts triggered by a specific session
-        getBySession(alerts, sessionId) {
-            return alerts.filter(a => a.triggeredBySession === sessionId);
-        },
-        
-        getNextId(current) {
-            const existing = current.map(a => parseInt(a.id?.replace('DA-', '') || '0'));
-            const max = Math.max(0, ...existing);
-            return `DA-${String(max + 1).padStart(3, '0')}`;
-        },
-        
-        /**
-         * triggerAlerts — Core auto-remediation flow (Phase 5.4)
-         * 
-         * Called when a user confirms an interface changed during post-session review.
-         * For each dependency on the changed interface:
-         *   1. Creates a dependency alert
-         *   2. Auto-creates a work item in the dependent stream with change context
-         *   3. Marks the dependency status as 'changed'
-         *   4. Logs to activity feed
-         * 
-         * The generated work item includes changeContext so when the dependent stream
-         * owner preps a Claude session, the session brief includes what changed and why.
-         * This is the prompt chain: session output → change context → next session input.
-         */
-        async triggerAlerts(uid, { interfaceId, changeDescription, changeNotes, sessionId, workItemId, actor, interfaces, dependencies, streams, workItems, alerts }) {
-            const iface = interfaces.find(i => i.id === interfaceId);
-            if (!iface) return [];
-            
-            // Find all dependencies that consume this interface
-            const affectedDeps = dependencies.filter(d => d.interfaceId === interfaceId);
-            if (affectedDeps.length === 0) return [];
-            
-            const providerStream = streams.find(s => s.id === iface.streamId);
-            const results = [];
-            
-            for (const dep of affectedDeps) {
-                const dependentStream = streams.find(s => s.id === dep.dependentStreamId);
-                if (!dependentStream) continue;
-                
-                // 1. Create the alert
-                const alertId = this.getNextId(alerts.concat(results.map(r => r.alert)));
-                
-                // 2. Auto-create a work item in the dependent stream
-                const itemId = WorkItemService.getNextId(workItems);
-                const workItem = await WorkItemService.create(uid, {
-                    id: itemId,
-                    appId: dependentStream.appId || iface.appId || '',
-                    streamId: dep.dependentStreamId,
-                    title: `Update: ${iface.description} changed`,
-                    description: `Interface "${iface.description}" provided by ${providerStream?.name || 'unknown stream'} has changed.\n\n**What changed:** ${changeDescription}\n\n**Why this stream is affected:** ${dep.context || 'This stream depends on this interface.'}\n\n**Change notes from source session:**\n${changeNotes || 'No additional notes.'}`,
-                    type: 'dependency_update',
-                    priority: 'core',
-                    status: 'ready',
-                    effort: 'session',
-                    criteria: [
-                        `Verify ${dependentStream.name} works correctly with the updated interface`,
-                        `Update any references to: ${iface.description}`
-                    ],
-                    context: {
-                        notes: `Auto-generated from dependency alert ${alertId}. Source session: ${sessionId || 'N/A'}.`,
-                        dependencies: [iface.description],
-                        relatedItems: workItemId ? [workItemId] : []
-                    },
-                    tags: ['dependency-update', 'auto-generated'],
-                    createdBy: actor,
-                    source: 'dependency_alert'
-                });
-                
-                // 3. Create the alert record
-                const alert = await this.create(uid, {
-                    id: alertId,
-                    dependencyId: dep.id,
-                    interfaceId: interfaceId,
-                    triggeredBySession: sessionId,
-                    triggeredByItem: workItemId,
-                    changeDescription: changeDescription,
-                    changeNotes: changeNotes,
-                    triggeredBy: actor,
-                    generatedItemId: itemId
-                });
-                
-                // 4. Mark the dependency as 'changed'
-                await DependencyService.update(uid, dep.id, { 
-                    status: 'changed',
-                    lastChangedAt: new Date().toISOString(),
-                    lastChangedBy: actor
-                });
-                
-                // 5. Log to activity feed
-                ActivityLogService.log(uid, {
-                    appId: dependentStream.appId,
-                    streamId: dep.dependentStreamId,
-                    actor: actor,
-                    action: 'dependency_alert',
-                    summary: `Dependency alert: "${iface.description}" changed — ${dependentStream.name} has update queued`,
-                    metadata: { alertId, interfaceId, dependencyId: dep.id, generatedItemId: itemId }
-                }).catch(e => console.warn('[Activity] Dependency alert log failed:', e));
-                
-                results.push({ alert, workItem, dependency: dep, dependentStream });
-            }
-            
-            return results;
-        }
-    };
-    
     /**
      * TeamService — Multi-person access management (Phase 5.7)
      * Wraps: Firebase RTDB `command-center/{uid}/team` path
@@ -2632,7 +3028,7 @@
     // SESSION TYPES + SESSION BRIEF GENERATOR (v8.25.0 — Phase 2.1)
     // =========================================================================
 
-    // (Domain services extracted to Infrastructure satellite: PorkbunService, GoDaddyService, DomainProviderRegistry)
+    // v8.71.0: Domain services (PorkbunService, GoDaddyService, DomainProviderRegistry) moved to line ~435
     
 
     // [v8.63.0] SESSION_TYPES and SessionBriefGenerator removed — replaced by IdeationBriefGenerator
@@ -3614,25 +4010,7 @@
         return `https://${owner}.github.io/${repoName}/`;
     }
     
-    // Helper to get satellite app URL (resolves to absolute GitHub Pages URL)
-    // Satellites always live in the production repo (command-center), not the test repo
-    // Works from any context: hosted on GitHub Pages, local file://, or in components without 'apps'
-    function getSatelliteUrl(apps, subPath) {
-        // 1. Try to resolve from apps config (most accurate — uses custom domains, etc.)
-        const ccApp = apps && apps['command-center'];
-        const prodRepo = ccApp?.prodRepo || ccApp?.repos?.prod || '';
-        if (prodRepo) {
-            return getGitHubPagesUrl(prodRepo, subPath);
-        }
-        // 2. If on GitHub Pages, always use the production repo for satellites
-        //    Satellites only exist in production (command-center), not test (command-center-test)
-        if (window.location.hostname.endsWith('.github.io')) {
-            const owner = window.location.hostname.split('.')[0];
-            return `${window.location.origin}/command-center/${subPath}/`;
-        }
-        // 3. Fallback: relative path (works when already at the right base)
-        return `${subPath}/`;
-    }
+    // v8.71.0: getSatelliteUrl removed (satellites eliminated — Phase 4)
 
     // Helper to get effective subPath (falls back to defaults if stored value is empty)
     function getEffectiveSubPath(app, appId) {
@@ -3973,7 +4351,40 @@
             if (!response.ok) throw new Error(`Failed to enable Pages`);
             return { enabled: true };
         }
-        
+
+        // v8.71.0: Custom domain configuration for GitHub Pages (ported from Infrastructure satellite)
+        async updatePagesConfig(repo, cname, enforceHttps = false) {
+            const [owner, repoName] = repo.split('/');
+            const response = await fetch(`${this.baseUrl}/repos/${owner}/${repoName}/pages`, {
+                method: 'PUT',
+                headers: { 'Authorization': `token ${this.token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cname: cname,
+                    https_enforced: enforceHttps,
+                    source: { branch: 'main', path: '/' }
+                })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.message || `Failed to update Pages config (${response.status})`);
+            }
+            return await response.json();
+        }
+
+        // v8.71.0: Check GitHub Pages health/DNS status (ported from Infrastructure satellite)
+        async checkPagesHealth(repo) {
+            const [owner, repoName] = repo.split('/');
+            const response = await fetch(`${this.baseUrl}/repos/${owner}/${repoName}/pages/health`, {
+                headers: { 'Authorization': `token ${this.token}`, 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (response.status === 202) return { pending: true };
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.message || `Pages health check failed (${response.status})`);
+            }
+            return await response.json();
+        }
+
         // Get recent workflow runs for a repo
         // v8.70.15: Removed getWorkflowRuns + getWorkflowRun + getWorkflowRunLogsUrl + waitForWorkflowRun + findRecentWorkflowRun + batchCommit
 
@@ -5963,13 +6374,11 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
         // Session log state (persisted to localStorage)
         // v8.70.14: Removed orphaned App-level sessionLog state (SessionLogService removed)
         
-        // Global issues state (synced with Firebase)
-        const [globalIssues, setGlobalIssues] = React.useState([]);
+        // Global state (synced with Firebase)
+        // v8.71.0: Removed globalIssues + globalActivity (no live callers after satellite elimination)
         const [globalWorkItems, setGlobalWorkItems] = React.useState([]);
         const [globalSessions, setGlobalSessions] = React.useState([]);
-        const [globalActivity, setGlobalActivity] = React.useState([]); // Phase 3.4: Activity log
         const [globalStreams, setGlobalStreams] = React.useState([]); // Phase 5.2: Work streams
-        // v8.70.15: Removed globalInterfaces + globalDependencies + globalDependencyAlerts
         const [teamMembers, setTeamMembers] = React.useState([]); // Phase 5.7: Team members
         const [teamMembership, setTeamMembership] = React.useState(null); // Phase 5.7: Current user's membership (null = owner)
         const [globalConcepts, setGlobalConcepts] = React.useState([]); // Ideation: ODRC concepts
@@ -5980,115 +6389,64 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
         const [firebaseUid, setFirebaseUid] = React.useState(null);
         const [firebaseUser, setFirebaseUser] = React.useState(null);
         
-        // Listen for Firebase auth and load issues
+        // Listen for Firebase auth and load data
         React.useEffect(() => {
             if (!firebaseAuth) return;
-            
-            let unsubscribeIssues = () => {};
-            let unsubscribeWorkItems = () => {};
-            let unsubscribeSessions = () => {};
-            let unsubscribeActivity = () => {};
-            let unsubscribeStreams = () => {};
 
-            let unsubscribeTeam = () => {};
-            let unsubscribeTeamMembership = () => {};
+            let unsubscribeSessions = () => {};
             let unsubscribeConcepts = () => {};
             let unsubscribeIdeas = () => {};
             let unsubscribeJobs = () => {};
-            let unsubscribeCompletionJobs = () => {};
-            // v8.70.15: Removed unsubscribeCompletionSettings (completion pipeline eliminated)
-            let unsubscribeOrphans = () => {};
+            // v8.71.0: Removed dead unsubscribe vars (issues, workItems, activity, streams, completionJobs, orphans)
+            // Suspended: team, teamMembership, workItems, streams — re-enable when features become active
 
             const unsubscribe = firebaseAuth.onAuthStateChanged((u) => {
                 setFirebaseUser(u);
                 if (u) {
                     setFirebaseUid(u.uid);
-                    // v8.70.0: Wire SecretManager + ConfigSync to user UID
                     SecretManager.setUid(u.uid);
                     FirebaseConfigSync.setUid(u.uid);
-                    // Migrate legacy un-namespaced secrets (sync, fast)
                     SecretManager.migrateFromGlobal();
-                    // Migrate legacy global Firebase data (async)
                     FirebaseConfigSync.migrateFromGlobal().catch(e =>
                         console.error('[CC] ConfigSync migration failed:', e)
                     );
-                    // Hydrate githubToken from namespaced storage
                     const storedToken = SecretManager.get('token');
                     if (storedToken) setGithubToken(storedToken);
-                    // Check if setup is complete (GitHub token = minimum viable credential)
                     setSetupComplete(SecretManager.has('token'));
-                    // v8.70.11: Listener audit — only enable listeners for collections with data
-                    // or core features. Empty collections (issues, workItems, streams, interfaces,
-                    // dependencies, dependencyAlerts, team, teamMembership, activity) are suspended
-                    // to eliminate unnecessary Firebase re-syncs. Re-enable when features are used.
 
-                    // --- ESSENTIAL LISTENERS (collections with data, core features) ---
-                    // Sessions (17 records, 25 KB, limitToLast=100)
+                    // --- ESSENTIAL LISTENERS ---
                     unsubscribeSessions = SessionService.listen(u.uid, setGlobalSessions);
-                    // ODRC concepts and ideas (core ideation platform)
                     unsubscribeConcepts = ConceptManager.listen(u.uid, setGlobalConcepts);
                     unsubscribeIdeas = IdeaManager.listen(u.uid, setGlobalIdeas);
-                    // v8.70.18: Jobs (MCP-managed, read-only visualization)
                     unsubscribeJobs = JobService.listen(u.uid, setGlobalJobs);
-                    // v8.64.0 A1: Backfill missing fields on existing Ideas (idempotent, async)
                     IdeaManager.backfillMissingFields(u.uid).catch(e =>
                         console.error('[CC] Idea backfill failed:', e)
                     );
-                    // v8.70.15: Removed CompletionFileService.listen() and CompletionFileSettings.listen() calls
-
-                    // v8.70.15: Suspended listeners — re-enable when features become active
-                    // unsubscribeIssues = IssueService.listen(u.uid, setGlobalIssues);
-                    // unsubscribeWorkItems = WorkItemService.listen(u.uid, setGlobalWorkItems);
-                    // unsubscribeActivity = ActivityLogService.listen(u.uid, setGlobalActivity);
-                    // unsubscribeStreams = WorkStreamService.listen(u.uid, setGlobalStreams);
-                    // unsubscribeTeam = TeamService.listen(u.uid, setTeamMembers);
-                    // unsubscribeTeamMembership = TeamService.listenMemberships(u.uid, setTeamMembership);
-
-                    // v8.70.15: Orphan detection removed (completion pipeline eliminated)
                 } else {
                     setFirebaseUid(null);
-                    // v8.70.0: Clear SecretManager + ConfigSync UIDs (secrets persist in localStorage)
                     SecretManager.setUid(null);
                     FirebaseConfigSync.setUid(null);
                     setSetupComplete(false);
                     setGithubToken('');
-                    setGlobalIssues([]);
                     setGlobalWorkItems([]);
                     setGlobalSessions([]);
-                    setGlobalActivity([]);
                     setGlobalStreams([]);
-
                     setTeamMembers([]);
                     setTeamMembership(null);
                     setGlobalConcepts([]);
                     setGlobalIdeas([]);
                     setGlobalJobs([]);
-                    // v8.70.15: Removed completion/orphan state resets (pipeline eliminated)
                 }
             });
-            
+
             return () => {
                 unsubscribe();
-                unsubscribeIssues();
-                unsubscribeWorkItems();
                 unsubscribeSessions();
-                unsubscribeActivity();
-                unsubscribeStreams();
-
-                unsubscribeTeam();
-                unsubscribeTeamMembership();
                 unsubscribeConcepts();
                 unsubscribeIdeas();
                 unsubscribeJobs();
-                unsubscribeCompletionJobs();
-                // v8.70.15: unsubscribeCompletionSettings removed
-                unsubscribeOrphans();
             };
         }, []);
-
-        // Completion file + orphan commit detection — poll on mount and view changes to dashboard/jobHistory
-        // v8.70.7: Wait for Firebase listener to hydrate existing jobs before polling (prevents duplicate creation)
-        // v8.70.15: Removed Completion polling useEffect + completionPollRef
 
         // Link issues to a deployed version
         // Phase 5.7: Effective workspace UID — if user is a team member, use owner's UID for data access
@@ -6446,7 +6804,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                         )}
                                     </button>
                                 ))}
-                                {/* Settings — flat tab (N5: Environments moved to Infrastructure satellite) */}
+                                {/* Settings */}
                                 <button
                                     onClick={() => setView('settings')}
                                     className={`px-3 py-1.5 rounded text-sm flex items-center gap-1 ${
@@ -6455,38 +6813,6 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                 >
                                     <span>⚙️</span> Settings
                                 </button>
-                                {/* Satellite Launcher */}
-                                <div className="relative group">
-                                    <button className="px-2.5 py-1.5 rounded text-sm flex items-center gap-1 text-slate-400 hover:text-white hover:bg-slate-700" title="Satellite Apps">
-                                        <span>🛰️</span>
-                                        <span className="text-xs opacity-60">▼</span>
-                                    </button>
-                                    <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[200px]">
-                                        <div className="px-3 py-2 text-xs text-slate-500 border-b border-slate-700 font-semibold uppercase tracking-wider">Satellite Apps</div>
-                                        {[
-                                            { id: 'infrastructure', icon: '🔧', label: 'Infrastructure', desc: 'Firebase, GitHub, Domains', ready: true },
-                                            { id: 'quality', icon: '✅', label: 'Quality', desc: 'Issues, Releases, Archive', ready: true },
-                                            { id: 'analytics', icon: '📈', label: 'Analytics', desc: 'Portfolio, Users, Streams, Briefs', ready: true }
-                                        ].map(sat => (
-                                            <a key={sat.id}
-                                                href={sat.ready ? getSatelliteUrl(apps, sat.id) : '#'}
-                                                target={sat.ready ? '_blank' : undefined}
-                                                rel={sat.ready ? 'noopener' : undefined}
-                                                onClick={sat.ready ? undefined : (e) => e.preventDefault()}
-                                                className={`flex items-start gap-2.5 px-3 py-2.5 text-sm transition-colors ${sat.ready ? 'text-slate-300 hover:bg-slate-700 cursor-pointer' : 'text-slate-600 cursor-default'}`}
-                                            >
-                                                <span className="mt-0.5">{sat.icon}</span>
-                                                <div>
-                                                    <div className="flex items-center gap-1.5">
-                                                        {sat.label}
-                                                        {!sat.ready && <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-500 rounded-full">Coming Soon</span>}
-                                                    </div>
-                                                    <div className="text-xs text-slate-500 mt-0.5">{sat.desc}</div>
-                                                </div>
-                                            </a>
-                                        ))}
-                                    </div>
-                                </div>
                             </div>
                         </div>
                         
@@ -6699,7 +7025,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                     {/* [v8.63.2] Environments moved to Infrastructure satellite (N5) */}
                     
                     {view === 'settings' && (
-                        <SettingsView token={githubToken} setToken={setGithubToken} repoCount={availableRepos.length} syncStatus={syncStatus} onForceSync={handleForceSync} config={config} onConfigChange={handleConfigChange} firebaseUid={firebaseUid} firebaseUser={firebaseUser} teamMembers={teamMembers} teamMembership={teamMembership} showAlert={showAlert} showConfirm={showConfirm} />
+                        <SettingsView token={githubToken} setToken={setGithubToken} repoCount={availableRepos.length} syncStatus={syncStatus} onForceSync={handleForceSync} config={config} onConfigChange={handleConfigChange} firebaseUid={firebaseUid} firebaseUser={firebaseUser} teamMembers={teamMembers} teamMembership={teamMembership} showAlert={showAlert} showConfirm={showConfirm} apps={apps} />
                     )}
                     
                     {view === 'setup' && (
@@ -11068,10 +11394,6 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                                     
                                                     {/* Actions */}
                                                     <div className="col-span-1 flex gap-1 justify-end">
-                                                        <button onClick={() => window.open(getSatelliteUrl(null, 'analytics'), '_blank')}
-                                                            className="p-1.5 text-slate-500 hover:text-blue-400 hover:bg-slate-700 rounded" title="Product Brief (Analytics satellite)">
-                                                            📄
-                                                        </button>
                                                         <button onClick={() => setPrepApp(app)}
                                                             className="p-1.5 text-slate-500 hover:text-purple-400 hover:bg-slate-700 rounded" title="Claude Prep">
                                                             🤖
@@ -14318,6 +14640,1093 @@ The developer uses Claude for iterative development — each session should:
         );
     }
 
+
+    // =========================================================================
+    // INFRASTRUCTURE COMPONENTS (ported from Infrastructure satellite, v8.71.0)
+    // =========================================================================
+
+    function FirebaseRulesManager({ showAlert, showConfirm }) {
+        const [rules, setRules] = React.useState(null);
+        const [editedRules, setEditedRules] = React.useState('');
+        const [loading, setLoading] = React.useState(false);
+        const [deploying, setDeploying] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [isEditing, setIsEditing] = React.useState(false);
+        const [parseError, setParseError] = React.useState(null);
+        const [history, setHistory] = React.useState(() => {
+            try {
+                return JSON.parse(localStorage.getItem('cc_rulesHistory') || '[]');
+            } catch { return []; }
+        });
+        const [showHistory, setShowHistory] = React.useState(false);
+        const [selectedSnapshot, setSelectedSnapshot] = React.useState(null);
+        const [diffView, setDiffView] = React.useState(false);
+        const [hasChanges, setHasChanges] = React.useState(false);
+        
+        const configured = firebaseAdmin.isConfigured();
+        
+        // Fetch current rules
+        const fetchRules = async () => {
+            if (!configured) return;
+            setLoading(true);
+            setError(null);
+            try {
+                const result = await firebaseAdmin.getRules();
+                setRules(result);
+                const formatted = JSON.stringify(result, null, 2);
+                setEditedRules(formatted);
+                setIsEditing(false);
+                setHasChanges(false);
+                setParseError(null);
+            } catch (e) {
+                setError(e.message);
+            }
+            setLoading(false);
+        };
+        
+        // Validate JSON on edit
+        const handleEditChange = (value) => {
+            setEditedRules(value);
+            setParseError(null);
+            try {
+                const parsed = JSON.parse(value);
+                if (!parsed.rules) {
+                    setParseError('Rules JSON must have a top-level "rules" key');
+                }
+            } catch (e) {
+                setParseError(e.message);
+            }
+            // Check if different from fetched rules
+            try {
+                const currentStr = JSON.stringify(rules, null, 2);
+                setHasChanges(value.trim() !== currentStr.trim());
+            } catch {
+                setHasChanges(true);
+            }
+        };
+        
+        // Save snapshot to history
+        const saveSnapshot = (rulesObj, label = 'Before deploy') => {
+            const snapshot = {
+                id: Date.now(),
+                timestamp: new Date().toISOString(),
+                label,
+                rules: rulesObj,
+                size: JSON.stringify(rulesObj).length
+            };
+            const updated = [snapshot, ...history].slice(0, 20); // Keep last 20
+            setHistory(updated);
+            try {
+                localStorage.setItem('cc_rulesHistory', JSON.stringify(updated));
+                // Firebase dual-write);
+                }
+            } catch (e) {
+                console.warn('Failed to save rules history:', e);
+            }
+            return snapshot;
+        };
+        
+        // Deploy rules
+        const handleDeploy = async () => {
+            if (parseError) {
+                showAlert('Cannot deploy — there are JSON errors:\n\n' + parseError, 'Validation Error');
+                return;
+            }
+            
+            let parsed;
+            try {
+                parsed = JSON.parse(editedRules);
+            } catch (e) {
+                showAlert('Invalid JSON: ' + e.message, 'Validation Error');
+                return;
+            }
+            
+            if (!parsed.rules) {
+                showAlert('Rules JSON must have a top-level "rules" key.\n\nExample:\n{\n  "rules": {\n    ".read": false,\n    ".write": false\n  }\n}', 'Invalid Rules Structure');
+                return;
+            }
+            
+            // Count paths for context
+            const countPaths = (obj, depth = 0) => {
+                if (!obj || typeof obj !== 'object') return 0;
+                return Object.keys(obj).reduce((sum, key) => sum + 1 + countPaths(obj[key], depth + 1), 0);
+            };
+            const pathCount = countPaths(parsed.rules);
+            
+            const confirmed = await showConfirm(
+                `Deploy security rules to ${FIREBASE_CONFIG.projectId}?\n\nThis will OVERWRITE all existing rules (${pathCount} paths/properties).\n\nA snapshot of the current rules will be saved to history before deploying.`,
+                'Deploy Rules'
+            );
+            if (!confirmed) return;
+            
+            setDeploying(true);
+            setError(null);
+            
+            try {
+                // Snapshot current rules before overwriting
+                if (rules) {
+                    saveSnapshot(rules, 'Before deploy');
+                }
+                
+                const result = await firebaseAdmin.putRules(parsed);
+                setRules(result);
+                const formatted = JSON.stringify(result, null, 2);
+                setEditedRules(formatted);
+                setIsEditing(false);
+                setHasChanges(false);
+                showAlert('Rules deployed successfully!', 'Deploy Complete');
+            } catch (e) {
+                setError('Deploy failed: ' + e.message);
+            }
+            
+            setDeploying(false);
+        };
+        
+        // Restore from snapshot
+        const handleRestore = async (snapshot) => {
+            const confirmed = await showConfirm(
+                `Restore rules from ${new Date(snapshot.timestamp).toLocaleString()}?\n\nThis will replace the editor content. You still need to click "Deploy" to push to Firebase.`,
+                'Restore Snapshot'
+            );
+            if (!confirmed) return;
+            
+            const formatted = JSON.stringify(snapshot.rules, null, 2);
+            setEditedRules(formatted);
+            setIsEditing(true);
+            setHasChanges(true);
+            setParseError(null);
+            setShowHistory(false);
+            setSelectedSnapshot(null);
+        };
+        
+        // Delete a snapshot
+        const handleDeleteSnapshot = (snapshotId) => {
+            const updated = history.filter(h => h.id !== snapshotId);
+            setHistory(updated);
+            try {
+                localStorage.setItem('cc_rulesHistory', JSON.stringify(updated));
+                // Firebase dual-write);
+                }
+            } catch {}
+            if (selectedSnapshot?.id === snapshotId) {
+                setSelectedSnapshot(null);
+            }
+        };
+        
+        // Compute simple line-by-line diff
+        const computeDiff = (oldText, newText) => {
+            const oldLines = oldText.split('\n');
+            const newLines = newText.split('\n');
+            const maxLen = Math.max(oldLines.length, newLines.length);
+            const result = [];
+            for (let i = 0; i < maxLen; i++) {
+                const oldLine = oldLines[i];
+                const newLine = newLines[i];
+                if (oldLine === newLine) {
+                    result.push({ type: 'same', line: oldLine, num: i + 1 });
+                } else {
+                    if (oldLine !== undefined) result.push({ type: 'removed', line: oldLine, num: i + 1 });
+                    if (newLine !== undefined) result.push({ type: 'added', line: newLine, num: i + 1 });
+                }
+            }
+            return result;
+        };
+        
+        // Not configured state
+        if (!configured) {
+            return (
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🔒 Security Rules Manager
+                    </h2>
+                    <div className="p-4 bg-amber-900/20 border border-amber-700 rounded-lg">
+                        <p className="text-amber-400 font-medium">Service account required</p>
+                        <p className="text-sm text-slate-400 mt-2">
+                            To manage Firebase security rules, configure a service account key in 
+                            <strong className="text-white"> Configure → Settings → Firebase Admin</strong>.
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+        
+        return (
+            <div className="space-y-6">
+                {/* Header & Actions */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                            🔒 Security Rules — <span className="font-mono text-indigo-400">{FIREBASE_CONFIG.projectId}</span>
+                        </h2>
+                        <div className="flex items-center gap-2">
+                            <button 
+                                onClick={() => setShowHistory(!showHistory)}
+                                className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 ${
+                                    showHistory ? 'bg-indigo-600' : 'bg-slate-700 hover:bg-slate-600'
+                                }`}
+                            >
+                                📜 History ({history.length})
+                            </button>
+                            <button 
+                                onClick={fetchRules} 
+                                disabled={loading}
+                                className="px-4 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm flex items-center gap-1.5"
+                            >
+                                {loading ? '⏳' : '🔄'} {loading ? 'Loading...' : 'Fetch Rules'}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    {/* Admin info */}
+                    {(() => {
+                        const info = firebaseAdmin.getInfo();
+                        return info ? (
+                            <div className="text-xs text-slate-500 flex items-center gap-4">
+                                <span>SA: {info.email}</span>
+                                <span>Token: {info.tokenValid ? '🟢 Active' : info.tokenCached ? '🟡 Expired' : '⚪ Not requested'}</span>
+                            </div>
+                        ) : null;
+                    })()}
+                    
+                    {error && (
+                        <div className="mt-4 p-3 bg-red-900/30 border border-red-700 rounded text-red-400 text-sm">
+                            {error}
+                        </div>
+                    )}
+                </div>
+                
+                {/* History Panel */}
+                {showHistory && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                        <h3 className="font-semibold mb-4 flex items-center gap-2">
+                            📜 Rules History
+                            <span className="text-xs text-slate-500 font-normal">({history.length} snapshots, stored in localStorage)</span>
+                        </h3>
+                        
+                        {history.length === 0 ? (
+                            <p className="text-slate-500 text-sm">No snapshots yet. A snapshot is saved automatically before each deploy.</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {history.map((snap) => (
+                                    <div key={snap.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                                        selectedSnapshot?.id === snap.id 
+                                            ? 'bg-indigo-900/30 border-indigo-600' 
+                                            : 'bg-slate-900 border-slate-700 hover:border-slate-600'
+                                    }`}>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm font-medium">{snap.label}</span>
+                                                <span className="text-xs text-slate-500">
+                                                    {(snap.size / 1024).toFixed(1)} KB
+                                                </span>
+                                            </div>
+                                            <div className="text-xs text-slate-500 mt-0.5">
+                                                {new Date(snap.timestamp).toLocaleString()}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 ml-4">
+                                            <button 
+                                                onClick={() => setSelectedSnapshot(selectedSnapshot?.id === snap.id ? null : snap)}
+                                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs"
+                                            >
+                                                {selectedSnapshot?.id === snap.id ? 'Hide' : 'View'}
+                                            </button>
+                                            <button 
+                                                onClick={() => handleRestore(snap)}
+                                                className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs"
+                                            >
+                                                Restore
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteSnapshot(snap.id)}
+                                                className="px-2 py-1 hover:bg-red-900/50 rounded text-xs text-red-400"
+                                                title="Delete snapshot"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        
+                        {/* Snapshot preview */}
+                        {selectedSnapshot && (
+                            <div className="mt-4">
+                                <div className="flex items-center justify-between mb-2">
+                                    <h4 className="text-sm font-medium text-slate-300">
+                                        Snapshot: {new Date(selectedSnapshot.timestamp).toLocaleString()}
+                                    </h4>
+                                    {rules && (
+                                        <button 
+                                            onClick={() => setDiffView(!diffView)}
+                                            className={`px-2 py-1 rounded text-xs ${diffView ? 'bg-amber-600' : 'bg-slate-700 hover:bg-slate-600'}`}
+                                        >
+                                            {diffView ? 'Raw View' : 'Diff vs Current'}
+                                        </button>
+                                    )}
+                                </div>
+                                {diffView && rules ? (
+                                    <div className="bg-slate-900 rounded p-4 max-h-[400px] overflow-auto font-mono text-xs">
+                                        {computeDiff(
+                                            JSON.stringify(selectedSnapshot.rules, null, 2),
+                                            JSON.stringify(rules, null, 2)
+                                        ).map((line, i) => (
+                                            <div key={i} className={`${
+                                                line.type === 'removed' ? 'bg-red-900/30 text-red-400' :
+                                                line.type === 'added' ? 'bg-green-900/30 text-green-400' :
+                                                'text-slate-500'
+                                            }`}>
+                                                <span className="inline-block w-8 text-right mr-3 text-slate-600 select-none">{line.num}</span>
+                                                <span>{line.type === 'removed' ? '- ' : line.type === 'added' ? '+ ' : '  '}</span>
+                                                {line.line}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <pre className="bg-slate-900 rounded p-4 max-h-[400px] overflow-auto font-mono text-xs text-slate-300 whitespace-pre-wrap">
+                                        {JSON.stringify(selectedSnapshot.rules, null, 2)}
+                                    </pre>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* Rules Editor */}
+                {rules !== null && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold flex items-center gap-2">
+                                {isEditing ? '✏️ Editing Rules' : '📄 Current Rules'}
+                                {hasChanges && (
+                                    <span className="px-2 py-0.5 bg-amber-600/30 text-amber-400 text-xs rounded-full">
+                                        Unsaved changes
+                                    </span>
+                                )}
+                            </h3>
+                            <div className="flex items-center gap-2">
+                                {!isEditing ? (
+                                    <>
+                                        <button 
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(editedRules);
+                                                showAlert('Rules copied to clipboard', 'Copied');
+                                            }}
+                                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm"
+                                        >
+                                            📋 Copy
+                                        </button>
+                                        <button 
+                                            onClick={() => {
+                                                saveSnapshot(rules, 'Manual snapshot');
+                                                showAlert('Snapshot saved to history', 'Snapshot Saved');
+                                            }}
+                                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm"
+                                        >
+                                            📸 Snapshot
+                                        </button>
+                                        <button 
+                                            onClick={() => setIsEditing(true)}
+                                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-sm"
+                                        >
+                                            ✏️ Edit
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button 
+                                            onClick={() => {
+                                                setEditedRules(JSON.stringify(rules, null, 2));
+                                                setIsEditing(false);
+                                                setHasChanges(false);
+                                                setParseError(null);
+                                            }}
+                                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button 
+                                            onClick={() => {
+                                                // Format / prettify
+                                                try {
+                                                    const parsed = JSON.parse(editedRules);
+                                                    setEditedRules(JSON.stringify(parsed, null, 2));
+                                                    setParseError(null);
+                                                } catch (e) {
+                                                    setParseError(e.message);
+                                                }
+                                            }}
+                                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm"
+                                        >
+                                            🧹 Format
+                                        </button>
+                                        <button 
+                                            onClick={handleDeploy}
+                                            disabled={deploying || !!parseError || !hasChanges}
+                                            className={`px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1.5 ${
+                                                deploying || !!parseError || !hasChanges
+                                                    ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
+                                                    : 'bg-green-600 hover:bg-green-500 text-white'
+                                            }`}
+                                        >
+                                            {deploying ? '⏳ Deploying...' : '🚀 Deploy Rules'}
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* Parse error banner */}
+                        {parseError && (
+                            <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded text-sm">
+                                <span className="text-red-400 font-medium">JSON Error: </span>
+                                <span className="text-red-300 font-mono">{parseError}</span>
+                            </div>
+                        )}
+                        
+                        {/* Editor area */}
+                        {isEditing ? (
+                            <textarea
+                                value={editedRules}
+                                onChange={e => handleEditChange(e.target.value)}
+                                className={`w-full bg-slate-900 border rounded p-4 font-mono text-sm text-slate-300 leading-relaxed resize-y ${
+                                    parseError ? 'border-red-600' : 'border-slate-600 focus:border-indigo-500'
+                                } focus:outline-none`}
+                                style={{ minHeight: '400px', maxHeight: '700px', tabSize: 2 }}
+                                spellCheck={false}
+                                onKeyDown={e => {
+                                    // Tab support in textarea
+                                    if (e.key === 'Tab') {
+                                        e.preventDefault();
+                                        const start = e.target.selectionStart;
+                                        const end = e.target.selectionEnd;
+                                        const val = e.target.value;
+                                        const newVal = val.substring(0, start) + '  ' + val.substring(end);
+                                        handleEditChange(newVal);
+                                        // Set cursor position after React re-renders
+                                        requestAnimationFrame(() => {
+                                            e.target.selectionStart = e.target.selectionEnd = start + 2;
+                                        });
+                                    }
+                                }}
+                            />
+                        ) : (
+                            <div className="relative">
+                                <pre className="bg-slate-900 border border-slate-700 rounded p-4 font-mono text-sm text-slate-300 leading-relaxed overflow-auto max-h-[600px] whitespace-pre-wrap">
+                                    {editedRules}
+                                </pre>
+                                <div className="absolute top-3 right-3 text-xs text-slate-600">
+                                    {(editedRules.length / 1024).toFixed(1)} KB · {editedRules.split('\n').length} lines
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Editor stats */}
+                        {isEditing && (
+                            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                                <div className="flex items-center gap-3">
+                                    <span>{editedRules.split('\n').length} lines</span>
+                                    <span>{(editedRules.length / 1024).toFixed(1)} KB</span>
+                                    {!parseError && <span className="text-green-500">✓ Valid JSON</span>}
+                                </div>
+                                <div>Tab inserts spaces · Ctrl+Z to undo</div>
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* Empty state — no rules loaded yet */}
+                {rules === null && !loading && !error && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-8 text-center">
+                        <div className="text-4xl mb-3">🔒</div>
+                        <p className="text-slate-400 mb-4">Click <strong>Fetch Rules</strong> to load the current security rules from Firebase.</p>
+                        <button 
+                            onClick={fetchRules}
+                            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium"
+                        >
+                            Fetch Rules
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    function DomainsView({ apps, config, githubToken, showAlert, showConfirm }) {
+        const [domains, setDomains] = React.useState(null);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [selectedDomain, setSelectedDomain] = React.useState(null);
+        const [dnsRecords, setDnsRecords] = React.useState(null);
+        const [loadingDNS, setLoadingDNS] = React.useState(false);
+        const [addingRecord, setAddingRecord] = React.useState(false);
+        const [newRecord, setNewRecord] = React.useState({ type: 'A', name: '', content: '', ttl: '600' });
+        const [wiringDomain, setWiringDomain] = React.useState(null);
+        const [wireLog, setWireLog] = React.useState([]);
+        const [wireProgress, setWireProgress] = React.useState(false);
+        
+        // Get the service for the currently selected domain
+        const getServiceForDomain = (domain) => {
+            return DomainProviderRegistry.getServiceForDomain(domain, domains || []);
+        };
+        
+        // Load domains from all configured providers
+        const fetchDomains = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const allDomains = await DomainProviderRegistry.getAllDomains();
+                setDomains(allDomains);
+                if (allDomains.length > 0 && !selectedDomain) {
+                    setSelectedDomain(allDomains[0].domain);
+                }
+            } catch (e) {
+                setError(e.message);
+            }
+            setLoading(false);
+        };
+        
+        // Load DNS records for selected domain
+        const fetchDNS = async (domain) => {
+            setLoadingDNS(true);
+            try {
+                const service = getServiceForDomain(domain);
+                if (!service) throw new Error('No provider found for this domain');
+                const records = await service.listDNSRecords(domain);
+                setDnsRecords(records);
+            } catch (e) {
+                showAlert(`Failed to load DNS: ${e.message}`, 'error');
+            }
+            setLoadingDNS(false);
+        };
+        
+        // Fetch on mount
+        React.useEffect(() => {
+            if (DomainProviderRegistry.getConfigured().length > 0) fetchDomains();
+        }, []);
+        
+        // Fetch DNS when domain changes
+        React.useEffect(() => {
+            if (selectedDomain) fetchDNS(selectedDomain);
+        }, [selectedDomain]);
+        
+        // Add DNS record
+        const handleAddRecord = async () => {
+            if (!newRecord.type || !newRecord.content) return;
+            setAddingRecord(true);
+            try {
+                const service = getServiceForDomain(selectedDomain);
+                if (!service) throw new Error('No provider found for this domain');
+                await service.createDNSRecord(
+                    selectedDomain, newRecord.type, newRecord.name, 
+                    newRecord.content, parseInt(newRecord.ttl) || 600,
+                    newRecord.type === 'MX' ? parseInt(newRecord.prio) || 10 : null
+                );
+                showAlert('DNS record created', 'success');
+                setNewRecord({ type: 'A', name: '', content: '', ttl: '600' });
+                await fetchDNS(selectedDomain);
+            } catch (e) {
+                showAlert(`Failed to create record: ${e.message}`, 'error');
+            }
+            setAddingRecord(false);
+        };
+        
+        // Delete DNS record
+        const handleDeleteRecord = async (recordId, recordDesc) => {
+            const confirmed = await showConfirm(`Delete ${recordDesc}?`, 'Delete DNS Record');
+            if (!confirmed) return;
+            try {
+                const service = getServiceForDomain(selectedDomain);
+                if (!service) throw new Error('No provider found for this domain');
+                // GoDaddy needs all records to do a replace-minus-one
+                await service.deleteDNSRecord(selectedDomain, recordId, dnsRecords);
+                showAlert('Record deleted', 'success');
+                await fetchDNS(selectedDomain);
+            } catch (e) {
+                showAlert(`Failed to delete: ${e.message}`, 'error');
+            }
+        };
+        
+        // Wire domain for GitHub Pages
+        const handleWireForGitHubPages = async (domain, repo) => {
+            setWireProgress(true);
+            setWireLog(['🚀 Starting GitHub Pages configuration...']);
+            
+            try {
+                const service = getServiceForDomain(domain);
+                if (!service) throw new Error('No provider found for this domain');
+                const domainEntry = (domains || []).find(d => d.domain === domain);
+                const providerName = domainEntry?.providerName || 'registrar';
+                
+                // Step 1: Configure DNS at registrar
+                setWireLog(prev => [...prev, `📡 Configuring DNS records at ${providerName}...`]);
+                const githubUsername = repo.split('/')[0];
+                const dnsResult = await service.configureForGitHubPages(domain, githubUsername);
+                dnsResult.log.forEach(l => setWireLog(prev => [...prev, `  ${l}`]));
+                setWireLog(prev => [...prev, `✅ ${dnsResult.recordsCreated} DNS records created`]);
+                
+                // Step 2: Create CNAME file in repo
+                setWireLog(prev => [...prev, '📄 Committing CNAME file to repo...']);
+                const github = new GitHubAPI(githubToken);
+                await github.createOrUpdateFile(repo, 'CNAME', domain, `Add custom domain CNAME for ${domain}`);
+                setWireLog(prev => [...prev, '✅ CNAME file committed']);
+                
+                // Step 3: Update GitHub Pages config
+                setWireLog(prev => [...prev, '⚙️ Updating GitHub Pages configuration...']);
+                await github.updatePagesConfig(repo, domain, false);
+                setWireLog(prev => [...prev, '✅ Custom domain set on GitHub Pages']);
+                
+                setWireLog(prev => [...prev, '', '🎉 Domain configuration complete!', `🌐 ${domain} will be live once DNS propagates (5-30 minutes)`, '🔒 HTTPS will auto-enable after DNS propagation']);
+                
+                showAlert(`${domain} configured for GitHub Pages! DNS may take 5-30 minutes to propagate.`, 'success');
+                
+                // Refresh DNS records view
+                await fetchDNS(domain);
+            } catch (e) {
+                setWireLog(prev => [...prev, `❌ Error: ${e.message}`]);
+                showAlert(`Wiring failed: ${e.message}`, 'error');
+            }
+            setWireProgress(false);
+        };
+        
+        // Not configured
+        if (DomainProviderRegistry.getConfigured().length === 0) {
+            return (
+                <div className="max-w-4xl mx-auto">
+                    <div className="flex items-center gap-3 mb-6">
+                        <span className="text-2xl">🌐</span>
+                        <h1 className="text-2xl font-bold">Domains</h1>
+                    </div>
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-8 text-center">
+                        <span className="text-4xl block mb-4">🔑</span>
+                        <h3 className="text-lg font-semibold mb-2">No Domain Registrars Configured</h3>
+                        <p className="text-slate-400 text-sm mb-4">Add API keys for Porkbun, GoDaddy, or both in Settings to manage domains from Command Center.</p>
+                        <p className="text-slate-500 text-xs">Configure → Settings → 🌐 Domain Registrar</p>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Record type colors
+        const typeColors = {
+            A: 'bg-blue-600/20 text-blue-400',
+            AAAA: 'bg-cyan-600/20 text-cyan-400',
+            CNAME: 'bg-green-600/20 text-green-400',
+            MX: 'bg-purple-600/20 text-purple-400',
+            TXT: 'bg-amber-600/20 text-amber-400',
+            NS: 'bg-slate-600/20 text-slate-400',
+            SRV: 'bg-pink-600/20 text-pink-400',
+            ALIAS: 'bg-emerald-600/20 text-emerald-400',
+            CAA: 'bg-orange-600/20 text-orange-400',
+        };
+        
+        // Check if domain is already wired for GitHub Pages
+        const isGitHubPagesWired = (records) => {
+            if (!records) return false;
+            const ghIPs = PorkbunService.GITHUB_PAGES_IPS; // Same IPs regardless of provider
+            const aRecords = records.filter(r => r.type === 'A').map(r => r.content);
+            const hasGHIPs = ghIPs.every(ip => aRecords.includes(ip));
+            const hasCNAME = records.some(r => r.type === 'CNAME' && r.content.includes('.github.io'));
+            return hasGHIPs && hasCNAME;
+        };
+        
+        // Find which apps could use this domain (have repos assigned)
+        const getAppsWithRepos = () => {
+            return Object.entries(apps)
+                .filter(([_, a]) => a.testRepo || a.prodRepo)
+                .map(([id, a]) => ({ id, ...a }));
+        };
+        
+        return (
+            <div className="max-w-6xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                        <span className="text-2xl">🌐</span>
+                        <div>
+                            <h1 className="text-2xl font-bold">Domains</h1>
+                            <p className="text-slate-400 text-sm">DNS management and GitHub Pages domain wiring</p>
+                        </div>
+                    </div>
+                    <button onClick={fetchDomains} disabled={loading}
+                        className="px-3 py-1.5 text-sm bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-40">
+                        {loading ? '⏳' : '🔄'} Refresh
+                    </button>
+                </div>
+                
+                {error && (
+                    <div className="bg-red-900/30 border border-red-700 text-red-300 rounded-xl p-4 mb-6 text-sm">
+                        ❌ {error}
+                    </div>
+                )}
+                
+                {/* Domain Selector */}
+                {domains && domains.length > 0 && (
+                    <div className="flex gap-2 mb-6 flex-wrap">
+                        {domains.map(d => (
+                            <button key={d.domain}
+                                onClick={() => setSelectedDomain(d.domain)}
+                                className={`px-4 py-2 rounded-lg text-sm font-mono transition-all flex items-center gap-2 ${
+                                    selectedDomain === d.domain 
+                                        ? 'bg-indigo-600 text-white ring-1 ring-indigo-400' 
+                                        : 'bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700'
+                                }`}>
+                                <span>{d.providerIcon || '🌐'}</span>
+                                <span>{d.domain}</span>
+                            </button>
+                        ))}
+                    </div>
+                )}
+                
+                {loading && <div className="text-center text-slate-400 py-12">⏳ Loading domains...</div>}
+                
+                {/* DNS Records Panel */}
+                {selectedDomain && !loading && (
+                    <div className="space-y-6">
+                        {/* Domain Info + Quick Actions */}
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="font-semibold flex items-center gap-2">
+                                    📡 DNS Records — <span className="font-mono text-indigo-300">{selectedDomain}</span>
+                                </h3>
+                                <div className="flex gap-2">
+                                    {!isGitHubPagesWired(dnsRecords) && (
+                                        <button onClick={() => setWiringDomain(selectedDomain)}
+                                            className="text-xs px-3 py-1.5 bg-green-600 rounded hover:bg-green-500 font-medium">
+                                            ⚡ Wire for GitHub Pages
+                                        </button>
+                                    )}
+                                    {isGitHubPagesWired(dnsRecords) && (
+                                        <span className="text-xs px-3 py-1.5 bg-green-900/30 text-green-400 rounded border border-green-700/30">
+                                            ✅ GitHub Pages configured
+                                        </span>
+                                    )}
+                                    <button onClick={() => fetchDNS(selectedDomain)} disabled={loadingDNS}
+                                        className="text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-40">
+                                        {loadingDNS ? '⏳' : '🔄'}
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* DNS Records Table */}
+                            {loadingDNS && <div className="text-center text-slate-400 py-8">⏳ Loading DNS records...</div>}
+                            
+                            {dnsRecords && !loadingDNS && (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-slate-700 text-left">
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-20">Type</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium">Name</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium">Content</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-16">TTL</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-16">Prio</th>
+                                                <th className="py-2 px-3 text-slate-400 font-medium w-12"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {dnsRecords.map(record => (
+                                                <tr key={record.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                                    <td className="py-2 px-3">
+                                                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${typeColors[record.type] || 'bg-slate-600/20 text-slate-400'}`}>
+                                                            {record.type}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-2 px-3 font-mono text-slate-300 text-xs">{record.name || '@'}</td>
+                                                    <td className="py-2 px-3 font-mono text-slate-200 text-xs break-all max-w-xs">{record.content}</td>
+                                                    <td className="py-2 px-3 text-xs text-slate-500">{record.ttl}</td>
+                                                    <td className="py-2 px-3 text-xs text-slate-500">{record.prio || '—'}</td>
+                                                    <td className="py-2 px-3">
+                                                        <button onClick={() => handleDeleteRecord(record.id, `${record.type} ${record.name}`)}
+                                                            className="text-red-500 hover:text-red-400 text-xs" title="Delete record">
+                                                            🗑️
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {dnsRecords.length === 0 && (
+                                                <tr><td colSpan="6" className="py-8 text-center text-slate-500">No DNS records found</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Add DNS Record */}
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
+                            <h3 className="font-semibold mb-4 flex items-center gap-2">➕ Add DNS Record</h3>
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Type</label>
+                                    <select value={newRecord.type} onChange={e => setNewRecord({...newRecord, type: e.target.value})}
+                                        className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm">
+                                        {['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA', 'ALIAS'].map(t => (
+                                            <option key={t} value={t}>{t}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Name <span className="text-slate-600">(subdomain)</span></label>
+                                    <input value={newRecord.name} onChange={e => setNewRecord({...newRecord, name: e.target.value})}
+                                        placeholder="@ or www" className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono" />
+                                </div>
+                                <div className="sm:col-span-2">
+                                    <label className="text-xs text-slate-400 block mb-1">Content</label>
+                                    <input value={newRecord.content} onChange={e => setNewRecord({...newRecord, content: e.target.value})}
+                                        placeholder="1.2.3.4 or target.example.com" className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono" />
+                                </div>
+                                <div className="flex items-end gap-2">
+                                    <div className="flex-1">
+                                        <label className="text-xs text-slate-400 block mb-1">TTL</label>
+                                        <input value={newRecord.ttl} onChange={e => setNewRecord({...newRecord, ttl: e.target.value})}
+                                            className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono" />
+                                    </div>
+                                    <button onClick={handleAddRecord} disabled={addingRecord || !newRecord.content}
+                                        className="px-4 py-2 bg-indigo-600 rounded text-sm hover:bg-indigo-500 disabled:opacity-40 whitespace-nowrap">
+                                        {addingRecord ? '⏳' : '➕'} Add
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Wire for GitHub Pages Modal */}
+                        {wiringDomain && (
+                            <div className="bg-slate-800 rounded-xl border border-indigo-700/50 p-5">
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">⚡ Wire {wiringDomain} for GitHub Pages</h3>
+                                
+                                {!wireProgress && wireLog.length === 0 && (
+                                    <div>
+                                        <p className="text-sm text-slate-400 mb-4">
+                                            This will configure DNS records and GitHub Pages to serve your app from <strong className="text-white">{wiringDomain}</strong>. 
+                                            It creates 4 A records + 1 CNAME record, commits a CNAME file, and updates the GitHub Pages settings.
+                                        </p>
+                                        <div className="mb-4">
+                                            <label className="text-xs text-slate-400 block mb-1.5">Select Repository to Wire</label>
+                                            <div className="space-y-1.5">
+                                                {getAppsWithRepos().map(app => (
+                                                    <div key={app.id} className="flex items-center gap-3">
+                                                        {app.prodRepo && (
+                                                            <button onClick={() => handleWireForGitHubPages(wiringDomain, app.prodRepo)}
+                                                                className="flex items-center gap-2 px-3 py-2 bg-slate-900/50 rounded-lg hover:bg-slate-700/50 text-sm border border-slate-700 w-full text-left">
+                                                                <AppIcon icon={app.icon} size={16} />
+                                                                <span className="font-medium">{app.name}</span>
+                                                                <span className="text-xs text-slate-500 font-mono ml-auto">{app.prodRepo}</span>
+                                                                <span className="text-xs px-1.5 py-0.5 bg-green-900/30 text-green-400 rounded">prod</span>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => { setWiringDomain(null); setWireLog([]); }}
+                                            className="text-xs text-slate-400 hover:text-white">Cancel</button>
+                                    </div>
+                                )}
+                                
+                                {/* Wire Progress Log */}
+                                {wireLog.length > 0 && (
+                                    <div>
+                                        <div className="bg-slate-900 rounded-lg p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
+                                            {wireLog.map((line, i) => (
+                                                <div key={i} className={`${line.startsWith('❌') ? 'text-red-400' : line.startsWith('✅') ? 'text-green-400' : line.startsWith('🎉') ? 'text-yellow-400 font-bold' : 'text-slate-300'}`}>
+                                                    {line}
+                                                </div>
+                                            ))}
+                                            {wireProgress && <div className="text-indigo-400 animate-pulse">⏳ Working...</div>}
+                                        </div>
+                                        {!wireProgress && (
+                                            <button onClick={() => { setWiringDomain(null); setWireLog([]); }}
+                                                className="mt-3 text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600">
+                                                ✓ Done
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {!loading && domains && domains.length === 0 && (
+                    <div className="bg-slate-800 rounded-xl border border-slate-700 p-8 text-center">
+                        <span className="text-4xl block mb-4">🌐</span>
+                        <h3 className="text-lg font-semibold mb-2">No Domains Found</h3>
+                        <p className="text-slate-400 text-sm">No domains found across your configured registrars. Purchase a domain at your registrar, then manage it here.</p>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    function AuthorizedDomainsManager({ showAlert }) {
+        const [domains, setDomains] = React.useState(null);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState(null);
+        const [newDomain, setNewDomain] = React.useState('');
+        const [adding, setAdding] = React.useState(false);
+        const [removing, setRemoving] = React.useState(null);
+        
+        const loadDomains = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const list = await firebaseAdmin.getAuthorizedDomains();
+                setDomains(list);
+            } catch (e) {
+                setError(e.message);
+            }
+            setLoading(false);
+        };
+        
+        const handleAdd = async () => {
+            if (!newDomain.trim()) return;
+            const domain = newDomain.trim().toLowerCase();
+            setAdding(true);
+            setError(null);
+            try {
+                const result = await firebaseAdmin.addAuthorizedDomain(domain);
+                if (result.alreadyExists) {
+                    showAlert?.(`${domain} is already in the authorized domains list.`, 'Already Exists');
+                } else {
+                    showAlert?.(`✅ Added ${domain} to Firebase authorized domains.`, 'Domain Added');
+                }
+                setDomains(result.authorizedDomains);
+                setNewDomain('');
+            } catch (e) {
+                setError(e.message);
+            }
+            setAdding(false);
+        };
+        
+        const handleRemove = async (domain) => {
+            // Protect system domains
+            const protectedDomains = ['localhost', 'word-boxing.firebaseapp.com', 'word-boxing.web.app'];
+            if (protectedDomains.some(p => domain.includes(p) || domain === 'localhost')) {
+                showAlert?.(`Cannot remove system domain: ${domain}`, 'Protected Domain');
+                return;
+            }
+            setRemoving(domain);
+            setError(null);
+            try {
+                const result = await firebaseAdmin.removeAuthorizedDomain(domain);
+                if (result.notFound) {
+                    showAlert?.(`${domain} was not found in authorized domains.`, 'Not Found');
+                } else {
+                    showAlert?.(`Removed ${domain} from Firebase authorized domains.`, 'Domain Removed');
+                }
+                setDomains(result.authorizedDomains);
+            } catch (e) {
+                setError(e.message);
+            }
+            setRemoving(null);
+        };
+        
+        const handleKeyDown = (e) => {
+            if (e.key === 'Enter') handleAdd();
+        };
+        
+        // Categorize domains for display
+        const systemDomains = (domains || []).filter(d => 
+            d === 'localhost' || d.endsWith('.firebaseapp.com') || d.endsWith('.web.app')
+        );
+        const customDomains = (domains || []).filter(d => 
+            d !== 'localhost' && !d.endsWith('.firebaseapp.com') && !d.endsWith('.web.app')
+        );
+        
+        return (
+            <div className="space-y-4">
+                {/* Load button or domain list */}
+                {domains === null ? (
+                    <div className="text-center">
+                        <button onClick={loadDomains} disabled={loading}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm disabled:opacity-50">
+                            {loading ? '⏳ Loading...' : '🔍 Load Authorized Domains'}
+                        </button>
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {/* Custom domains */}
+                        <div>
+                            <div className="text-xs text-slate-500 uppercase tracking-wide mb-2">Custom Domains ({customDomains.length})</div>
+                            <div className="space-y-1">
+                                {customDomains.map(domain => (
+                                    <div key={domain} className="flex items-center justify-between p-2 bg-slate-900 rounded border border-slate-700 group">
+                                        <div className="flex items-center gap-2">
+                                            <span className="inline-block w-2 h-2 rounded-full bg-green-400"></span>
+                                            <span className="text-sm text-slate-300 font-mono">{domain}</span>
+                                        </div>
+                                        <button 
+                                            onClick={() => handleRemove(domain)} 
+                                            disabled={removing === domain}
+                                            className="text-xs text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 rounded hover:bg-red-900/30"
+                                        >
+                                            {removing === domain ? '⏳' : '✕ Remove'}
+                                        </button>
+                                    </div>
+                                ))}
+                                {customDomains.length === 0 && (
+                                    <div className="text-xs text-slate-500 italic p-2">No custom domains configured</div>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* System domains (collapsed) */}
+                        <details className="text-xs">
+                            <summary className="text-slate-500 uppercase tracking-wide cursor-pointer hover:text-slate-400">
+                                System Domains ({systemDomains.length})
+                            </summary>
+                            <div className="space-y-1 mt-2">
+                                {systemDomains.map(domain => (
+                                    <div key={domain} className="flex items-center gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                                        <span className="inline-block w-2 h-2 rounded-full bg-slate-500"></span>
+                                        <span className="text-xs text-slate-500 font-mono">{domain}</span>
+                                        <span className="text-xs text-slate-600 ml-auto">protected</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                        
+                        {/* Add domain */}
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={newDomain}
+                                onChange={e => setNewDomain(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="e.g. aicommandcenter.dev"
+                                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-sm text-slate-300 font-mono placeholder-slate-600"
+                            />
+                            <button onClick={handleAdd} disabled={adding || !newDomain.trim()}
+                                className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded text-sm disabled:opacity-50 whitespace-nowrap">
+                                {adding ? '⏳' : '+ Add'}
+                            </button>
+                        </div>
+                        
+                        {/* Refresh */}
+                        <button onClick={loadDomains} disabled={loading}
+                            className="text-xs text-slate-500 hover:text-slate-400">
+                            🔄 Refresh list
+                        </button>
+                    </div>
+                )}
+                
+                {/* Error display */}
+                {error && (
+                    <div className="p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-300">
+                        ❌ {error}
+                    </div>
+                )}
+                
+                <div className="text-xs text-slate-500 space-y-1">
+                    <div>⚠️ After adding a domain here, you also need to update:</div>
+                    <div className="ml-3">• <a href="https://console.cloud.google.com/apis/credentials?project=word-boxing" target="_blank" className="text-indigo-400 hover:underline">Google Cloud Console → OAuth Redirect URIs</a></div>
+                    <div className="ml-3 text-slate-600">Add: https://DOMAIN/__/auth/handler (redirect URI) + https://DOMAIN (JS origin)</div>
+                </div>
+            </div>
+        );
+    }
+
     // =========================================================================
 
     function FirebaseAdminSettings() {
@@ -14357,7 +15766,7 @@ The developer uses Claude for iterative development — each session should:
                 setTestResult(result);
                 refreshInfo();
             } catch (e) {
-                setTestResult({ token: false, rules: false, functions: false, errors: [e.message] });
+                setTestResult({ token: false, rules: false, authConfig: false, errors: [e.message] });
             }
             setTesting(false);
         };
@@ -14503,6 +15912,29 @@ The developer uses Claude for iterative development — each session should:
                                 <span>OAuth2 Token</span>
                                 <span className="text-slate-500 text-xs">— JWT signing & token exchange</span>
                             </div>
+                            {testResult.rules !== undefined && (
+                                <div className="flex items-center gap-2 text-sm">
+                                    <span className={testResult.rules ? 'text-green-400' : 'text-red-400'}>
+                                        {testResult.rules ? '✅' : '❌'}
+                                    </span>
+                                    <span>RTDB Rules</span>
+                                    <span className="text-slate-500 text-xs">— read security rules via REST API</span>
+                                </div>
+                            )}
+                            {testResult.authConfig !== undefined && (
+                                <div className="flex items-center gap-2 text-sm">
+                                    <span className={testResult.authConfig ? 'text-green-400' : 'text-red-400'}>
+                                        {testResult.authConfig ? '✅' : '❌'}
+                                    </span>
+                                    <span>Auth Config</span>
+                                    <span className="text-slate-500 text-xs">— Identity Toolkit authorized domains</span>
+                                </div>
+                            )}
+                            {testResult.authorizedDomains && (
+                                <div className="mt-1 ml-7 text-xs text-slate-500">
+                                    {testResult.authorizedDomains.length} authorized domain{testResult.authorizedDomains.length !== 1 ? 's' : ''} configured
+                                </div>
+                            )}
                         </div>
                         {testResult.errors?.length > 0 && (
                             <div className="mt-3 space-y-1">
@@ -14510,9 +15942,6 @@ The developer uses Claude for iterative development — each session should:
                                     <div key={i} className="text-xs text-red-400 bg-red-900/20 px-3 py-1.5 rounded font-mono">{err}</div>
                                 ))}
                             </div>
-                        )}
-                        {testResult.token && (
-                            <div className="mt-2 text-xs text-slate-500">Full connection tests (Rules, Functions, Auth) available in the <a href={getSatelliteUrl(null, 'infrastructure')} target="_blank" className="text-indigo-400 hover:text-indigo-300">Infrastructure satellite</a>.</div>
                         )}
                     </div>
                 )}
@@ -14533,7 +15962,8 @@ The developer uses Claude for iterative development — each session should:
     // SETTINGS VIEW
     // =========================================================================
     
-    function SettingsView({ token, setToken, repoCount, syncStatus, onForceSync, config, onConfigChange, firebaseUid, firebaseUser, teamMembers, teamMembership, showAlert, showConfirm }) {
+    function SettingsView({ token, setToken, repoCount, syncStatus, onForceSync, config, onConfigChange, firebaseUid, firebaseUser, teamMembers, teamMembership, showAlert, showConfirm, apps }) {
+        const [settingsSection, setSettingsSection] = React.useState('deploy');
         const [show, setShow] = React.useState(false);
         const [testing, setTesting] = React.useState(false);
         const [result, setResult] = React.useState(null);
@@ -14640,6 +16070,27 @@ The developer uses Claude for iterative development — each session should:
         
         return (
             <div className="space-y-6">
+                {/* Settings Section Tabs (v8.71.0) */}
+                <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg border border-slate-700">
+                    {[
+                        { id: 'deploy', icon: '🚀', label: 'Deploy Management' },
+                        { id: 'infrastructure', icon: '🔧', label: 'Infrastructure' },
+                        { id: 'credentials', icon: '🔑', label: 'Credentials' }
+                    ].map(tab => (
+                        <button key={tab.id}
+                            onClick={() => setSettingsSection(tab.id)}
+                            className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                                settingsSection === tab.id
+                                    ? 'bg-indigo-600 text-white shadow-sm'
+                                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                            }`}>
+                            <span>{tab.icon}</span> {tab.label}
+                        </button>
+                    ))}
+                </div>
+
+                {/* ═══ DEPLOY MANAGEMENT SECTION ═══ */}
+                {settingsSection === 'deploy' && (<>
                 {/* Your Name (v8.37.0) */}
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
                     <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
@@ -14663,51 +16114,7 @@ The developer uses Claude for iterative development — each session should:
                     )}
                 </div>
                 
-                {/* Anthropic API Key (v8.60.1 — Bug Fix) */}
-                {(() => {
-                    const [apiKeyVal, setApiKeyVal] = React.useState(() => {
-                        try { return SecretManager.get('anthropic_api_key') || localStorage.getItem('cc_anthropic_api_key') || ''; } catch { return ''; }
-                    });
-                    const [showKey, setShowKey] = React.useState(false);
-                    const [saved, setSaved] = React.useState(false);
-                    return (
-                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-                            <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">🔑 Anthropic API Key</h2>
-                            <p className="text-sm text-slate-400 mb-1">Required for AI-generated review prompts in the validation bundle pipeline.</p>
-                            <p className="text-xs text-slate-500 mb-4">Get your key from <a href="https://console.anthropic.com/" target="_blank" rel="noopener" className="text-indigo-400 hover:underline">console.anthropic.com</a>. Stored in localStorage only — never sent to Firebase.</p>
-                            <div className="flex items-center gap-2 mb-2">
-                                <input type={showKey ? 'text' : 'password'} value={apiKeyVal}
-                                    onChange={e => { setApiKeyVal(e.target.value); setSaved(false); }}
-                                    placeholder="sk-ant-api03-..."
-                                    className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm flex-1 font-mono" />
-                                <button onClick={() => setShowKey(!showKey)}
-                                    className="px-2 py-1.5 rounded text-xs bg-slate-700 hover:bg-slate-600">
-                                    {showKey ? '🙈 Hide' : '👁 Show'}
-                                </button>
-                                <button onClick={() => { SecretManager.set('anthropic_api_key', apiKeyVal); setSaved(true); }}
-                                    disabled={saved}
-                                    className="px-3 py-1.5 rounded text-xs bg-indigo-600 hover:bg-indigo-500 font-medium disabled:opacity-50">
-                                    {saved ? '✓ Saved' : 'Save'}
-                                </button>
-                                {apiKeyVal && (
-                                    <button onClick={() => { SecretManager.remove('anthropic_api_key'); setApiKeyVal(''); setSaved(false); }}
-                                        className="px-2 py-1.5 rounded text-xs bg-red-900/50 hover:bg-red-800 text-red-300">
-                                        Clear
-                                    </button>
-                                )}
-                            </div>
-                            <div className="text-xs">
-                                {apiKeyVal ? (
-                                    <span className="text-green-400">✅ Configured — review prompts will use Claude API</span>
-                                ) : (
-                                    <span className="text-amber-400">⚠️ Not set — review prompt generation will use static fallback</span>
-                                )}
-                            </div>
-                        </div>
-                    );
-                })()}
-
-                {/* v8.70.15: Removed Settings completion files block */}
+                {/* v8.71.0: Anthropic API Key moved to Credentials section */}
 
                 {/* Team Management (v8.46.0 — Phase 5.7) */}
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
@@ -14871,96 +16278,9 @@ The developer uses Claude for iterative development — each session should:
                     })()}
                 </div>
                 
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <Icons.GitBranch /> GitHub Token
-                    </h2>
-                    <div className="flex gap-2 mb-2">
-                        <input type={show ? 'text' : 'password'} value={token} onChange={e => setToken(e.target.value)}
-                            placeholder="ghp_xxxx" className="flex-1 p-2 bg-slate-700 border border-slate-600 rounded font-mono text-sm" />
-                        <button onClick={() => setShow(!show)} className="px-3 bg-slate-700 border border-slate-600 rounded">{show ? '🙈' : '👁️'}</button>
-                        <button onClick={async () => {
-                            setTesting(true);
-                            try { const gh = new GitHubAPI(token); const r = await gh.listRepos(); setResult({ ok: true, count: r.length }); }
-                            catch (e) { setResult({ ok: false, error: e.message }); }
-                            setTesting(false);
-                        }} disabled={testing} className="px-4 bg-indigo-600 rounded">{testing ? '...' : 'Test'}</button>
-                    </div>
-                    <div className="flex items-center gap-4 mt-3">
-                        <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" className="text-xs text-indigo-400">Create token →</a>
-                        {token && (
-                            <button onClick={() => saveTokenWithExpiry(token, 90)} 
-                                className="text-xs px-2 py-1 bg-slate-700 border border-slate-600 rounded hover:bg-slate-600">
-                                🔄 Reset 90-day timer
-                            </button>
-                        )}
-                    </div>
-                    {result && <div className={`mt-2 text-sm ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
-                        {result.ok ? `✓ Found ${result.count} repos` : `✗ ${result.error}`}
-                    </div>}
-                    
-                    {/* Token expiration warning */}
-                    {token && tokenExpires && (
-                        <div className={`mt-3 p-3 rounded-lg border ${
-                            expiryDanger ? 'bg-red-900/30 border-red-700 text-red-300' :
-                            expiryWarning ? 'bg-amber-900/30 border-amber-700 text-amber-300' :
-                            'bg-slate-700/50 border-slate-600 text-slate-300'
-                        }`}>
-                            <div className="flex items-center gap-2">
-                                <span>{expiryDanger ? '🚨' : expiryWarning ? '⚠️' : '🔑'}</span>
-                                <span className="text-sm">
-                                    {daysUntilExpiry <= 0 
-                                        ? <strong>Token may have expired!</strong>
-                                        : <>Token expires in <strong>{daysUntilExpiry} days</strong> ({new Date(tokenExpires).toLocaleDateString()})</>
-                                    }
-                                </span>
-                            </div>
-                            {(expiryWarning || expiryDanger) && (
-                                <div className="mt-2 text-xs">
-                                    <a href="https://github.com/settings/tokens" target="_blank" className="text-indigo-400 underline">
-                                        Generate a new token →
-                                    </a>
-                                    {' '}then paste it above and click "Reset 90-day timer"
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    {token && !tokenExpires && (
-                        <div className="mt-3 p-3 rounded-lg border bg-amber-900/30 border-amber-700 text-amber-300">
-                            <div className="text-sm">⚠️ Token expiration not set</div>
-                            <button onClick={() => saveTokenWithExpiry(token, 90)} 
-                                className="mt-2 text-xs px-3 py-1 bg-amber-700 rounded hover:bg-amber-600">
-                                Set 90-day expiration from today
-                            </button>
-                        </div>
-                    )}
-                </div>
+                {/* v8.71.0: GitHub Token + Firebase Admin moved to Credentials section */}
                 
-                {/* Firebase Admin (v8.9.0) */}
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        🔥 Firebase Admin
-                    </h2>
-                    <p className="text-sm text-slate-400 mb-4">
-                        Service account credentials enable admin access to Firebase RTDB rules, Cloud Functions status, and logging. 
-                        Generate a key at <a href="https://console.firebase.google.com/project/word-boxing/settings/serviceaccounts/adminsdk" target="_blank" className="text-indigo-400 hover:underline">Firebase Console → Project Settings → Service Accounts</a>.
-                    </p>
-                    
-                    <FirebaseAdminSettings />
-                </div>
-                
-                {/* Domain Management — Moved to Infrastructure Satellite (v8.50.0) */}
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        🌐 Domain & Infrastructure Management
-                    </h2>
-                    <p className="text-sm text-slate-400 mb-4">
-                        Firebase Auth Domains, GitHub Pages Domains, and Domain Registrar management have moved to the Infrastructure satellite app.
-                    </p>
-                    <a href={getSatelliteUrl(null, 'infrastructure')} target="_blank" className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium text-white no-underline transition-colors">
-                        🔧 Open Infrastructure
-                    </a>
-                </div>
+                {/* v8.71.0: Domain management moved to Infrastructure section */}
                 {/* Firebase Config Sync (v8.18.0) */}
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
                     <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
@@ -15244,6 +16564,214 @@ The developer uses Claude for iterative development — each session should:
                         </div>
                     )}
                 </div>
+                </>)}
+
+                {/* ═══ INFRASTRUCTURE SECTION ═══ */}
+                {settingsSection === 'infrastructure' && (<>
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        📋 Firebase Rules Manager
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        View, edit, and deploy Firebase Realtime Database security rules. Includes snapshot history with diff view.
+                    </p>
+                    <FirebaseRulesManager showAlert={showAlert} showConfirm={showConfirm} />
+                </div>
+
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🌐 Domain Management
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Manage DNS records for Porkbun and GoDaddy domains. Wire domains for GitHub Pages with one click.
+                    </p>
+                    <DomainsView apps={apps} config={config} githubToken={token} showAlert={showAlert} showConfirm={showConfirm} />
+                </div>
+
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🔐 Firebase Auth Domains
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Manage authorized domains for Firebase Authentication. Required for OAuth and sign-in flows.
+                    </p>
+                    <AuthorizedDomainsManager showAlert={showAlert} />
+                </div>
+                </>)}
+
+                {/* ═══ CREDENTIALS SECTION ═══ */}
+                {settingsSection === 'credentials' && (<>
+                {/* GitHub Token */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🔑 GitHub Token
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-3">
+                        Personal Access Token for GitHub API operations. Required for deploys and domain wiring.
+                    </p>
+                    <div className="flex items-center gap-2 mb-3">
+                        <span className={`inline-block w-2 h-2 rounded-full ${token ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                        <span className="text-sm text-slate-300">{token ? 'Configured' : 'Not configured'}</span>
+                        {daysUntilExpiry !== null && (
+                            <span className={`text-xs px-2 py-0.5 rounded ${expiryDanger ? 'bg-red-900/50 text-red-300' : expiryWarning ? 'bg-amber-900/50 text-amber-300' : 'bg-green-900/50 text-green-300'}`}>
+                                {daysUntilExpiry > 0 ? `${daysUntilExpiry}d until expiry` : 'Expired'}
+                            </span>
+                        )}
+                    </div>
+                    <div className="flex gap-2 mb-2">
+                        <input type={show ? 'text' : 'password'} value={token || ''} onChange={e => saveTokenWithExpiry(e.target.value)}
+                            placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                            className="flex-1 p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-indigo-500 focus:outline-none" />
+                        <button onClick={() => setShow(!show)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm">{show ? '🙈' : '👁️'}</button>
+                        <button onClick={async () => {
+                            setTesting(true);
+                            try { const gh = new GitHubAPI(token); const r = await gh.listRepos(); setResult({ ok: true, count: r.length }); }
+                            catch (e) { setResult({ ok: false, error: e.message }); }
+                            setTesting(false);
+                        }} disabled={testing} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm">{testing ? '...' : 'Test'}</button>
+                    </div>
+                    <div className="flex items-center gap-4">
+                        <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" className="text-xs text-indigo-400">Create token →</a>
+                        {token && (
+                            <button onClick={() => saveTokenWithExpiry(token, 90)}
+                                className="text-xs px-2 py-1 bg-slate-700 border border-slate-600 rounded hover:bg-slate-600">
+                                🔄 Reset 90-day timer
+                            </button>
+                        )}
+                    </div>
+                    {result && <div className={`mt-2 text-sm ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {result.ok ? `✓ Found ${result.count} repos` : `✗ ${result.error}`}
+                    </div>}
+                </div>
+
+                {/* Anthropic API Key */}
+                {(() => {
+                    const [apiKeyVal, setApiKeyVal] = React.useState(() => {
+                        try { return SecretManager.get('anthropic_api_key') || localStorage.getItem('cc_anthropic_api_key') || ''; } catch { return ''; }
+                    });
+                    const [showKey, setShowKey] = React.useState(false);
+                    const [saved, setSaved] = React.useState(false);
+                    return (
+                        <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Anthropic API Key</h2>
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className={`inline-block w-2 h-2 rounded-full ${apiKeyVal ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                                <span className="text-sm text-slate-300">{apiKeyVal ? 'Configured' : 'Not configured'}</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <input type={showKey ? 'text' : 'password'} value={apiKeyVal}
+                                    onChange={e => { setApiKeyVal(e.target.value); setSaved(false); }}
+                                    placeholder="sk-ant-api03-..."
+                                    className="flex-1 p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-indigo-500 focus:outline-none" />
+                                <button onClick={() => setShowKey(!showKey)} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm">{showKey ? '🙈' : '👁️'}</button>
+                                <button onClick={() => { SecretManager.set('anthropic_api_key', apiKeyVal); localStorage.setItem('cc_api_key', apiKeyVal); localStorage.setItem('cc_anthropic_api_key', apiKeyVal); setSaved(true); }}
+                                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm">{saved ? '✓ Saved' : 'Save'}</button>
+                            </div>
+                            {saved && <div className="mt-2 text-xs text-green-400">✓ API key saved</div>}
+                        </div>
+                    );
+                })()}
+
+                {/* Firebase Service Account */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        🔥 Firebase Service Account
+                    </h2>
+                    <p className="text-sm text-slate-400 mb-4">
+                        Service account credentials for admin access to Firebase RTDB rules, Auth domains, and Cloud APIs.
+                        Generate a key at <a href="https://console.firebase.google.com/project/word-boxing/settings/serviceaccounts/adminsdk" target="_blank" className="text-indigo-400 hover:underline">Firebase Console → Service Accounts</a>.
+                    </p>
+                    <FirebaseAdminSettings />
+                </div>
+
+                {/* Domain Registrar Credentials */}
+                {DomainProviderRegistry.getAll().map(provider => {
+                    const CredCard = () => {
+                        const [cfg, setCfg] = React.useState(() => provider.service.getConfig());
+                        const [editing, setEditing] = React.useState(false);
+                        const [draft, setDraft] = React.useState({});
+                        const [pinging, setPinging] = React.useState(false);
+                        const [pingResult, setPingResult] = React.useState(null);
+                        const isConfigured = provider.service.isConfigured();
+
+                        const handleSave = () => {
+                            provider.service.saveConfig(editing ? { ...cfg, ...draft } : cfg);
+                            setCfg(provider.service.getConfig());
+                            setEditing(false);
+                            setDraft({});
+                            setPingResult(null);
+                        };
+
+                        const handleClear = () => {
+                            localStorage.removeItem(provider.configKey);
+                            setCfg({});
+                            setPingResult(null);
+                        };
+
+                        const handlePing = async () => {
+                            setPinging(true);
+                            setPingResult(null);
+                            try {
+                                await provider.service.ping();
+                                setPingResult({ ok: true });
+                            } catch (e) {
+                                setPingResult({ ok: false, error: e.message });
+                            }
+                            setPinging(false);
+                        };
+
+                        return (
+                            <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                    {provider.icon} {provider.name} API Keys
+                                </h2>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <span className={`inline-block w-2 h-2 rounded-full ${isConfigured ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                                    <span className="text-sm text-slate-300">{isConfigured ? 'Configured' : 'Not configured'}</span>
+                                    {isConfigured && !editing && (
+                                        <div className="ml-auto flex gap-2">
+                                            <button onClick={handlePing} disabled={pinging} className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded">
+                                                {pinging ? '⏳' : '🔌 Test'}
+                                            </button>
+                                            <button onClick={() => { setEditing(true); setDraft(cfg); }} className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded">✏️ Edit</button>
+                                            <button onClick={handleClear} className="px-2 py-1 text-xs bg-red-900/50 hover:bg-red-800/50 text-red-300 rounded">🗑️ Clear</button>
+                                        </div>
+                                    )}
+                                </div>
+                                {pingResult && (
+                                    <div className={`mb-3 p-2 rounded text-xs ${pingResult.ok ? 'bg-green-900/30 text-green-300' : 'bg-red-900/30 text-red-300'}`}>
+                                        {pingResult.ok ? '✅ Connection successful' : `❌ ${pingResult.error}`}
+                                    </div>
+                                )}
+                                {(!isConfigured || editing) && (
+                                    <div className="space-y-3">
+                                        {provider.keyFields.map(field => (
+                                            <div key={field.key}>
+                                                <label className="text-xs text-slate-400 mb-1 block">{field.label}</label>
+                                                <input type="password"
+                                                    value={editing ? (draft[field.key] || '') : (cfg[field.key] || '')}
+                                                    onChange={e => editing ? setDraft({...draft, [field.key]: e.target.value}) : setCfg({...cfg, [field.key]: e.target.value})}
+                                                    placeholder={field.placeholder}
+                                                    className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-indigo-500 focus:outline-none" />
+                                            </div>
+                                        ))}
+                                        <div className="flex gap-2">
+                                            <button onClick={handleSave}
+                                                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm">Save</button>
+                                            {editing && <button onClick={() => { setEditing(false); setDraft({}); }}
+                                                className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm">Cancel</button>}
+                                        </div>
+                                        <p className="text-xs text-slate-500">
+                                            {provider.setupNote} <a href={provider.setupUrl} target="_blank" className="text-indigo-400 hover:underline">Get API keys →</a>
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    };
+                    return <CredCard key={provider.id} />;
+                })}
+                </>)}
             </div>
         );
     }
