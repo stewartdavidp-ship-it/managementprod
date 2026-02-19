@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.70.13">
+    <meta name="version" content="8.70.14">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -2814,6 +2814,19 @@
             return firebase.database().ref(`command-center/${uid}/orphanCommits`);
         },
         async create(uid, orphanData) {
+            // v8.70.14: Duplicate guard — skip if commit with same SHA+repo already exists
+            if (orphanData.commitSha) {
+                const existing = await this._ref(uid)
+                    .orderByChild('commitSha').equalTo(orphanData.commitSha)
+                    .once('value');
+                if (existing.exists()) {
+                    const matches = Object.values(existing.val());
+                    if (matches.some(o => o.repoFullName === (orphanData.repoFullName || ''))) {
+                        console.log('[CC] OrphanDetectionService.create: SKIPPED duplicate', orphanData.commitSha?.slice(0, 7));
+                        return matches.find(o => o.repoFullName === (orphanData.repoFullName || ''));
+                    }
+                }
+            }
             const ref = this._ref(uid).push();
             const record = { ...orphanData, id: ref.key };
             await ref.set(record);
@@ -8196,6 +8209,23 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
             completionPollRef.current = true;
 
             const runPoll = async () => {
+                // v8.70.14: TTL cleanup — remove completionJobs completed >7 days ago
+                try {
+                    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+                    const cjSnap = await CompletionFileService._ref(firebaseUid).orderByChild('detectedAt').endAt(cutoff).once('value');
+                    if (cjSnap.exists()) {
+                        const updates = {};
+                        let cleaned = 0;
+                        Object.entries(cjSnap.val()).forEach(([k, v]) => {
+                            if (v.status === 'complete') { updates[k] = null; cleaned++; }
+                        });
+                        if (cleaned > 0) {
+                            await CompletionFileService._ref(firebaseUid).update(updates);
+                            console.log('[CC] TTL cleanup: removed', cleaned, 'completionJobs older than 7 days');
+                        }
+                    }
+                } catch (e) { console.warn('[CC] TTL cleanup error:', e.message); }
+
                 const configuredApps = Object.values(apps).filter(a => a.testRepo || a.prodRepo || a.repos);
                 const checkedRepos = new Set();
                 let allNewJobs = [];
@@ -8241,7 +8271,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                 setTimeout(() => { completionPollRef.current = false; }, 60000);
             };
             runPoll();
-        }, [view, firebaseUid, github, globalCompletionJobs.length]);
+        }, [view, firebaseUid, github]); // v8.70.14: removed globalCompletionJobs.length — was causing write→listen→re-render→re-poll loop
 
         // Link issues to a deployed version
         // Phase 5.7: Effective workspace UID — if user is a team member, use owner's UID for data access
