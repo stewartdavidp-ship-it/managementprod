@@ -14718,8 +14718,6 @@ The developer uses Claude for iterative development — each session should:
             setHistory(updated);
             try {
                 localStorage.setItem('cc_rulesHistory', JSON.stringify(updated));
-                // Firebase dual-write);
-                }
             } catch (e) {
                 console.warn('Failed to save rules history:', e);
             }
@@ -14805,8 +14803,6 @@ The developer uses Claude for iterative development — each session should:
             setHistory(updated);
             try {
                 localStorage.setItem('cc_rulesHistory', JSON.stringify(updated));
-                // Firebase dual-write);
-                }
             } catch {}
             if (selectedSnapshot?.id === snapshotId) {
                 setSelectedSnapshot(null);
