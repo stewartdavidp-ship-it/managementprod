@@ -10,6 +10,7 @@ import { registerAppTools } from "./tools/apps.js";
 import { registerJobTools } from "./tools/jobs.js";
 import { registerDocumentTools } from "./tools/documents.js";
 import { registerSkillTools } from "./tools/skills.js";
+import { registerRepoTools } from "./tools/repo.js";
 import { registerSkillPrompts } from "./skills.js";
 
 export function createServer(): McpServer {
@@ -27,6 +28,7 @@ export function createServer(): McpServer {
   registerJobTools(server);
   registerDocumentTools(server);
   registerSkillTools(server);
+  registerRepoTools(server);
 
   // Register resources
   registerResources(server);

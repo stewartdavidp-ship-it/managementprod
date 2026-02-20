@@ -3061,11 +3061,61 @@ const SKILL_ROUTER = `# Skill Router — What Gets Loaded When
 This skill is the single source of truth for which skills to read for any action.
 Read this once at startup. Reference from memory. Re-read on compaction recovery.
 
+## Startup Directive — Load Architecture Context
+
+On **every cold start** (new conversation or compaction recovery), fetch the latest ARCHITECTURE.md:
+
+\\\`\\\`\\\`
+Call: repo_file
+  repo: "stewartdavidp-ship-it/command-center"
+  path: "ARCHITECTURE.md"
+\\\`\\\`\\\`
+
+This gives you the current Quick Reference (file paths, deploy commands, safety rules, versions, auth model) and full system context. Do this BEFORE starting any work.
+
+## Quick Reference (Embedded Snapshot)
+
+These are the key facts for immediate orientation. The full version lives in ARCHITECTURE.md.
+
+| Item | Value |
+|------|-------|
+| CC app | Single-file HTML (\`index.html\`), React via CDN, Firebase RTDB |
+| MCP server | Express + MCP SDK on Cloud Run (\`us-central1\`) |
+| Firebase project | \`word-boxing\` |
+| GitHub repo | \`stewartdavidp-ship-it/command-center\` |
+| GH Pages | \`stewartdavidp-ship-it.github.io/command-center-test/\` |
+
+### Auth Model
+| Client | Method |
+|--------|--------|
+| CC Browser | Firebase Auth (Google Sign-In) |
+| Claude.ai Chat | OAuth 2.1 with PKCE |
+| Claude Code CLI | CC API Key (\`cc_{uid}_{secret}\`) |
+
+### Safety Rules (Do Not Violate)
+1. All \`.on('value')\` listeners MUST use \`limitToLast(N)\` — unbounded listeners caused $17/day billing crisis
+2. Never create polling scripts for \`document(receive)\` — use MCP tools inline
+3. \`domainProxy\` requires Firebase Auth token — all call sites pass Bearer token
+4. Deploy Firebase Functions with \`--only functions:NAME\` — bare \`--only functions\` deletes Game Shelf functions
+
+### MCP Tools Available
+| Tool | Purpose |
+|------|---------|
+| app | App CRUD and discovery |
+| concept | ODRC concept CRUD with state machine |
+| idea | Idea lifecycle management |
+| session | Ideation session tracking |
+| job | Build job management |
+| document | Inter-agent messaging (Chat ↔ Code) |
+| generate_claude_md | CLAUDE.md generation and delivery |
+| skill | Skill content retrieval |
+| repo_file | Fetch files from GitHub repos (read-only) |
+
 ## Chat Routing
 
 | Trigger | Skill(s) to Read |
 |---|---|
-| Cold start (new conversation) | cc-session-protocol, cc-skill-router, cc-mcp-workflow, cc-retro-journal |
+| Cold start (new conversation) | cc-session-protocol, cc-skill-router, cc-mcp-workflow, cc-retro-journal + repo_file(ARCHITECTURE.md) |
 | "start ideation [idea/app]" | cc-odrc-framework, cc-session-structure |
 | "run [name] lens" | cc-lens-{name} (see inventory below) |
 | "start exploration" | cc-mode-exploration |
@@ -3077,14 +3127,14 @@ Read this once at startup. Reference from memory. Re-read on compaction recovery
 | "prompt" | (uses this router already in context) |
 | "what state am I in" | (direct session read — no skill needed) |
 | "check job status" | (direct MCP call — no skill needed) |
-| Compaction detected | cc-session-resume + cc-skill-router |
+| Compaction detected | cc-session-resume + cc-skill-router + repo_file(ARCHITECTURE.md) |
 
 ## Code Routing
 
 | Trigger | Skill(s) to Read |
 |---|---|
-| Fresh start / claim job | cc-build-protocol, cc-skill-router, cc-retro-journal |
-| Compaction detected | cc-build-resume + cc-skill-router |
+| Fresh start / claim job | cc-build-protocol, cc-skill-router, cc-retro-journal + repo_file(ARCHITECTURE.md) |
+| Compaction detected | cc-build-resume + cc-skill-router + repo_file(ARCHITECTURE.md) |
 | Job complete | cc-build-hygiene |
 
 ## Available Skills Inventory

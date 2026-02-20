@@ -20,7 +20,7 @@
 | **Firebase project** | `word-boxing` |
 | **Firebase UID** | `oUt4ba0dYVRBfPREqoJ1yIsJKjr1` |
 | **MCP server URL** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
-| **Latest MCP revision** | `cc-mcp-server-00046-pbb` |
+| **Latest MCP revision** | `cc-mcp-server-00047-fmw` |
 
 ### Deploy Commands
 
@@ -71,7 +71,7 @@ CC is a single-file React application deployed via GitHub Pages. It uses React 1
 │  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
 │  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
 │  └─────────────┘                  │  (Cloud Run)         │             │
-│                                    │  10 tools, 24 skills │             │
+│                                    │  11 tools, 27 skills │             │
 │  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
 │  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
 │  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
@@ -175,7 +175,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
           ▼           ▼           ▼
     CC Browser    MCP Server    Cloud Functions
     (listeners)   (reads/writes) (triggers/scheduled)
-    4 active      10 tools       domainProxy, documentCleanup
+    4 active      11 tools       domainProxy, documentCleanup
 ```
 
 ### Browser → Firebase

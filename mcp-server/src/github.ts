@@ -147,6 +147,35 @@ export async function commitFile(
 }
 
 /**
+ * Get file content from a GitHub repo. Returns decoded UTF-8 text.
+ * Returns null on 404.
+ */
+export async function getFileContent(
+  repo: string,
+  path: string,
+  branch: string = "main"
+): Promise<string | null> {
+  const url = `${GITHUB_API}/repos/${repo}/contents/${encodeURIComponent(path)}?ref=${branch}`;
+  const resp = await fetch(url, { headers: getHeaders() });
+
+  if (resp.status === 404) return null;
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new GitHubApiError(
+      `Failed to get file ${path}: ${resp.status}`,
+      resp.status,
+      body
+    );
+  }
+
+  const data = (await resp.json()) as { content: string; encoding: string };
+  if (data.encoding === "base64") {
+    return Buffer.from(data.content, "base64").toString("utf-8");
+  }
+  return data.content;
+}
+
+/**
  * High-level: deliver a file to GitHub. Gets existing SHA, commits,
  * retries once on 409 conflict.
  */
