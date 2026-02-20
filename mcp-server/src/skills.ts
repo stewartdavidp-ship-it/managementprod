@@ -732,11 +732,11 @@ You need:
 - The CC MCP server connected (you'll have access to tools like \`concept\`, \`session\`, \`idea\`, \`job\`, \`app\`, etc.)
 - An active Idea to work on (the user or seed prompt will specify this)
 
-**On startup:** Read \`cc-skill-router\` to load the command routing table. This tells you which skills to load for any user action.
+**On startup:** Read \`cc-skill-router\` to load the command routing table. This tells you which skills to load for any user action. Then call \`repo_file\` with repo="stewartdavidp-ship-it/command-center" and path="ARCHITECTURE.md" to load the latest system context (file paths, deploy commands, safety rules, auth model).
 
 **When creating any job for Code:** Read \`cc-job-creation-protocol\` first. It defines the standard format for well-formed build jobs.
 
-**On compaction recovery:** Re-read \`cc-skill-router\` alongside \`cc-session-resume\`. The router may not survive compaction since it's loaded once at startup.
+**On compaction recovery:** Re-read \`cc-skill-router\` alongside \`cc-session-resume\`, and re-fetch ARCHITECTURE.md via \`repo_file\`. The router and architecture context may not survive compaction.
 
 ## Step 1: Initialize the Session (State Machine)
 
@@ -1013,9 +1013,9 @@ You need:
 - The CC MCP server connected (you'll have access to tools like \`document\`, \`job\`, \`concept\`, \`app\`, \`generate_claude_md\`, etc.)
 - An app to build for (the user or CLAUDE.md will specify this)
 
-**On startup:** Read \`cc-skill-router\` to load the command routing table. This tells you which skills are available and when to load them.
+**On startup:** Read \`cc-skill-router\` to load the command routing table. This tells you which skills are available and when to load them. Then call \`repo_file\` with repo="stewartdavidp-ship-it/command-center" and path="ARCHITECTURE.md" to load the latest system context (file paths, deploy commands, safety rules, auth model).
 
-**On compaction recovery:** Re-read \`cc-skill-router\` alongside \`cc-build-resume\`. The router may not survive compaction since it's loaded once at startup.
+**On compaction recovery:** Re-read \`cc-skill-router\` alongside \`cc-build-resume\`, and re-fetch ARCHITECTURE.md via \`repo_file\`. The router and architecture context may not survive compaction.
 
 ## Step 1: Check for Pending Documents
 
@@ -1219,6 +1219,16 @@ You should suspect a compaction occurred if:
 
 ## Recovery Sequence
 
+### Step 0: Reload System Context
+
+Before anything else, re-fetch the architecture reference:
+\`\`\`
+Call: repo_file
+  repo: "stewartdavidp-ship-it/command-center"
+  path: "ARCHITECTURE.md"
+\`\`\`
+This restores file paths, deploy commands, safety rules, and auth model that were lost in compaction.
+
 ### Step 1: Find the Orphaned Job
 
 \`\`\`
@@ -1329,6 +1339,16 @@ You should suspect a compaction occurred if:
 Context-triggered recovery: if the \`contextEstimate\` on a session is high (>100K chars), compaction is likely. The session record tells you how much work was done.
 
 ## Recovery Sequence
+
+### Step 0: Reload System Context
+
+Before anything else, re-fetch the architecture reference:
+\`\`\`
+Call: repo_file
+  repo: "stewartdavidp-ship-it/command-center"
+  path: "ARCHITECTURE.md"
+\`\`\`
+This restores file paths, deploy commands, safety rules, and auth model that were lost in compaction.
 
 ### Step 1: Find the Orphaned Session
 
