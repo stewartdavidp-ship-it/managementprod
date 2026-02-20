@@ -1,398 +1,232 @@
 # Command Center — Architecture
 
+> **Last updated:** 2026-02-19 (v8.71.4)
+>
+> **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 27).
+
+---
+
 ## Overview
 
-Single-file React application (~20,700 lines) that manages web app deployments via the GitHub API. Everything is inline — HTML, CSS (Tailwind via CDN), and JavaScript (React 18 via CDN).
+Command Center (CC) is an **AI ideation rigor platform** — a structured system for turning vague ideas into well-formed, buildable specifications before code is written. It manages ODRC concepts (OPENs, DECISIONs, RULEs, CONSTRAINTs), ideation sessions, build jobs, and inter-agent messaging between Claude Chat and Claude Code.
+
+CC is a single-file React application (~16,900 lines after satellite extraction in v8.71.0) deployed via GitHub Pages. It uses React 18 via CDN, Tailwind CSS via CDN, and Firebase Realtime Database for persistence.
+
+---
+
+## Ecosystem Map
+
+CC is not just a browser app — it's part of a multi-service ecosystem:
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          CC Ecosystem                                    │
+│                                                                          │
+│  ┌─────────────┐    Firebase RTDB     ┌──────────────────────┐          │
+│  │  CC Browser  │◄──────────────────►│  word-boxing          │          │
+│  │  App (SPA)   │   push listeners    │  default-rtdb         │          │
+│  │  GitHub Pages│                     │                       │          │
+│  └─────────────┘                     │  command-center/{uid}/ │          │
+│                                       └──────────┬───────────┘          │
+│  ┌─────────────┐    MCP over HTTP            │                          │
+│  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
+│  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
+│  └─────────────┘                  │  (Cloud Run)         │             │
+│                                    │  10 tools, 24 skills │             │
+│  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
+│  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
+│  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
+│  └─────────────┘                                                        │
+│                                                                          │
+│  ┌──────────────────────────────────────────┐                           │
+│  │  Firebase Cloud Functions (word-boxing)    │                           │
+│  │  Game Shelf: hints, battles, tokens, etc. │                           │
+│  │  CC Utility: domainProxy (DNS API proxy)  │                           │
+│  │  Scheduled: cache cleanup, battle check   │                           │
+│  └──────────────────────────────────────────┘                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+| Service | Where It Runs | Purpose | Details |
+|---------|--------------|---------|---------|
+| CC Browser App | GitHub Pages | UI for ODRC management, jobs, sessions, settings | This file |
+| CC MCP Server | Cloud Run (`us-central1`) | Tools + skills for Claude Chat/Code | See `SYSTEM-CONTEXT.md` |
+| Firebase Cloud Functions | GCP (`word-boxing`) | Game Shelf features, DNS proxy, scheduled cleanup | See below |
+| Firebase RTDB | GCP (`word-boxing`) | All persistent data | `command-center/{uid}/` |
 
 ---
 
 ## Component Hierarchy
 
 ```
-<CommandCenter>                          Root — state, GitHub init, nav
-├── <DashboardView>                      Deploy dashboard
-│   └── Project cards (projects.map)     Collapsible app groups
-│       └── App rows                     Version badges, actions
-├── <SmartDeployView>                    Batch deploy from archives
-├── <HistoryView>                        Deploy history log
-├── <ProjectsTab>                        Project & app management
-│   ├── Project cards (expandable)       Attributes, state toggle
-│   │   └── App table (grid)             Structure, repos, versions
+<CommandCenter>                          Root — state, Firebase auth, nav
+├── <ProjectsDrillDown>                  Projects with Ideas tab drill-down (v8.70.19)
+│   ├── Project cards (expandable)       Apps, ideas, lifecycle metadata
+│   │   └── App rows                     Structure, repos, versions
+│   ├── <AppsView>                       App detail with Ideas tab
+│   │   └── <IdeasView>                  Idea management per app
 │   ├── <AppEditModal>                   Edit app definitions
-│   ├── <ProjectEditModal>              Create/edit/delete projects (NEW v8.12.0)
-│   └── <ClaudePrepModal>              Fetch source+docs, generate brief, build zip (NEW v8.13.0)
-├── <SetupNewAppView>                    4-step new app wizard
-├── <ConfigView>                         Environment/repo/detection config
-├── <SettingsView>                       Token, Firebase admin, preferences
-│   └── <FirebaseAdminSettings>          SA key management, connection test (NEW v8.9.0)
-├── <FirebaseView>                       Tabbed Firebase container (v8.10.0)
-│   ├── <FirebaseDataBrowser>            RTDB browser with auth
-│   ├── <FirebaseRulesManager>           Rules viewer/editor/deployer (NEW v8.10.0)
-│   ├── <FirebaseFunctionsDashboard>     Functions list, status, health ping (NEW v8.11.0)
-│   └── <FirebaseLogViewer>              Cloud Logging search/filter (NEW v8.11.0)
-├── <IntegrationsView>                   External service status
-├── <UsersView>                          Player management
-├── <BetaProgramView>                    Beta tester management
-├── <IssuesView>                         Issue tracker
-├── <BacklogView>                        Work item tracking & planning (NEW v8.22.0)
-│   └── <WorkItemEditModal>              Create/edit work items
-├── <SessionLogView>                     Activity log
-├── <CleanupView>                        Orphan detection
-└── <FilesView>                          Repo browser
+│   ├── <ProjectEditModal>              Create/edit/delete projects
+│   └── <DomainsView>                   Domain management (GoDaddy/Porkbun)
+├── <JobsView>                          Build job list + detail (v8.70.18)
+│   └── "Load older jobs" button         On-demand fetch via .once() (v8.71.4)
+├── <SessionsView>                      Ideation session list + detail (v8.70.18)
+├── <SetupNewAppView>                   4-step new app wizard
+└── <SettingsView>                      Token, Firebase admin, preferences
 ```
+
+**Navigation tabs** (v8.70.19): Projects | Jobs | Sessions | Settings
+
+**Removed views** (extracted to satellites or eliminated in v8.71.0): DashboardView, SmartDeployView, HistoryView, FirebaseView, IntegrationsView, UsersView, BetaProgramView, IssuesView, BacklogView, SessionLogView, CleanupView, FilesView, ConfigView.
+
+---
+
+## Firebase Realtime Listeners
+
+### Active Listeners (v8.71.4)
+
+These are persistent `.on('value')` subscriptions set up once at auth time. Each listener re-downloads its entire query result set whenever any child in the query window changes.
+
+| Collection | Limit | Order By | Object Size | Max Download | Service |
+|-----------|-------|----------|-------------|-------------|---------|
+| Jobs | `limitToLast(10)` | `createdAt` | 10-100KB | ~1MB | `JobService.listen()` |
+| Sessions | `limitToLast(15)` | `createdAt` | ~3KB | ~45KB | `SessionService.listen()` |
+| Concepts | `limitToLast(50)` | `updatedAt` | ~0.5KB | ~25KB | `ConceptManager.listen()` |
+| Ideas | `limitToLast(20)` | `updatedAt` | ~0.5KB | ~10KB | `IdeaManager.listen()` |
+
+**On-demand loading:** `JobService.loadBefore(uid, oldestCreatedAt, limit)` fetches older jobs via `.once()` reads when the user clicks "Load older jobs". Same pattern can be added for Sessions, Concepts, Ideas as needed.
+
+### Suspended Listeners (v8.70.11 / v8.71.0)
+
+These listeners are disabled because they either have no data (single-user) or the features they serve are inactive:
+
+| Listener | Suspended In | Reason | Impact |
+|----------|-------------|--------|--------|
+| Activity | v8.70.11 | No data, zero cost | Activity log shows empty |
+| Team | v8.70.11 | No data, single-user | Team views show empty |
+| TeamMembership | v8.70.11 | No data, single-user | Team views show empty |
+| WorkItems | v8.70.11 | Feature lightly used | Backlog view shows empty |
+| Streams | v8.70.11 | No data | Feature inactive |
+| Orphan Commits | v8.70.11 | 5.2MB/13K records | Cleanup view doesn't auto-detect |
+| Documents | v8.71.0 | Removed from browser | Documents managed via MCP tools only |
+
+**To re-enable:** Add back to the auth `useEffect` (line ~6450) with appropriate `limitToLast()` bounds. See Cost Architecture section for limits guidance.
 
 ---
 
 ## Data Flow
 
 ```
-┌─────────────────────────────────────────────┐
-│                 LocalStorage                 │
-│  cc_config_v3    cc_deployHistory            │
-│  cc_github_token cc_collapsedProjects        │
-│  cc_firebase_sa (v8.9.0)                     │
-│  cc_rulesHistory (v8.10.0)                   │
-└───────────┬─────────────┬───────────────────┘
-            │             │
-            ▼             ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│  ConfigManager   │  │     State        │  │  FirebaseAdmin   │
-│  load/save/      │  │  apps, config,   │  │  SA key, JWT,    │
-│  migrate         │  │  deployments,    │  │  OAuth2 token,   │
-│                  │  │  activeDeployments│  │  admin API calls │
-└──────┬───────────┘  └──────┬───────────┘  └──────┬───────────┘
-       │                     │                     │
-       ▼                     ▼                     ▼
-┌──────────────────────────────────────────────────────────────┐
-│            App (root)                                        │
-│  - githubToken, github (API instance)                        │
-│  - apps, config, view, syncStatus                            │
-│  - stagedFiles, deployments                                  │
-│  - showAlert, showConfirm, showPrompt                        │
-└──────────────────┬───────────────────────────────────────────┘
-                   │ props           ▲ dual-write
-        ┌──────────┼──────────┐      │
-        ▼          ▼          ▼      ▼
-   Dashboard   Projects   Settings  FirebaseConfigSync
-        │          │          │      │
-        ▼          ▼          ▼      ▼
-   GitHub API  GitHub API  FirebaseAdmin  Firebase RTDB
-   (deploy)    (repos)     (SA token)     (command-center/)
+┌──────────────────────────────────────────────────────┐
+│              Firebase RTDB (word-boxing)               │
+│          command-center/{uid}/                         │
+│  ┌──────────┐ ┌──────────┐ ┌─────────┐ ┌──────────┐ │
+│  │ concepts │ │  ideas   │ │  jobs   │ │ sessions │ │
+│  │ (ODRC)   │ │          │ │         │ │          │ │
+│  └────┬─────┘ └────┬─────┘ └────┬────┘ └────┬─────┘ │
+│       │            │            │            │        │
+│  ┌────┴────┐  ┌────┴────┐  documents  claudeMd      │
+│  │appIdeas │  │  config │  preferences  apiKeyHash   │
+│  └─────────┘  └─────────┘                            │
+└─────────────────────┬────────────────────────────────┘
+                      │
+          ┌───────────┼───────────┐
+          │           │           │
+          ▼           ▼           ▼
+    CC Browser    MCP Server    Cloud Functions
+    (listeners)   (reads/writes) (triggers/scheduled)
+    4 active      10 tools       ~20 functions
 ```
 
-### Firebase Config Sync Flow (v8.17.0)
+### Browser → Firebase
+- **Auth:** Firebase Auth (Google Sign-In) → UID
+- **Read:** 4 persistent listeners (bounded by `limitToLast`)
+- **Write:** App config updates, preferences only — all ODRC/job/session writes go through MCP server
+- **On-demand reads:** `JobService.loadBefore()` for historical jobs
 
-```
-┌─ Startup ──────────────────────────────────────────┐
-│  1. Load localStorage (instant, synchronous)        │
-│  2. Render UI immediately with local data           │
-│  3. Async: FirebaseConfigSync.pullAll()             │
-│     ├── Firebase has newer data → overlay into state │
-│     ├── Firebase is empty → seed with local data     │
-│     └── Firebase unreachable → stay offline          │
-│  4. Set syncStatus: synced | offline | error        │
-└────────────────────────────────────────────────────┘
+### MCP Server → Firebase
+- **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
+- **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences
+- **Debounced:** `contextEstimate` flushed every 30 seconds (not per-call)
 
-┌─ On Every Save ────────────────────────────────────┐
-│  1. Write to localStorage (synchronous, immediate)  │
-│  2. Fire-and-forget: push to Firebase RTDB          │
-│     └── Failure logged but doesn't block UI         │
-└────────────────────────────────────────────────────┘
-
-┌─ Data Classification ──────────────────────────────┐
-│  SYNCED (Firebase + localStorage):                  │
-│    config, deploy-history, rules-history,           │
-│    session-log, deletion-history, rollback-snapshots│
-│                                                     │
-│  LOCAL ONLY (sensitive/device-specific):            │
-│    cc_token, cc_firebase_sa, cc_api_key,            │
-│    cc_firebase_uid, cc_collapsedProjects            │
-└────────────────────────────────────────────────────┘
-```
+### Cloud Functions → Firebase
+- **Triggers:** `calculateBattleScore` on participant data write
+- **Scheduled:** `dailyCacheCleanup` (3am), `checkBattleCompletion` (hourly), `dailyUserStatsEmail` (8am)
+- **On-demand:** Hint cache, morning review, AI help — all write to their own Firebase paths
 
 ---
 
-## Key Code Sections
+## Cost Architecture
 
-Line numbers are approximate and shift with edits. Use search patterns to locate.
+Firebase RTDB charges ~$1/GB for bandwidth. The primary cost driver is listener re-downloads: every write to a watched path triggers all listeners on that path to re-download their entire query result set.
 
-### Constants & Config (~lines 1–700)
-| Pattern | Purpose |
-|---------|---------|
-| `DEFAULT_APP_DEFINITIONS` | All app definitions with defaults |
-| `SEED_PROJECTS` | Project seed data for initial migration (v8.12.0) |
-| `APP_TYPES` | Legacy category labels |
-| `PROJECT_COLORS` | Tailwind class sets per color theme |
-| `BASE_PACKAGES` | Required files per app type (PWA vs non-PWA) |
+### Cost Guardrails
 
-### Firebase Admin (~lines 68–320) — NEW v8.9.0
-| Pattern | Purpose |
-|---------|---------|
-| `class FirebaseAdmin` | Service account management, JWT signing, OAuth2 |
-| `importPrivateKey()` | Parse PEM → CryptoKey via Web Crypto API |
-| `createSignedJWT()` | Build and sign RS256 JWT for Google OAuth2 |
-| `getAccessToken()` | JWT → access_token exchange with caching |
-| `getRules()` / `putRules()` | RTDB security rules REST API |
-| `listFunctions()` | Cloud Functions v1 list API |
-| `getLogs()` | Cloud Logging v2 entries:list API |
-| `testConnection()` | 3-point validation |
-| `const firebaseAdmin` | Global singleton instance |
+1. **Listener limits:** All `.on('value')` listeners use `limitToLast(N)` to bound per-trigger download size. See listener table above.
+2. **Server-side query filtering:** MCP server uses `orderByChild().equalTo()` on document queries. No full-collection reads.
+3. **Firebase indexes:** `.indexOn` rules on all queried fields (status, createdAt, updatedAt). Without indexes, Firebase downloads the entire collection and filters client-side.
+4. **Write debouncing:** `contextEstimate` batched over 30-second windows instead of per-call.
+5. **No background polling:** Claude Code must never create persistent scripts to poll `document(receive)`. See `SYSTEM-CONTEXT.md` Section 17 for the full incident report.
 
-### Firebase Config Sync (~lines 380–660) — v8.17.0, enhanced v8.18.0
-| Pattern | Purpose |
-|---------|---------|
-| `FirebaseConfigSync` | Sync object — manages RTDB read/write for CC config |
-| `push(dataKey, data)` | Write a data set to Firebase (immediate) |
-| `pushDebounced(dataKey, data)` | Write with 2-second debounce (v8.18.0) |
-| `pushSmart(dataKey, data)` | Auto-route: debounce for rapid-fire keys, immediate for others (v8.18.0) |
-| `pull(dataKey)` | Read a data set from Firebase (one-time) |
-| `pullAll()` | Fetch all synced data sets for startup overlay |
-| `pushAll(data)` | Write all data sets (initial seed or manual sync) |
-| `clearAll()` | Remove all CC data from Firebase (v8.18.0) |
-| `getDataSize()` | Measure approximate data size per key (v8.18.0) |
-| `isNewer(firebaseData, localTs)` | Compare timestamps for overlay decision |
-| `onStatusChange(callback)` | Subscribe to sync status changes |
-| `DATA_KEYS` | Mapping: Firebase path key → localStorage key |
-| `DEBOUNCE_KEYS` | Set of keys that get debounced writes (v8.18.0) |
-| `BASE_PATH` | Firebase root: `'command-center'` |
+### Historical Incident (Feb 2026)
 
-#### API Response Shapes (for Phase 2-3 consumers)
-
-**`getRules()`** → Returns the RTDB rules JSON object:
-```javascript
-{
-  "rules": {
-    ".read": false,
-    ".write": false,
-    "users": {
-      "$uid": {
-        ".read": "$uid === auth.uid",
-        ".write": "$uid === auth.uid"
-      }
-    }
-    // ... more paths
-  }
-}
-```
-
-**`putRules(rulesObj)`** → Send same shape back. Returns the deployed rules on success.
-
-**`listFunctions(location)`** → Returns array:
-```javascript
-[
-  {
-    "name": "projects/word-boxing/locations/us-central1/functions/getHint",
-    "status": "ACTIVE",           // ACTIVE | DEPLOY_IN_PROGRESS | DELETE_IN_PROGRESS | UNKNOWN
-    "entryPoint": "getHint",
-    "runtime": "nodejs18",
-    "availableMemoryMb": 256,
-    "timeout": "60s",
-    "updateTime": "2025-01-15T...",
-    "httpsTrigger": { "url": "https://us-central1-word-boxing.cloudfunctions.net/getHint" }
-  },
-  // ...
-]
-```
-
-**`getLogs(options)`** → options: `{filter, orderBy, pageSize}`. Returns array:
-```javascript
-[
-  {
-    "timestamp": "2025-02-07T12:00:00Z",
-    "severity": "ERROR",          // DEBUG | INFO | WARNING | ERROR | CRITICAL
-    "textPayload": "Error message here",
-    "resource": {
-      "type": "cloud_function",
-      "labels": { "function_name": "getHint", "region": "us-central1" }
-    }
-  },
-  // ...
-]
-```
-
-**`testConnection()`** → Returns:
-```javascript
-{ token: true/false, rules: true/false, functions: true/false, functionCount: N, errors: ["..."] }
-```
-
-### Core Classes (~lines 900–1800)
-| Pattern | Purpose |
-|---------|---------|
-| `ConfigManager` | Config load, save, migrate, toLegacyAppsFormat |
-| `class GitHubAPI` | GitHub REST API wrapper |
-| `Icons` | SVG icon components |
-
-### Helper Functions (~lines 1300–1400)
-| Pattern | Purpose |
-|---------|---------|
-| `getProjectsWithApps()` | Groups apps by project, sorts by order |
-| `getProjectColor()` | Returns Tailwind classes for a project color |
-| `getGitHubPagesUrl()` | Constructs Pages URL from repo + subPath |
-
-### Root Component (~lines 1900–4300)
-| Pattern | Purpose |
-|---------|---------|
-| `function CommandCenter()` | Root component with all state |
-| `handleDeploy` | Single-file deploy handler |
-| `handleBatchDeploy` | Multi-file batch deploy |
-| `handlePromote` | Test → Prod promotion |
-
-### View Components (~lines 4800–14100)
-| Pattern | Purpose |
-|---------|---------|
-| `function DashboardView` | Main dashboard with project cards |
-| `function SmartDeployView` | Archive upload and batch deploy |
-| `function HistoryView` | Deploy history table |
-| `function FirebaseView` | Tabbed container: Data Browser + Rules + Functions + Logs |
-| `function FirebaseDataBrowser` | RTDB browser with auth (extracted from old FirebaseView) |
-| `function FirebaseRulesManager` | Rules viewer/editor/deployer with history (NEW v8.10.0) |
-| `function FirebaseFunctionsDashboard` | Functions list, status, error counts, health ping (NEW v8.11.0) |
-| `function FirebaseLogViewer` | Cloud Logging search/filter with severity coding (NEW v8.11.0) |
-| `function IntegrationsView` | External service status |
-| `function ProjectsTab` | Project & app management |
-| `function ProjectEditModal` | Create/edit/delete projects (NEW v8.12.0) |
-| `function ClaudePrepModal` | Fetch source+docs from repo, generate session brief, build zip (NEW v8.13.0) |
-| `function SetupNewAppView` | New app wizard |
-| `function FirebaseAdminSettings` | SA key UI (NEW v8.9.0) |
-| `function SettingsView` | Token, Firebase admin, preferences |
+Three zombie bash scripts from orphaned Claude Code sessions polled `document(receive)` every 10 seconds, downloading ~1MB per call. Combined: ~17MB/min = ~$17/day. Fixed by killing scripts, adding server-side status filtering, and documenting anti-polling rules in MCP skills.
 
 ---
 
-## Firebase Admin Auth Flow (v8.9.0)
+## Cloud Functions Inventory
 
-```
-┌─────────────────────────────────────────────────────┐
-│  1. Service Account JSON Key (stored in localStorage)│
-│     - client_email, private_key, project_id          │
-└───────────────────────┬─────────────────────────────┘
-                        │
-                        ▼
-┌─────────────────────────────────────────────────────┐
-│  2. Create JWT (RS256 signed via Web Crypto API)     │
-│     Header: { alg: "RS256", typ: "JWT" }             │
-│     Payload: { iss, scope, aud, iat, exp }           │
-│     Scopes: firebase.database + cloud-platform       │
-└───────────────────────┬─────────────────────────────┘
-                        │
-                        ▼ POST to oauth2.googleapis.com/token
-┌─────────────────────────────────────────────────────┐
-│  3. Google OAuth2 Access Token (1 hour lifetime)     │
-│     - Cached in memory with 55-min refresh window    │
-│     - Auto-refreshed on next API call after expiry   │
-└───────────────────────┬─────────────────────────────┘
-                        │
-            ┌───────────┼───────────┐
-            ▼           ▼           ▼
-      RTDB Rules    Functions    Logging
-      /.settings    /v1/projects /v2/entries
-      /rules.json   /locations   :list
-                    /functions
-```
+All functions run in the `word-boxing` Firebase project. Source: `/Developer/gameshelf-functions/functions/index.js`.
 
----
+### Game Shelf Functions
+| Function | Trigger | Purpose |
+|----------|---------|---------|
+| `getHint` | HTTPS callable | AI puzzle hints via Claude Haiku, cached globally |
+| `getHintUsage` | HTTPS callable | Rate limit status |
+| `getDailyInsight` | HTTPS callable | AI puzzle analysis, cached daily |
+| `submitInsightReaction` | HTTPS callable | User votes on insights |
+| `getMorningReview` | HTTPS callable | Pre-puzzle preview for up to 10 games |
+| `getAIHelp` | HTTPS callable | In-app AI assistant (20/day limit) |
+| `createCoinCheckout` | HTTPS callable | Stripe checkout for token purchase |
+| `stripeWebhook` | HTTPS onRequest | Stripe payment processing |
+| `getGiftOptions` / `redeemGift` / `getGiftHistory` | HTTPS callable | Token gift system |
+| `completeBetaRegistration` | HTTPS callable | Beta signup with referral bonuses |
+| `getUserType` | HTTPS callable | User type lookup |
 
-## GitHub API Usage
+### Database Triggers
+| Function | Trigger Path | Purpose |
+|----------|-------------|---------|
+| `calculateBattleScore` | `battles/{id}/participants/{id}` | Server-side authoritative scoring |
 
-### Endpoints Used
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/user/repos` | List all repos |
-| GET | `/repos/:owner/:repo` | Check repo exists |
-| POST | `/user/repos` | Create new repo |
-| PUT | `/repos/:owner/:repo/contents/:path` | Create/update file |
-| DELETE | `/repos/:owner/:repo/contents/:path` | Delete file |
-| POST | `/repos/:owner/:repo/pages` | Enable GitHub Pages |
-| POST | `/repos/:owner/:repo/pages/builds` | Trigger Pages build |
-| POST | `/repos/:owner/:repo/git/tags` | Create git tag |
-| POST | `/repos/:owner/:repo/git/refs` | Create git ref for tag |
+### Scheduled
+| Function | Schedule | Purpose |
+|----------|---------|---------|
+| `dailyCacheCleanup` | 3am ET daily | Purge stale hint/review caches |
+| `checkBattleCompletion` | Hourly | Mark ended battles as completed |
+| `dailyUserStatsEmail` | 8am ET daily | Stats email via SendGrid |
 
----
+### CC Utility
+| Function | Trigger | Purpose | Note |
+|----------|---------|---------|------|
+| `domainProxy` | HTTPS onRequest | CORS proxy for Porkbun/GoDaddy DNS APIs | ⚠️ Unauthenticated, CORS wildcard |
 
-## Google Cloud API Usage (v8.9.0)
-
-### Endpoints Used
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| POST | `oauth2.googleapis.com/token` | Exchange JWT for access token |
-| GET | `{databaseURL}/.settings/rules.json` | Read RTDB security rules |
-| PUT | `{databaseURL}/.settings/rules.json` | Deploy RTDB security rules |
-| GET | `cloudfunctions.googleapis.com/v1/projects/{id}/locations/{loc}/functions` | List Cloud Functions |
-| POST | `logging.googleapis.com/v2/entries:list` | Query Cloud Logging |
-
-### Auth: Service account JWT → OAuth2 bearer token
-### Scopes: `firebase.database`, `cloud-platform`
+### Admin
+| Function | Purpose |
+|----------|---------|
+| `getUserStats` | Aggregate user stats (admin-restricted) |
+| `getBetaAnalytics` | Beta onboarding analytics (admin-restricted) |
+| `testDailyStatsEmail` | Manual trigger for stats email |
 
 ---
 
 ## Repository Structure
 
-CC follows a **test → prod** deployment workflow using separate GitHub repos per environment. Each repo is served by GitHub Pages.
+| Repo | Environment | URL | Purpose |
+|------|------------|-----|---------|
+| `command-center-test` | Test | `stewartdavidp-ship-it.github.io/command-center-test/` | Test deploys |
+| `command-center` | Prod | `aicommandcenter.dev` | Production |
 
-### Command Center Repos
-
-| Repo | Environment | GitHub Pages URL | Custom Domain |
-|------|-------------|-----------------|---------------|
-| `command-center-test` | Test | `stewartdavidp-ship-it.github.io/command-center-test/` | — |
-| `command-center` | Prod | `stewartdavidp-ship-it.github.io/command-center/` | `aicommandcenter.dev` |
-
-### Repo Pattern Matching
-
-Each app definition includes `repoPatterns` that map environment names to repo name patterns. CC uses these to auto-resolve which repo to deploy to:
-
-```javascript
-'command-center': {
-    repoPatterns: {
-        test: ['command-center-test'],
-        prod: ['command-center']
-    }
-}
-```
-
-### Deployment Rule
-
-**Always deploy to test first.** Never push code directly to prod.
-
-```
-Local Development → Test Repo → Verify on Test Site → Promote to Prod
-                    (GitHub API)                       (handlePromote)
-```
-
-- **Deploy to test**: Push `index.html` to the test repo via GitHub API (`PUT /repos/:owner/:repo/contents/:path`)
-- **Verify on test**: Check the test site at `stewartdavidp-ship-it.github.io/command-center-test/`
-- **Promote to prod**: Use CC's `handlePromote()` which copies files from the test repo to the prod repo via GitHub API
-
----
-
-## Deploy Flow
-
-```
-1. User drops file onto Dashboard (or Claude deploys via GitHub API)
-2. File content read, version extracted from <meta> tag
-3. App auto-detected via detectionPatterns
-4. User confirms app + target environment (should be TEST)
-5. handleDeploy():
-   a. Resolve target repo (test or prod via repoPatterns)
-   b. Get existing file SHA
-   c. PUT file via GitHub API
-   d. Create git tag
-   e. Enable Pages + force rebuild
-   f. Verify deployed version
-   g. Update state + localStorage
-   h. Log to deploy history
-```
-
-### Promote Flow (Test → Prod)
-
-```
-1. handlePromote(appId):
-   a. Read all files from test repo (index.html, sw.js if PWA, etc.)
-   b. For each file, get existing prod SHA
-   c. PUT each file to prod repo
-   d. Create git tag on prod
-   e. Enable Pages + force rebuild
-   f. Verify promoted version
-   g. Update state + deploy history
-```
+**Deploy rule:** Always deploy to test first. Verify, then promote to prod.
 
 ---
 
@@ -400,82 +234,51 @@ Local Development → Test Repo → Verify on Test Site → Promote to Prod
 
 - **Tailwind CSS** via CDN (utility classes only, no build)
 - **Dark theme** — bg-slate-900 base, slate-700/800 cards
-- **Color system** — Project colors (indigo, rose, emerald, amber, etc.)
-- **Responsive** — Works on desktop, functional on tablet, limited on mobile
+- **No build system** — all inline in single HTML file
 
 ---
 
-## Session Continuity
+## Known Issues / OPENs
 
-This file is part of the **Command Center project package** (`cc-project-vX.X.X.zip`). Update with any new components, data flow changes, or API usage when producing a package.
+1. **Sessions have no "Load More"** — only 15 most recent visible in browser. Older sessions accessible via MCP `session(list)` only.
+2. ~~**domainProxy is unauthenticated**~~ — **RESOLVED v8.71.5** (2026-02-20). Added Firebase ID token verification + origin-restricted CORS.
+3. ~~**Document TTL cleanup is lazy-only**~~ — **RESOLVED v8.71.5** (2026-02-20). Added `documentCleanup` scheduled Cloud Function (daily 4am ET).
+4. **MCP server cold starts lose OAuth tokens** — configured with 0 min instances. Claude.ai users must reconnect after deploys.
+5. **CLAUDE.md generator can produce duplicates** — same concept appears multiple times when linked across ideas.
+6. **Shared Firebase project** — `word-boxing` hosts CC, Game Shelf, and all experiments. Causes naming confusion.
 
 ---
 
-## Planned Architecture Changes
+## Architecture Backlog
 
-### Projects as Stored Data — ✅ COMPLETED (v8.12.0)
+Captured from security & performance audit (2026-02-20). Tracked as OPENs for future sessions.
 
-Projects are now stored in `cc_config_v3.projects` alongside apps:
+### Security
 
-```
-cc_config_v3 = {
-  version: '...',
-  environments: { ... },
-  projects: {                          ← NEW v8.12.0
-    'gameshelf': { id, name, icon, color, description, order, state },
-    'other': { ... }                   ← catch-all, non-deletable
-  },
-  apps: {
-    'gameshelf': { id, name, project: 'gameshelf', ... },
-    ...
-  }
-}
-```
+| ID | Item | Severity | Notes |
+|----|------|----------|-------|
+| SEC-1 | **In-memory OAuth token store** — Cloud Run cold starts wipe all OAuth tokens. Claude.ai users must reconnect after every deploy or idle period. | Medium | Fix: Firebase-backed token store. `store.ts` line 6 has a TODO for this. Cost vs UX tradeoff — `minInstances: 1` adds ~$18/month. |
+| SEC-2 | **`Math.random()` for API key secret** — CC API keys use `Math.random()` which is not cryptographically secure. Predictable given enough observations. | Low | Acceptable single-user. Upgrade to `crypto.randomBytes()` if/when multi-user. Located in `index.html` line ~5479. |
+| SEC-3 | **Dev mode auth bypass (`SKIP_AUTH`)** — If `SKIP_AUTH=true` env var is accidentally set on Cloud Run, all auth is bypassed. | Low | Verified not set in production. Add a startup check that logs a warning if `SKIP_AUTH` is set in non-development. |
+| SEC-4 | **Game Shelf world-writable paths** — `games`, `lobby`, `battles`, `public-battles` are writable by any authenticated user. | Info | By design for multiplayer. Validated by game code format (`/^[A-Z]{5}$/`). Separate concern from CC. |
+| SEC-5 | **`teamMembership` write rule** — `generateRulesTemplate()` in `index.html` allows any auth user to write `teamMembership` under any `$uid`. Not currently deployed (template only), but would be a risk if deployed. | Low | Fix the template to restrict writes to `auth.uid === $uid` before deploying team features. |
 
-**ConfigManager methods:**
-- `addProject()`, `updateProject()`, `removeProject()`, `getProjectAppCount()`
-- `mergeWithDefaults()` seeds projects from `SEED_PROJECTS` on first load
-- Migration handles `_standalone` → `other` and `cc_projectStates` → `config.projects[id].state`
+### Performance
 
-**Component flow:**
-- `getProjectsWithApps(apps, config.projects)` — reads from config
-- `ProjectsTab` — full CRUD via `ProjectEditModal`
-- `AppEditModal` / `SetupNewAppView` dropdowns read from `config.projects`
+| ID | Item | Severity | Notes |
+|----|------|----------|-------|
+| PERF-1 | **`documentCleanup` full tree read** — The new cleanup function does `db.ref("command-center").once("value")` downloading ~787KB. Runs daily = negligible now. | Low | If CC data grows past 10MB, optimize to shallow-read user list first, then query each user's documents separately. |
+| PERF-2 | **Firebase indexes not file-backed before v8.71.5** — Prior to the `database.rules.json` file, indexes were only in the live Firebase console with no version control or rollback. | Resolved | Fixed in v8.71.5 — `database.rules.json` in `firebase-functions/` repo now tracks all rules. |
+| PERF-3 | **Jobs collection is heaviest listener** — 30 jobs at 176KB total. `limitToLast(10)` bounds it to ~60KB per trigger. If job payloads grow (larger instructions/attachments), consider reducing limit or trimming completed job data. | Low | Monitor. Current cost: ~$0.06/KB × triggers/day. |
+| PERF-4 | **No Firebase budget alerts configured** — The Blaze plan has no spending caps or alerts. The billing budgets API isn't enabled on the project. | Medium | Enable Cloud Billing Budget API and set a $25/month alert. |
+| PERF-5 | **Firebase SDK upgrade warning** — Cloud Functions using `firebase-functions@4.9.0` (SDK warns to upgrade to ≥5.1.0). Runtime Node.js 20 will be deprecated 2026-04-30. | Medium | Schedule upgrade to `firebase-functions@5.x` and `nodejs22` before April 2026. |
 
-### App Creation Consolidation (Priority 2)
+### Technical Debt
 
-```
-Current:                              Planned:
-Configure → Setup New App     →      (removed from nav)
-  SetupNewAppView (wizard)
-
-Configure → Projects          →      Configure → Projects
-  ProjectsTab                          ProjectsTab
-    "Add App" → AppEditModal             "Add App" → Full Wizard (pre-filled)
-    (basic form)                         (creates repos, seeds files, etc.)
-```
-
-### Firebase Capabilities — Current vs Planned
-
-**What FirebaseView currently has:**
-- Auth (Google sign-in or manual UID)
-- Path browser with quick-path buttons (users, battles, friends, gameshelf-public, etc.)
-- Recursive tree viewer with expand/collapse
-- Inline editing of values
-- Delete nodes
-- Realtime listener toggle
-- Copy data
-
-**What's missing from FirebaseView (for future phases):**
-- No Rules viewer/editor (admin API exists in FirebaseAdmin, UI not built yet)
-- No Cloud Functions status or logs (admin API exists, UI not built yet)
-- No database size/usage metrics
-- No schema documentation (quickPaths hint at structure but no formal schema map)
-- No connection between apps and their Firebase paths (e.g., "Quotle uses `users/{uid}/quotle`" isn't tracked)
-- No Firebase config per-project (everything points to single `word-boxing-default-rtdb`)
-
-**Firebase access from Claude's environment:**
-- Network access to `*.firebaseio.com` and `*.firebasedatabase.app` is configured
-- Firebase rules require authentication — anonymous REST calls get "Permission denied"
-- Authenticated REST calls possible with Firebase auth token or database secret
-- Cannot do Google OAuth from Claude's environment
+| ID | Item | Notes |
+|----|------|-------|
+| DEBT-1 | **Push v8.71.5 to GitHub Pages** — domainProxy auth changes in CC browser app need deployment. Domains tab is broken on the live site until this is pushed. |
+| DEBT-2 | **`command-center/command-center/domainProxy.js` is now dead code** — The function was integrated into `firebase-functions/functions/index.js`. The standalone file can be archived or deleted. |
+| DEBT-3 | **`firebase-rules-updated.json` in Downloads is stale** — The canonical rules file is now `firebase-functions/database.rules.json`. The old file in Downloads should be deleted to avoid confusion. |
+| DEBT-4 | **Second CC user (`ptYPWbTDlCPvrKTq2NmWWHuEvkv1`) has only an apiKeyHash** — Likely a test account. Consider cleaning up if not needed. |
+| DEBT-5 | **CC line count documentation stale** — ARCHITECTURE.md says ~16,900 lines but v8.71.5 changes haven't been counted. Update after next deploy. |

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
-    <meta name="version" content="8.71.4">
+    <meta name="version" content="8.71.5">
     <meta name="gs-app-id" content="command-center">
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -477,10 +477,15 @@
             if (!cfg.apiKey || !cfg.secretApiKey) {
                 throw new Error('Porkbun API keys not configured. Go to Settings → Domain Registrar.');
             }
-            
+
+            // v8.71.5: Pass Firebase ID token for domainProxy auth
+            const idToken = firebaseAuth?.currentUser ? await firebaseAuth.currentUser.getIdToken() : null;
+            const headers = { 'Content-Type': 'application/json' };
+            if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
+
             const response = await fetch(this.PROXY_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({
                     provider: 'porkbun',
                     endpoint: endpoint,
@@ -616,10 +621,14 @@
                 } catch {}
             }
             
-            // Pricing endpoint via proxy (no auth needed but still has CORS issues)
+            // Pricing endpoint via proxy (auth required since v8.71.5)
+            const idToken = firebaseAuth?.currentUser ? await firebaseAuth.currentUser.getIdToken() : null;
+            const pricingHeaders = { 'Content-Type': 'application/json' };
+            if (idToken) pricingHeaders['Authorization'] = `Bearer ${idToken}`;
+
             const response = await fetch(this.PROXY_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: pricingHeaders,
                 body: JSON.stringify({
                     provider: 'porkbun',
                     endpoint: '/pricing/get',
@@ -759,9 +768,14 @@
                 proxyBody.body = body;
             }
 
+            // v8.71.5: Pass Firebase ID token for domainProxy auth
+            const idToken = firebaseAuth?.currentUser ? await firebaseAuth.currentUser.getIdToken() : null;
+            const proxyHeaders = { 'Content-Type': 'application/json' };
+            if (idToken) proxyHeaders['Authorization'] = `Bearer ${idToken}`;
+
             const response = await fetch(this.PROXY_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: proxyHeaders,
                 body: JSON.stringify(proxyBody)
             });
 
