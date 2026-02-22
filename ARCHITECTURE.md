@@ -1,6 +1,6 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-02-22 (v8.71.6)
+> **Last updated:** 2026-02-22 (v8.71.8)
 >
 > **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 27).
 
@@ -34,7 +34,7 @@
 
 | Item | Value |
 |------|-------|
-| **CC app** | `/Users/davidstewart/Downloads/command-center/index.html` (single-file, v8.71.6) |
+| **CC app** | `/Users/davidstewart/Downloads/command-center/index.html` (single-file, v8.71.8) |
 | **MCP server** | `/Users/davidstewart/Downloads/command-center/mcp-server/src/` |
 | **Firebase Functions** | `/Users/davidstewart/Downloads/firebase-functions/functions/index.js` |
 | **Firebase Rules** | `/Users/davidstewart/Downloads/firebase-functions/database.rules.json` |
@@ -42,7 +42,7 @@
 | **Firebase project** | `word-boxing` |
 | **Firebase UID** | `oUt4ba0dYVRBfPREqoJ1yIsJKjr1` |
 | **MCP server URL** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
-| **Latest MCP revision** | `cc-mcp-server-00055-tw2` |
+| **Latest MCP revision** | `cc-mcp-server-00056-xc9` |
 
 ### Deploy Commands
 
@@ -189,7 +189,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 │       │            │            │            │        │
 │  ┌────┴────┐  ┌────┴────┐  documents  claudeMd      │
 │  │appIdeas │  │  config │  preferences  apiKeyHash   │
-│  └─────────┘  └─────────┘                            │
+│  └─────────┘  └─────────┘  profile  attentionQueue   │
 └─────────────────────┬────────────────────────────────┘
                       │
           ┌───────────┼───────────┐
@@ -294,7 +294,6 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 | DEBT-5 | **CC line count documentation stale** | Low | Update after next major change. |
 | DEBT-12 | **Firebase SA JSON in Downloads folder** — Should move to secure location. | Medium | User action required. |
 | DEBT-13 | **Game Shelf functions not in firebase-functions repo** — 22 functions in separate codebase. | Low | Consider consolidating. |
-| DEBT-14 | **Firebase Functions SDK upgrade** — Same as PERF-5. | Medium | Before April 2026. |
 
 ### Resolved (2026-02-20)
 
