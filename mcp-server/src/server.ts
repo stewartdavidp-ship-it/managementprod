@@ -12,6 +12,7 @@ import { registerDocumentTools } from "./tools/documents.js";
 import { registerSkillTools } from "./tools/skills.js";
 import { registerRepoTools } from "./tools/repo.js";
 import { registerKnowledgeTreeTools } from "./tools/knowledge-tree.js";
+import { registerKnowledgeNodeTools } from "./tools/knowledge-node.js";
 import { registerSkillPrompts } from "./skills.js";
 
 export function createServer(): McpServer {
@@ -31,6 +32,7 @@ export function createServer(): McpServer {
   registerSkillTools(server);
   registerRepoTools(server);
   registerKnowledgeTreeTools(server);
+  registerKnowledgeNodeTools(server);
 
   // Register resources
   registerResources(server);
