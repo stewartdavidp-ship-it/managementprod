@@ -99,6 +99,43 @@ export function getConceptRef(uid: string, conceptId: string) {
   return db.ref(`command-center/${uid}/concepts/${conceptId}`);
 }
 
+export function getProfileRef(uid: string) {
+  return db.ref(`command-center/${uid}/profile`);
+}
+
+export function getAttentionQueueRef(uid: string) {
+  return db.ref(`command-center/${uid}/attentionQueue`);
+}
+
+// ─── Knowledge Tree refs ───
+export function getForestsRef(uid: string) {
+  return db.ref(`command-center/${uid}/knowledge/forests`);
+}
+
+export function getForestRef(uid: string, forestId: string) {
+  return db.ref(`command-center/${uid}/knowledge/forests/${forestId}`);
+}
+
+export function getTreesRef(uid: string) {
+  return db.ref(`command-center/${uid}/knowledge/trees`);
+}
+
+export function getTreeRef(uid: string, treeId: string) {
+  return db.ref(`command-center/${uid}/knowledge/trees/${treeId}`);
+}
+
+export function getTreeIndexRef(uid: string, treeId: string) {
+  return db.ref(`command-center/${uid}/knowledge/trees/${treeId}/index`);
+}
+
+export function getNodesRef(uid: string) {
+  return db.ref(`command-center/${uid}/knowledge/nodes`);
+}
+
+export function getNodeContentRef(uid: string, nodeId: string) {
+  return db.ref(`command-center/${uid}/knowledge/nodes/${nodeId}`);
+}
+
 export function getDb(): admin.database.Database {
   return db;
 }
