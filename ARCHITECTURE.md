@@ -16,6 +16,7 @@
 | Component Hierarchy | React component tree, navigation tabs | 1.1K |
 | Firebase Realtime Listeners | Active/suspended listeners, limits, costs | 1.8K |
 | Data Flow | Browser↔Firebase↔MCP↔Functions data paths | 2.8K |
+| Knowledge Tree System | Evidence Engine: forests, trees, nodes, concept pointers | 2.5K |
 | Cost Architecture | Firebase billing, guardrails, incident history | 1.5K |
 | CC Cloud Functions | domainProxy, documentCleanup, Game Shelf note | 0.7K |
 | Repositories | GitHub repos (public/private) | 0.4K |
@@ -42,7 +43,7 @@
 | **Firebase project** | `word-boxing` |
 | **Firebase UID** | `oUt4ba0dYVRBfPREqoJ1yIsJKjr1` |
 | **MCP server URL** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
-| **Latest MCP revision** | `cc-mcp-server-00056-xc9` |
+| **Latest MCP revision** | `cc-mcp-server-00061-9xz` |
 
 ### Deploy Commands
 
@@ -93,7 +94,7 @@ CC is a single-file React application deployed via GitHub Pages. It uses React 1
 │  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
 │  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
 │  └─────────────┘                  │  (Cloud Run)         │             │
-│                                    │  11 tools, 27 skills │             │
+│                                    │  13 tools, 27 skills │             │
 │  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
 │  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
 │  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
@@ -187,9 +188,12 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 │  │ (ODRC)   │ │          │ │         │ │          │ │
 │  └────┬─────┘ └────┬─────┘ └────┬────┘ └────┬─────┘ │
 │       │            │            │            │        │
-│  ┌────┴────┐  ┌────┴────┐  documents  claudeMd      │
-│  │appIdeas │  │  config │  preferences  apiKeyHash   │
-│  └─────────┘  └─────────┘  profile  attentionQueue   │
+│  ┌────┴────┐  ┌────┴────┐  documents  ┌───────────┐ │
+│  │appIdeas │  │  config │  claudeMd   │ knowledge │ │
+│  └─────────┘  └─────────┘  prefs      │ forests/  │ │
+│                             apiKeyHash │ trees/    │ │
+│                             profile    │ nodes/    │ │
+│                                        └───────────┘ │
 └─────────────────────┬────────────────────────────────┘
                       │
           ┌───────────┼───────────┐
@@ -197,7 +201,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
           ▼           ▼           ▼
     CC Browser    MCP Server    Cloud Functions
     (listeners)   (reads/writes) (triggers/scheduled)
-    4 active      11 tools       domainProxy, documentCleanup
+    4 active      13 tools       domainProxy, documentCleanup
 ```
 
 ### Browser → Firebase
@@ -208,12 +212,59 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 
 ### MCP Server → Firebase
 - **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
-- **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences
+- **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes)
 - **Debounced:** `contextEstimate` flushed every 30 seconds (not per-call)
 
 ### Cloud Functions → Firebase
 - **domainProxy:** Authenticated CORS proxy for Porkbun/GoDaddy APIs (requires Firebase ID token)
 - **documentCleanup:** Daily 4am ET scheduled purge of delivered/failed docs older than 7 days
+
+---
+
+## Knowledge Tree System
+
+The Evidence Engine stores curated research findings in a three-level hierarchy under `command-center/{uid}/knowledge/`. This system is MCP-only (no browser listeners).
+
+```
+knowledge/
+├── forests/{forestId}          Domain groupings (e.g., "Firebase", "React")
+│   ├── name, description, tags
+│   └── treeIds[]               References to member trees
+├── trees/{treeId}              Topic-level containers
+│   ├── name, description, tokenBudget, tokenUsed
+│   ├── trustProfile            {authoritative, credible, unverified, questionable}
+│   ├── searchHistory[]         [{query, nodeIdsProduced, searchedAt}]
+│   └── index/{nodeId}          Cheap routing entries (always loaded with tree)
+│       ├── question, keyFinding, tokenCost, trust
+│       └── parentId, childIds[], order
+└── nodes/{nodeId}              Expensive content records (loaded on demand)
+    ├── treeId, content, tokenCount
+    ├── sources[]               [{url, document, credibility, discoveryQuery?}]
+    ├── consensusNotes
+    └── crossRefs[]             [{nodeId, treeId, relationship}]
+```
+
+**Key design constraint:** Firebase RTDB has no server-side field projection. The index/content split MUST be at the Firebase path level — `trees/{treeId}/index/` vs `nodes/{nodeId}/` — so loading a tree index never pulls node content.
+
+### Concept ↔ Knowledge Pointers
+
+Concepts carry lightweight `knowledgeRefs` arrays linking to knowledge nodes:
+
+```
+concepts/{conceptId}/
+├── knowledgeRefs[]             [{nodeId, treeId, treeName, relationship, addedAt}]
+├── knowledgeRefCount           Integer (denormalized for summary views)
+```
+
+Relationship types: `supports`, `informs`, `constrains`, `contradicts`.
+
+### MCP Tools
+
+| Tool | Actions | Purpose |
+|------|---------|---------|
+| `knowledge_tree` | 10 actions | Forest CRUD, tree CRUD, get_index, add_search |
+| `knowledge_node` | 6 actions | Node CRUD, load, load_batch, move |
+| `concept` | +2 actions | add_knowledge_ref, remove_knowledge_ref |
 
 ---
 
