@@ -4,8 +4,9 @@ import { initFirebase } from "./firebase.js";
 import { createServer } from "./server.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey } from "./auth/store.js";
-import { requestContext } from "./context.js";
-import { incrementContextEstimate } from "./tools/sessions.js";
+import { requestContext, setContextEstimate } from "./context.js";
+import { incrementContextEstimate, getActiveSessionId, getPendingContextAccumulation } from "./tools/sessions.js";
+import { getSessionRef } from "./firebase.js";
 
 // Initialize Firebase before anything else
 initFirebase();
@@ -179,6 +180,22 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
 
   // Run the MCP handler within the user's context
   requestContext.run({ firebaseUid }, async () => {
+    // Load contextEstimate from Firebase once per request for _contextHealth
+    // Uses active session cache + pending accumulation for accurate reading
+    if (firebaseUid) {
+      try {
+        const activeSessionId = getActiveSessionId(firebaseUid);
+        if (activeSessionId) {
+          const snap = await getSessionRef(firebaseUid, activeSessionId).child("contextEstimate").once("value");
+          const firebaseValue = snap.val() || 0;
+          const pendingAccum = getPendingContextAccumulation(firebaseUid);
+          setContextEstimate(firebaseValue + pendingAccum);
+        }
+      } catch {
+        // Non-critical — _contextHealth will be omitted if this fails
+      }
+    }
+
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
     });

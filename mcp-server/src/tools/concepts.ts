@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
+import { withResponseSize } from "../response-metadata.js";
 
 // Mirrors CC's ODRC_TYPES (index.html:4772)
 const ODRC_TYPES = ["OPEN", "DECISION", "RULE", "CONSTRAINT"] as const;
@@ -61,23 +62,41 @@ async function updateJobRecord(
 
 export function registerConceptTools(server: McpServer): void {
 
-  // list_concepts — kept standalone (most frequent read, simple schema)
+  // Concept scope values
+  const CONCEPT_SCOPES = ["global", "app", "idea"] as const;
+
+  // list_concepts — primary query tool for concepts (replaces get_active_concepts for grouped views)
   server.tool(
     "list_concepts",
-    "List ODRC concepts. Filter by ideaId, appId, type, or status. Returns all concepts if no filters provided.",
+    `List ODRC concepts. Filter by ideaId, appId, type, or status. Returns all concepts if no filters provided.
+Set grouped=true to return concepts organized by type (rules, constraints, decisions, opens) instead of a flat list. When grouped=true, status defaults to "active".`,
     {
       ideaId: z.string().optional().describe("Filter by origin idea ID"),
       appId: z.string().optional().describe("Filter by app ID (returns concepts from all ideas linked to this app)"),
       type: z.enum(ODRC_TYPES).optional().describe("Filter by concept type: OPEN, DECISION, RULE, or CONSTRAINT"),
       status: z.enum(CONCEPT_STATUSES).optional().describe("Filter by status: active, superseded, resolved, or transitioned"),
+      scope: z.enum(CONCEPT_SCOPES).optional().describe("Filter by scope: global, app, or idea"),
+      summary: z.boolean().optional().describe("If true (default), return lean summary with content truncated to 150 chars. Set false for full objects."),
+      grouped: z.boolean().optional().describe("If true, return concepts grouped by type { rules, constraints, decisions, opens, totalCount }. Defaults status to 'active'."),
       limit: z.number().int().optional().describe("Max results to return (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ ideaId, appId, type, status, limit, offset }) => {
+    async ({ ideaId, appId, type, status, scope, summary, grouped, limit, offset }) => {
       const uid = getCurrentUid();
+      const useSummary = summary !== false; // default true
+      const useGrouped = grouped === true;
+
+      // When grouped=true, default status to "active" (the aggregate "current truth" view)
+      const effectiveStatus = status || (useGrouped ? "active" : undefined);
+
       const snapshot = await getConceptsRef(uid).once("value");
       const data = snapshot.val();
-      if (!data) return { content: [{ type: "text", text: JSON.stringify([], null, 2) }] };
+      if (!data) {
+        if (useGrouped) {
+          return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify({ rules: [], constraints: [], decisions: [], opens: [], totalCount: 0 }, null, 2) }] });
+        }
+        return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify({ items: [], total: 0, offset: 0, limit: 20 }, null, 2) }] });
+      }
 
       let concepts: any[] = Object.values(data);
 
@@ -90,25 +109,61 @@ export function registerConceptTools(server: McpServer): void {
 
       if (ideaId) concepts = concepts.filter((c) => c.ideaOrigin === ideaId);
       if (type) concepts = concepts.filter((c) => c.type === type);
-      if (status) concepts = concepts.filter((c) => c.status === status);
+      if (effectiveStatus) concepts = concepts.filter((c) => c.status === effectiveStatus);
+      if (scope) concepts = concepts.filter((c) => (c.scope || "idea") === scope);
 
+      // Projection function: summary (truncated) or full objects
+      const project = useSummary
+        ? (c: any) => ({
+            id: c.id,
+            type: c.type,
+            content: c.content?.length > 150 ? c.content.substring(0, 150) + "..." : c.content,
+            status: c.status,
+            scopeTags: c.scopeTags || [],
+            scope: c.scope || null,
+            ideaOrigin: c.ideaOrigin,
+          })
+        : (c: any) => c;
+
+      // Grouped mode: return { rules, constraints, decisions, opens, totalCount }
+      if (useGrouped) {
+        const grouped = {
+          rules: concepts.filter((c) => c.type === "RULE").map(project),
+          constraints: concepts.filter((c) => c.type === "CONSTRAINT").map(project),
+          decisions: concepts.filter((c) => c.type === "DECISION").map(project),
+          opens: concepts.filter((c) => c.type === "OPEN").map(project),
+          totalCount: concepts.length,
+        };
+
+        const AVG_CONCEPT_FULL_SIZE = 500;
+        const extraMeta: Record<string, number> = {};
+        if (useSummary && concepts.length > 0) {
+          extraMeta._estimatedFullSize = concepts.length * AVG_CONCEPT_FULL_SIZE;
+        }
+
+        return withResponseSize(
+          { content: [{ type: "text" as const, text: JSON.stringify(grouped, null, 2) }] },
+          extraMeta
+        );
+      }
+
+      // Flat list mode (original behavior): paginated results
       const total = concepts.length;
       const skip = offset && offset > 0 ? offset : 0;
       const take = limit && limit > 0 ? limit : 20;
       concepts = concepts.slice(skip, skip + take);
 
-      // Lean response: summary fields with truncated content. Use concept(get) for full record.
-      const lean = concepts.map((c) => ({
-        id: c.id,
-        type: c.type,
-        status: c.status,
-        ideaOrigin: c.ideaOrigin,
-        content: c.content?.length > 100 ? c.content.substring(0, 100) + "..." : c.content,
-        scopeTags: c.scopeTags,
-        createdAt: c.createdAt,
-      }));
+      const projected = concepts.map(project);
 
-      return { content: [{ type: "text", text: JSON.stringify({ items: lean, total, offset: skip, limit: take }, null, 2) }] };
+      // Estimate average full-detail item size from current page
+      const avgItemSize = concepts.length > 0
+        ? Math.round(concepts.reduce((sum, c) => sum + JSON.stringify(c).length, 0) / concepts.length)
+        : 0;
+
+      return withResponseSize(
+        { content: [{ type: "text" as const, text: JSON.stringify({ items: projected, total, offset: skip, limit: take }, null, 2) }] },
+        { _estimatedItemSize: avgItemSize }
+      );
     }
   );
 
@@ -133,11 +188,12 @@ export function registerConceptTools(server: McpServer): void {
       newType: z.enum(ODRC_TYPES).optional().describe("Target type (required for transition)"),
       ideaOrigin: z.string().optional().describe("Origin idea ID (required for create)"),
       newIdeaId: z.string().optional().describe("New idea ID to migrate concept to (required for migrate)"),
+      scope: z.enum(["global", "app", "idea"]).optional().describe("Concept scope: global (cross-app), app (within one app), or idea (current phase only). Optional for create/update."),
       scopeTags: z.array(z.string()).optional().describe("Scope tags (optional for create/update)"),
       sessionId: z.string().optional().describe("Active session ID for tracking (optional for create/transition/supersede/resolve)"),
       jobId: z.string().optional().describe("Active job ID for tracking (optional for create/transition/supersede/resolve)"),
     },
-    async ({ action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scopeTags, sessionId, jobId }) => {
+    async ({ action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, sessionId, jobId }) => {
       const uid = getCurrentUid();
 
       // ─── CREATE ───
@@ -148,7 +204,7 @@ export function registerConceptTools(server: McpServer): void {
 
         const ref = getConceptsRef(uid).push();
         const now = new Date().toISOString();
-        const concept = {
+        const concept: Record<string, any> = {
           id: ref.key,
           type,
           content,
@@ -160,6 +216,7 @@ export function registerConceptTools(server: McpServer): void {
           createdAt: now,
           updatedAt: now,
         };
+        if (scope) concept.scope = scope;
         await ref.set(concept);
 
         // Update session record if sessionId provided
@@ -213,6 +270,7 @@ export function registerConceptTools(server: McpServer): void {
 
         const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
         if (content !== undefined) updates.content = content;
+        if (scope !== undefined) updates.scope = scope;
         if (scopeTags !== undefined) updates.scopeTags = scopeTags;
 
         await ref.update(updates);
@@ -241,7 +299,7 @@ export function registerConceptTools(server: McpServer): void {
 
         const now = new Date().toISOString();
         const newRef = getConceptsRef(uid).push();
-        const newConcept = {
+        const newConcept: Record<string, any> = {
           id: newRef.key,
           type: newType,
           content: concept.content,
@@ -253,6 +311,7 @@ export function registerConceptTools(server: McpServer): void {
           createdAt: now,
           updatedAt: now,
         };
+        if (concept.scope) newConcept.scope = concept.scope;
 
         // Flag related concepts if CONSTRAINT transitions
         let flaggedConcepts: any[] = [];
@@ -344,7 +403,7 @@ export function registerConceptTools(server: McpServer): void {
 
         const now = new Date().toISOString();
         const newRef = getConceptsRef(uid).push();
-        const newConcept = {
+        const newConcept: Record<string, any> = {
           id: newRef.key,
           type: concept.type,
           content: newContent,
@@ -356,6 +415,7 @@ export function registerConceptTools(server: McpServer): void {
           createdAt: now,
           updatedAt: now,
         };
+        if (concept.scope) newConcept.scope = concept.scope;
 
         const fbUpdates: Record<string, any> = {};
         fbUpdates[`${conceptId}/status`] = "superseded";
@@ -527,29 +587,31 @@ export function registerConceptTools(server: McpServer): void {
     }
   );
 
-  // get_active_concepts — kept standalone (computed aggregate, different return shape)
+  // get_active_concepts — thin wrapper over list_concepts(grouped=true) for backward compat
+  // Prefer list_concepts with grouped=true for new code.
   server.tool(
     "get_active_concepts",
     `Get all active ODRC concepts across all ideas for an app. This is the 'current truth' view — all active RULEs, CONSTRAINTs, DECISIONs, and unresolved OPENs.
-By default returns summary fields (content truncated to 150 chars, timestamps stripped). Set summary=false for full objects.`,
+By default returns summary fields (content truncated to 150 chars, timestamps stripped). Set summary=false for full objects.
+Note: Prefer list_concepts with grouped=true for the same result with more filtering options.`,
     {
       appId: z.string().describe("The app ID to get active concepts for"),
       summary: z.boolean().optional().describe("If true (default), return lean summary with truncated content. Set false for full objects."),
     },
     async ({ appId, summary }) => {
-      const useSummary = summary !== false; // default true
+      // Delegate to the same logic as list_concepts(grouped=true, status="active")
+      const useSummary = summary !== false;
       const uid = getCurrentUid();
       const appIdeasSnap = await getAppIdeasRef(uid, appId).once("value");
       const ideaIds: string[] = appIdeasSnap.val() || [];
 
       if (ideaIds.length === 0) {
-        return { content: [{ type: "text", text: JSON.stringify({ rules: [], constraints: [], decisions: [], opens: [], totalCount: 0 }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify({ rules: [], constraints: [], decisions: [], opens: [], totalCount: 0 }, null, 2) }] });
       }
 
       const allSnap = await getConceptsRef(uid).once("value");
       const allData = allSnap.val() || {};
       const allConcepts: any[] = Object.values(allData);
-
       const active = allConcepts.filter((c) => ideaIds.includes(c.ideaOrigin) && c.status === "active");
 
       const project = useSummary
@@ -559,6 +621,7 @@ By default returns summary fields (content truncated to 150 chars, timestamps st
             content: c.content?.length > 150 ? c.content.substring(0, 150) + "..." : c.content,
             status: c.status,
             scopeTags: c.scopeTags || [],
+            scope: c.scope || null,
             ideaOrigin: c.ideaOrigin,
           })
         : (c: any) => c;
@@ -571,7 +634,16 @@ By default returns summary fields (content truncated to 150 chars, timestamps st
         totalCount: active.length,
       };
 
-      return { content: [{ type: "text", text: JSON.stringify(grouped, null, 2) }] };
+      const AVG_CONCEPT_FULL_SIZE = 500;
+      const extraMeta: Record<string, number> = {};
+      if (useSummary && active.length > 0) {
+        extraMeta._estimatedFullSize = active.length * AVG_CONCEPT_FULL_SIZE;
+      }
+
+      return withResponseSize(
+        { content: [{ type: "text" as const, text: JSON.stringify(grouped, null, 2) }] },
+        extraMeta
+      );
     }
   );
 }
