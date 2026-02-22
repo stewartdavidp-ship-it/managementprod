@@ -25,11 +25,12 @@ Actions:
   - "create_tree": Create a tree. Requires name. Optional: description, forestIds, tokenBudget (default 150000), freshnessPeriodDays (default 90).
   - "update_tree": Update tree metadata. Requires treeId. Optional: name, description, forestIds, tokenBudget, freshnessPeriodDays.
   - "delete_tree": Delete tree + all index entries + all node content. Removes from parent forests. Requires treeId.
-  - "get_index": Load a tree's routing-table index — all node index entries for selective content loading. Requires treeId.`,
+  - "get_index": Load a tree's routing-table index — all node index entries for selective content loading. Requires treeId.
+  - "add_search": Record a search query and its results on a tree. Requires treeId, query. Optional: nodeIdsProduced (array of node IDs created from this search). Appends to searchHistory with auto-timestamp.`,
     {
       action: z.enum([
         "list_forests", "create_forest", "update_forest", "delete_forest",
-        "list_trees", "create_tree", "update_tree", "delete_tree", "get_index",
+        "list_trees", "create_tree", "update_tree", "delete_tree", "get_index", "add_search",
       ]).describe("Action to perform"),
       forestId: z.string().optional().describe("Forest ID (required for update_forest/delete_forest, optional filter for list_trees)"),
       treeId: z.string().optional().describe("Tree ID (required for update_tree/delete_tree/get_index)"),
@@ -40,8 +41,10 @@ Actions:
       forestIds: z.array(z.string()).optional().describe("Forest IDs for create_tree/update_tree (multi-forest membership)"),
       tokenBudget: z.number().int().optional().describe("Token budget for a tree (default 150000)"),
       freshnessPeriodDays: z.number().int().optional().describe("Days before nodes are considered stale (default 90)"),
+      query: z.string().optional().describe("Search query text (required for add_search)"),
+      nodeIdsProduced: z.array(z.string()).optional().describe("Node IDs created from a search (optional for add_search)"),
     },
-    async ({ action, forestId, treeId, name, description, tags, treeIds, forestIds, tokenBudget, freshnessPeriodDays }) => {
+    async ({ action, forestId, treeId, name, description, tags, treeIds, forestIds, tokenBudget, freshnessPeriodDays, query, nodeIdsProduced }) => {
       const uid = getCurrentUid();
 
       // ═══════════════════════════════════════
@@ -169,6 +172,7 @@ Actions:
           trustProfile: emptyTrustProfile(),
           freshnessPeriodDays: freshnessPeriodDays || 90,
           lastVerified: null,
+          searchHistory: [],
           visibility: "private",
           owner: uid,
           createdAt: now,
@@ -336,6 +340,7 @@ Actions:
             trustProfile: tree.trustProfile || emptyTrustProfile(),
             lastVerified: tree.lastVerified || null,
             freshnessPeriodDays: tree.freshnessPeriodDays || 90,
+            searchHistory: tree.searchHistory || [],
           },
           index: entries.map((e: any) => ({
             id: e.id,
@@ -357,6 +362,33 @@ Actions:
           { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] },
           { _treeBudgetRemaining: budgetRemaining }
         );
+      }
+
+      // ─── ADD_SEARCH ───
+      if (action === "add_search") {
+        if (!treeId) return withResponseSize({ content: [{ type: "text", text: "add_search requires treeId" }], isError: true });
+        if (!query) return withResponseSize({ content: [{ type: "text", text: "add_search requires query" }], isError: true });
+
+        const ref = getTreeRef(uid, treeId);
+        const snap = await ref.once("value");
+        const tree = snap.val();
+        if (!tree) return withResponseSize({ content: [{ type: "text", text: `Tree not found: ${treeId}` }], isError: true });
+
+        const now = new Date().toISOString();
+        const searchEntry = {
+          query,
+          nodeIdsProduced: nodeIdsProduced || [],
+          searchedAt: now,
+        };
+
+        const history: any[] = tree.searchHistory || [];
+        history.push(searchEntry);
+
+        await ref.update({ searchHistory: history, updatedAt: now });
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ added: searchEntry, totalSearches: history.length }, null, 2) }],
+        });
       }
 
       return withResponseSize({ content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true });

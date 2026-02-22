@@ -34,7 +34,7 @@ Actions:
       trust: z.enum(TRUST_LEVELS).optional().describe("Trust rating (default: unverified)"),
       parentId: z.string().optional().describe("Parent node ID for hierarchy (optional for create, update)"),
       newParentId: z.string().nullable().optional().describe("New parent node ID for move (null = make root)"),
-      sources: z.string().optional().describe("JSON array of source objects: [{url, document, section, credibility, credibilityRationale}]"),
+      sources: z.string().optional().describe("JSON array of source objects: [{url, document, section, credibility, credibilityRationale, discoveryQuery?}]. discoveryQuery records the search query that surfaced this source."),
       consensusNotes: z.string().optional().describe("Agreement/divergence notes across sources"),
       crossRefs: z.string().optional().describe("JSON array of cross-references: [{nodeId, treeId, relationship}]"),
       lastVerified: z.string().optional().describe("ISO date when node was last verified (optional for update)"),
