@@ -22,7 +22,7 @@ Actions:
   - "delete": Delete a node. Requires nodeId. Removes index entry + content record. Updates tree aggregates and parent childIds.
   - "load": Load a single node's full content. Requires nodeId. Returns content, sources, crossRefs, tokenCount.
   - "load_batch": Load multiple nodes in parallel. Requires nodeIds (array, max 10). Returns map of nodeId → content record.
-  - "move": Reparent a node. Requires nodeId, newParentId (or null for root). Updates hierarchy.`,
+  - "move": Reparent a node. Requires nodeId, newParentId (use "root" to make a root node). Updates hierarchy.`,
     {
       action: z.enum(["create", "update", "delete", "load", "load_batch", "move"]).describe("Action to perform"),
       treeId: z.string().optional().describe("Tree ID (required for create)"),
@@ -33,7 +33,7 @@ Actions:
       keyFinding: z.string().optional().describe("One-line key finding summary (auto-generated from content if not provided on create)"),
       trust: z.enum(TRUST_LEVELS).optional().describe("Trust rating (default: unverified)"),
       parentId: z.string().optional().describe("Parent node ID for hierarchy (optional for create, update)"),
-      newParentId: z.string().nullable().optional().describe("New parent node ID for move (null = make root)"),
+      newParentId: z.string().optional().describe("New parent node ID for move (use 'root' to make a root node)"),
       sources: z.string().optional().describe("JSON array of source objects: [{url, document, section, credibility, credibilityRationale, discoveryQuery?}]. discoveryQuery records the search query that surfaced this source."),
       consensusNotes: z.string().optional().describe("Agreement/divergence notes across sources"),
       crossRefs: z.string().optional().describe("JSON array of cross-references: [{nodeId, treeId, relationship}]"),
@@ -356,7 +356,8 @@ Actions:
         if (!currentIndex) return withResponseSize({ content: [{ type: "text", text: `Index entry not found: ${nodeId}` }], isError: true });
 
         const oldParentId = currentIndex.parentId || null;
-        const effectiveNewParentId = newParentId === undefined ? oldParentId : newParentId;
+        // "root" sentinel means make a root node (no parent)
+        const effectiveNewParentId = newParentId === undefined ? oldParentId : (newParentId === "root" ? null : newParentId);
 
         if (oldParentId === effectiveNewParentId) {
           return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ moved: nodeId, parentId: effectiveNewParentId, note: "No change — same parent" }, null, 2) }] });
