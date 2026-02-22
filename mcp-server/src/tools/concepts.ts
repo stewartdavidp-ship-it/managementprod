@@ -122,6 +122,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
             scopeTags: c.scopeTags || [],
             scope: c.scope || null,
             ideaOrigin: c.ideaOrigin,
+            knowledgeRefCount: c.knowledgeRefCount || 0,
           })
         : (c: any) => c;
 
@@ -178,9 +179,11 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
   - "resolve": Mark as resolved (typically OPENs). Requires conceptId. Optional: sessionId, jobId.
   - "mark_built": Mark a DECISION as "built" (implemented in code). Requires conceptId. Only valid for active DECISIONs.
   - "migrate": Re-parent a concept to a different idea. Requires conceptId, newIdeaId. Updates ideaOrigin.
+  - "add_knowledge_ref": Link a concept to a knowledge tree node. Requires conceptId, nodeId, treeId, treeName. Optional: relationship (supports|informs|constrains|contradicts, default: supports).
+  - "remove_knowledge_ref": Unlink a concept from a knowledge tree node. Requires conceptId, nodeId.
   - "delete": Delete a concept. Requires conceptId. Use for test cleanup only.`,
     {
-      action: z.enum(["create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "delete"]).describe("Action to perform"),
+      action: z.enum(["create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "add_knowledge_ref", "remove_knowledge_ref", "delete"]).describe("Action to perform"),
       conceptId: z.string().optional().describe("Concept ID (required for update/transition/supersede/resolve/mark_built/migrate)"),
       type: z.enum(ODRC_TYPES).optional().describe("Concept type (required for create): OPEN, DECISION, RULE, or CONSTRAINT"),
       content: z.string().optional().describe("Concept text (required for create, optional for update)"),
@@ -190,10 +193,14 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
       newIdeaId: z.string().optional().describe("New idea ID to migrate concept to (required for migrate)"),
       scope: z.enum(["global", "app", "idea"]).optional().describe("Concept scope: global (cross-app), app (within one app), or idea (current phase only). Optional for create/update."),
       scopeTags: z.array(z.string()).optional().describe("Scope tags (optional for create/update)"),
+      nodeId: z.string().optional().describe("Knowledge node ID (required for add_knowledge_ref/remove_knowledge_ref)"),
+      treeId: z.string().optional().describe("Knowledge tree ID (required for add_knowledge_ref)"),
+      treeName: z.string().optional().describe("Knowledge tree name for display (required for add_knowledge_ref)"),
+      relationship: z.enum(["supports", "informs", "constrains", "contradicts"]).optional().describe("How the knowledge relates to this concept (default: supports). For add_knowledge_ref."),
       sessionId: z.string().optional().describe("Active session ID for tracking (optional for create/transition/supersede/resolve)"),
       jobId: z.string().optional().describe("Active job ID for tracking (optional for create/transition/supersede/resolve)"),
     },
-    async ({ action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, sessionId, jobId }) => {
+    async ({ action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, nodeId, treeId, treeName, relationship, sessionId, jobId }) => {
       const uid = getCurrentUid();
 
       // ─── CREATE ───
@@ -213,6 +220,8 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
           resolvedBy: null,
           transitionedFrom: null,
           scopeTags: scopeTags || [],
+          knowledgeRefs: [],
+          knowledgeRefCount: 0,
           createdAt: now,
           updatedAt: now,
         };
@@ -571,6 +580,71 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         };
       }
 
+      // ─── ADD_KNOWLEDGE_REF ───
+      if (action === "add_knowledge_ref") {
+        if (!conceptId) return { content: [{ type: "text", text: "action 'add_knowledge_ref' requires conceptId" }], isError: true };
+        if (!nodeId) return { content: [{ type: "text", text: "action 'add_knowledge_ref' requires nodeId" }], isError: true };
+        if (!treeId) return { content: [{ type: "text", text: "action 'add_knowledge_ref' requires treeId" }], isError: true };
+        if (!treeName) return { content: [{ type: "text", text: "action 'add_knowledge_ref' requires treeName" }], isError: true };
+
+        const ref = getConceptsRef(uid).child(conceptId);
+        const snapshot = await ref.once("value");
+        const concept = snapshot.val();
+        if (!concept) return { content: [{ type: "text", text: `Concept not found: ${conceptId}` }], isError: true };
+
+        const refs: any[] = concept.knowledgeRefs || [];
+
+        // Check for duplicate
+        if (refs.some((r: any) => r.nodeId === nodeId)) {
+          return { content: [{ type: "text", text: JSON.stringify({ warning: "Knowledge ref already exists", conceptId, nodeId }, null, 2) }] };
+        }
+
+        const now = new Date().toISOString();
+        const knowledgeRef = {
+          nodeId,
+          treeId,
+          treeName,
+          relationship: relationship || "supports",
+          addedAt: now,
+        };
+        refs.push(knowledgeRef);
+
+        await ref.update({
+          knowledgeRefs: refs,
+          knowledgeRefCount: refs.length,
+          updatedAt: now,
+        });
+
+        return { content: [{ type: "text", text: JSON.stringify({ added: knowledgeRef, knowledgeRefCount: refs.length }, null, 2) }] };
+      }
+
+      // ─── REMOVE_KNOWLEDGE_REF ───
+      if (action === "remove_knowledge_ref") {
+        if (!conceptId) return { content: [{ type: "text", text: "action 'remove_knowledge_ref' requires conceptId" }], isError: true };
+        if (!nodeId) return { content: [{ type: "text", text: "action 'remove_knowledge_ref' requires nodeId" }], isError: true };
+
+        const ref = getConceptsRef(uid).child(conceptId);
+        const snapshot = await ref.once("value");
+        const concept = snapshot.val();
+        if (!concept) return { content: [{ type: "text", text: `Concept not found: ${conceptId}` }], isError: true };
+
+        const refs: any[] = concept.knowledgeRefs || [];
+        const filtered = refs.filter((r: any) => r.nodeId !== nodeId);
+
+        if (filtered.length === refs.length) {
+          return { content: [{ type: "text", text: JSON.stringify({ warning: "Knowledge ref not found", conceptId, nodeId }, null, 2) }] };
+        }
+
+        const now = new Date().toISOString();
+        await ref.update({
+          knowledgeRefs: filtered,
+          knowledgeRefCount: filtered.length,
+          updatedAt: now,
+        });
+
+        return { content: [{ type: "text", text: JSON.stringify({ removed: nodeId, knowledgeRefCount: filtered.length }, null, 2) }] };
+      }
+
       // ─── DELETE ───
       if (action === "delete") {
         if (!conceptId) return { content: [{ type: "text", text: "action 'delete' requires conceptId" }], isError: true };
@@ -623,6 +697,7 @@ Note: Prefer list_concepts with grouped=true for the same result with more filte
             scopeTags: c.scopeTags || [],
             scope: c.scope || null,
             ideaOrigin: c.ideaOrigin,
+            knowledgeRefCount: c.knowledgeRefCount || 0,
           })
         : (c: any) => c;
 
