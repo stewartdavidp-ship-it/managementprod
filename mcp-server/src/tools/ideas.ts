@@ -20,6 +20,7 @@ export function registerIdeaTools(server: McpServer): void {
     "idea",
     `Idea lifecycle tool. Actions:
   - "list": List ideas. Optional: appId filter (sorts by sequence when filtered).
+  - "get": Get a single idea by ID. Requires ideaId. Returns full record.
   - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId.
   - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status.
   - "graduate": Link idea to an app. Requires ideaId, appId. Auto-calculates sequence and type.
@@ -28,7 +29,7 @@ export function registerIdeaTools(server: McpServer): void {
   - "list_ranked": Rank ideas by build-readiness tier. Optional: appId filter. Returns ideas sorted by 5-tier model with activity metrics.
   - "delete": Delete an idea. Requires ideaId. Also removes from appIdeas index. Use for test cleanup only.`,
     {
-      action: z.enum(["list", "create", "update", "graduate", "archive", "get_active", "list_ranked", "delete"]).describe("Action to perform"),
+      action: z.enum(["list", "get", "create", "update", "graduate", "archive", "get_active", "list_ranked", "delete"]).describe("Action to perform"),
       ideaId: z.string().optional().describe("Idea ID (required for update/graduate/archive)"),
       appId: z.string().optional().describe("App ID (optional for list/create, required for graduate/get_active)"),
       name: z.string().optional().describe("Idea name (required for create, optional for update)"),
@@ -82,6 +83,18 @@ export function registerIdeaTools(server: McpServer): void {
           { content: [{ type: "text", text: JSON.stringify({ items: lean, total, offset: skip, limit: take }, null, 2) }] },
           { _estimatedItemSize: avgItemSize }
         );
+      }
+
+      // ─── GET ───
+      if (action === "get") {
+        if (!ideaId) return withResponseSize({ content: [{ type: "text", text: "action 'get' requires ideaId" }], isError: true });
+
+        const ref = getIdeaRef(uid, ideaId);
+        const snapshot = await ref.once("value");
+        const idea = snapshot.val();
+        if (!idea) return withResponseSize({ content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true });
+
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(idea, null, 2) }] });
       }
 
       // ─── CREATE ───

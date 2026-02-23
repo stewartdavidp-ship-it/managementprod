@@ -18,10 +18,12 @@ export function registerKnowledgeTreeTools(server: McpServer): void {
 
 Actions:
   - "list_forests": List all forests with lean summaries.
+  - "get_forest": Get full forest record by ID. Requires forestId. Returns all metadata including treeIds, tags, summary, timestamps.
   - "create_forest": Create a forest. Requires name. Optional: description, tags.
   - "update_forest": Update forest. Requires forestId. Optional: name, description, tags, treeIds.
   - "delete_forest": Delete forest (does NOT delete member trees). Requires forestId.
   - "list_trees": List trees. Optional: forestId filter. Returns summaries with token budgets and trust profiles.
+  - "get_tree": Get full tree record by ID. Requires treeId. Returns all metadata including searchHistory, trustProfile, timestamps. Does NOT include the index (use get_index for that).
   - "create_tree": Create a tree. Requires name. Optional: description, forestIds, tokenBudget (default 150000), freshnessPeriodDays (default 90).
   - "update_tree": Update tree metadata. Requires treeId. Optional: name, description, forestIds, tokenBudget, freshnessPeriodDays.
   - "delete_tree": Delete tree + all index entries + all node content. Removes from parent forests. Requires treeId.
@@ -32,8 +34,8 @@ Actions:
   - "get_forest_summary": Get the cached routing summary for a forest. Requires forestId. Returns summary + staleness check.`,
     {
       action: z.enum([
-        "list_forests", "create_forest", "update_forest", "delete_forest",
-        "list_trees", "create_tree", "update_tree", "delete_tree", "get_index", "add_search",
+        "list_forests", "get_forest", "create_forest", "update_forest", "delete_forest",
+        "list_trees", "get_tree", "create_tree", "update_tree", "delete_tree", "get_index", "add_search",
         "search_tags", "generate_summary", "get_forest_summary",
       ]).describe("Action to perform"),
       forestId: z.string().optional().describe("Forest ID (required for update_forest/delete_forest, optional filter for list_trees)"),
@@ -70,6 +72,17 @@ Actions:
         }));
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ forests, total: forests.length }, null, 2) }] });
+      }
+
+      // ─── GET_FOREST ───
+      if (action === "get_forest") {
+        if (!forestId) return withResponseSize({ content: [{ type: "text", text: "get_forest requires forestId" }], isError: true });
+
+        const snap = await getForestRef(uid, forestId).once("value");
+        const forest = snap.val();
+        if (!forest) return withResponseSize({ content: [{ type: "text", text: `Forest not found: ${forestId}` }], isError: true });
+
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(forest, null, 2) }] });
       }
 
       // ─── CREATE_FOREST ───
@@ -157,6 +170,19 @@ Actions:
         }));
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ trees: summaries, total: summaries.length }, null, 2) }] });
+      }
+
+      // ─── GET_TREE ───
+      if (action === "get_tree") {
+        if (!treeId) return withResponseSize({ content: [{ type: "text", text: "get_tree requires treeId" }], isError: true });
+
+        const snap = await getTreeRef(uid, treeId).once("value");
+        const tree = snap.val();
+        if (!tree) return withResponseSize({ content: [{ type: "text", text: `Tree not found: ${treeId}` }], isError: true });
+
+        // Return full tree record WITHOUT index (use get_index for that)
+        const { index, ...treeWithoutIndex } = tree;
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(treeWithoutIndex, null, 2) }] });
       }
 
       // ─── CREATE_TREE ───

@@ -54,6 +54,7 @@ Actions:
   - "list": List documents. Optional filters: appId, type, status (default: "pending"). Expired TTL docs are auto-purged. Returns newest first.
   - "get": Get a document by ID. Requires: docId.
   - "get-latest": Get the most recent document of a given type, regardless of status. Requires: type. Optional: appId. Useful for permanent docs like project-instructions that may be pending or delivered.
+  - "update": Update a pending document before delivery. Requires: docId. Optional: content, metadata (JSON string), targetPath. Only allowed on pending-status documents.
   - "deliver": Mark delivered and delete ephemeral docs from Firebase. Requires: docId. Optional: deliveredBy.
   - "deliver-to-github": Commit to GitHub repo, then delete from Firebase on success. Requires: docId.
   - "fail": Mark as failed. Requires: docId, reason.
@@ -63,7 +64,7 @@ Actions:
   - "purge": Delete all delivered/failed docs older than 24h. Returns count deleted.
   - "delete": Delete a document by ID. Requires: docId. Use for test cleanup only.`,
     {
-      action: z.enum(["push", "list", "get", "get-latest", "deliver", "deliver-to-github", "fail", "send", "receive", "ack", "purge", "delete"]).describe("Action to perform"),
+      action: z.enum(["push", "list", "get", "get-latest", "update", "deliver", "deliver-to-github", "fail", "send", "receive", "ack", "purge", "delete"]).describe("Action to perform"),
       docId: z.string().optional().describe("Document ID (required for get/deliver/fail/ack)"),
       type: z.string().optional().describe("Document type: claude-md, spec, architecture, test-plan, design, or custom (required for push, optional filter for list)"),
       appId: z.string().optional().describe("App ID (required for push, optional filter for list)"),
@@ -333,6 +334,41 @@ Actions:
         if (!latest) return withResponseSize({ content: [{ type: "text", text: `No documents found with type: ${type}` }], isError: true });
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify(latest, null, 2) }] });
+      }
+
+      // ─── UPDATE ───
+      if (action === "update") {
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'update' requires docId" }], isError: true });
+
+        const ref = getDocumentRef(uid, docId);
+        const snapshot = await ref.once("value");
+        const doc = snapshot.val();
+
+        if (!doc) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
+        if (doc.status !== "pending") {
+          return withResponseSize({ content: [{ type: "text", text: `Cannot update document with status '${doc.status}' (must be pending)` }], isError: true });
+        }
+
+        const updates: Record<string, any> = {};
+        if (content !== undefined) updates.content = content;
+        if (targetPath !== undefined) updates["routing/targetPath"] = targetPath;
+        if (metadata !== undefined) {
+          try {
+            const parsed = JSON.parse(metadata);
+            updates.metadata = { ...(doc.metadata || {}), ...parsed };
+          } catch {
+            return withResponseSize({ content: [{ type: "text", text: "metadata must be a valid JSON string" }], isError: true });
+          }
+        }
+
+        if (Object.keys(updates).length === 0) {
+          return withResponseSize({ content: [{ type: "text", text: "No fields to update. Provide content, metadata, or targetPath." }], isError: true });
+        }
+
+        await ref.update(updates);
+
+        const updatedSnap = await ref.once("value");
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(updatedSnap.val(), null, 2) }] });
       }
 
       // ─── DELIVER ───

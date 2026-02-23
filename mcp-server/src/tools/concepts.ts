@@ -220,6 +220,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
   server.tool(
     "concept",
     `ODRC concept mutation tool. Actions:
+  - "get": Get a single concept by ID. Requires conceptId. Returns full record including knowledgeRefs.
   - "create": Create a new concept. Requires type (OPEN/DECISION/RULE/CONSTRAINT), content, ideaOrigin. Optional: scopeTags, sessionId, jobId.
   - "update": Update content or scopeTags on an active concept. Requires conceptId. Optional: content, scopeTags.
   - "transition": Transition to a new type following state machine (OPEN→DECISION/RULE/CONSTRAINT, DECISION→RULE, CONSTRAINT→DECISION/RULE, RULE→OPEN). Requires conceptId, newType. Optional: sessionId, jobId.
@@ -231,7 +232,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
   - "remove_knowledge_ref": Unlink a concept from a knowledge tree node. Requires conceptId, nodeId.
   - "delete": Delete a concept. Requires conceptId. Use for test cleanup only.`,
     {
-      action: z.enum(["create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "add_knowledge_ref", "remove_knowledge_ref", "delete"]).describe("Action to perform"),
+      action: z.enum(["get", "create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "add_knowledge_ref", "remove_knowledge_ref", "delete"]).describe("Action to perform"),
       conceptId: z.string().optional().describe("Concept ID (required for update/transition/supersede/resolve/mark_built/migrate)"),
       type: z.enum(ODRC_TYPES).optional().describe("Concept type (required for create): OPEN, DECISION, RULE, or CONSTRAINT"),
       content: z.string().optional().describe("Concept text (required for create, optional for update)"),
@@ -250,6 +251,18 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
     },
     async ({ action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, nodeId, treeId, treeName, relationship, sessionId, jobId }) => {
       const uid = getCurrentUid();
+
+      // ─── GET ───
+      if (action === "get") {
+        if (!conceptId) return withResponseSize({ content: [{ type: "text", text: "action 'get' requires conceptId" }], isError: true });
+
+        const ref = getConceptRef(uid, conceptId);
+        const snapshot = await ref.once("value");
+        const concept = snapshot.val();
+        if (!concept) return withResponseSize({ content: [{ type: "text", text: `Concept not found: ${conceptId}` }], isError: true });
+
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(concept, null, 2) }] });
+      }
 
       // ─── CREATE ───
       if (action === "create") {

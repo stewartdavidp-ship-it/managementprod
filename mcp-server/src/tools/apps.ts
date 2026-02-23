@@ -29,6 +29,7 @@ function summarizeApp(id: string, app: any, project?: any): any {
       : null,
     targetPath: app.targetPath || "index.html",
     subPath: app.subPath || null,
+    status: app.status || "active",
   };
 }
 
@@ -40,9 +41,10 @@ export function registerAppTools(server: McpServer): void {
   - "list": List all apps with name, icon, project, description, repos, versions, lifecycle. No extra params needed.
   - "get": Get detailed info about a specific app. Requires appId (exact ID or partial name for fuzzy match).
   - "create": Create a new app. Requires appId and name. Optional: icon, project, projectName (creates project if new), description, appType, repos (JSON string), subPath, targetPath, lifecycleFields (JSON string).
-  - "update": Update app metadata. Requires appId. Optional: description, appType, repos (JSON string e.g. {"prod":"owner/repo","test":"owner/testrepo"}), subPath (string), lifecycleFields (JSON string with currentMaturity, maturityTarget, problemStatement, targetAudience, userGoal, successMetric, category).`,
+  - "update": Update app metadata. Requires appId. Optional: description, appType, repos (JSON string e.g. {"prod":"owner/repo","test":"owner/testrepo"}), subPath (string), lifecycleFields (JSON string with currentMaturity, maturityTarget, problemStatement, targetAudience, userGoal, successMetric, category).
+  - "archive": Soft-delete an app by setting status to "archived". Requires appId. Archived apps are excluded from list by default.`,
     {
-      action: z.enum(["list", "get", "create", "update"]).describe("Action: list (all apps), get (specific app), create (new app), or update (modify app metadata)"),
+      action: z.enum(["list", "get", "create", "update", "archive"]).describe("Action: list (all apps), get (specific app), create (new app), update (modify app metadata), or archive (soft-delete)"),
       appId: z.string().optional().describe("For 'get'/'create'/'update': the app ID (e.g. 'floorplan') or partial name for get"),
       name: z.string().optional().describe("For 'create': display name of the app"),
       icon: z.string().optional().describe("For 'create': emoji icon for the app"),
@@ -68,10 +70,12 @@ export function registerAppTools(server: McpServer): void {
         }
 
         const projects = config.projects || {};
-        const apps = Object.entries(config.apps).map(([id, app]: [string, any]) => {
-          const project = app.project ? projects[app.project] : null;
-          return summarizeApp(id, app, project);
-        });
+        const apps = Object.entries(config.apps)
+          .filter(([, app]: [string, any]) => (app.status || "active") !== "archived")
+          .map(([id, app]: [string, any]) => {
+            const project = app.project ? projects[app.project] : null;
+            return summarizeApp(id, app, project);
+          });
 
         const projectList = Object.entries(projects).map(([id, p]: [string, any]) => ({
           id,
@@ -242,6 +246,23 @@ export function registerAppTools(server: McpServer): void {
 
         return withResponseSize({
           content: [{ type: "text", text: JSON.stringify(summarizeApp(appId, updatedApp, project), null, 2) }],
+        });
+      }
+
+      // ─── ARCHIVE ───
+      if (action === "archive") {
+        if (!appId) {
+          return withResponseSize({ content: [{ type: "text", text: "action 'archive' requires appId" }], isError: true });
+        }
+        if (!config || !config.apps || !config.apps[appId]) {
+          return withResponseSize({ content: [{ type: "text", text: `App not found: ${appId}` }], isError: true });
+        }
+
+        const appRef = getConfigRef(uid).child("apps").child(appId);
+        await appRef.update({ status: "archived", updatedAt: Date.now() });
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ archived: appId }) }],
         });
       }
 
