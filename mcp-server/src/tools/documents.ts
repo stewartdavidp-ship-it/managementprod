@@ -179,7 +179,8 @@ Actions:
             const appConfig = config?.apps?.[appId];
 
             if (appConfig?.repos?.prod) {
-              const resolvedPath = resolveTargetPath(type!, targetPath!, appConfig.subPath || null);
+              const routing = resolveTargetRepo(type!, appConfig.repos || null, null);
+              const resolvedPath = resolveFilePath(targetPath!, appConfig.subPath || null, routing?.useSubPath ?? true);
               const commitMsg = `docs(${appConfig.name || appId}): update ${type} via CC MCP [${new Date().toISOString()}]`;
               const result = await deliverToGitHub(appConfig.repos.prod, resolvedPath, content!, commitMsg);
 
@@ -399,7 +400,7 @@ Actions:
 
         // Lazy docs-repo creation: if routing fails for non-app-scoped docs,
         // auto-create the docs repo and retry routing
-        const isAppScoped = doc.type === "claude-md" || doc.type === "spec";
+        const isAppScoped = doc.type === "claude-md" || doc.type === "spec" || doc.type === "project-instructions";
         if (!routing && !isAppScoped && !docsRepoName) {
           try {
             const uidShort = uid.substring(0, 8);
