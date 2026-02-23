@@ -7,6 +7,7 @@ import { validateAccessToken, validateApiKey } from "./auth/store.js";
 import { requestContext, setContextEstimate } from "./context.js";
 import { incrementContextEstimate, getActiveSessionId, getPendingContextAccumulation } from "./tools/sessions.js";
 import { getSessionRef } from "./firebase.js";
+import { ensureSession } from "./session-lifecycle.js";
 
 // Initialize Firebase before anything else
 initFirebase();
@@ -193,6 +194,15 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         }
       } catch {
         // Non-critical — _contextHealth will be omitted if this fails
+      }
+
+      // Resolve active session once per request (heartbeat model)
+      // Caches in AsyncLocalStorage — all tool calls in this batch reuse the result
+      try {
+        await ensureSession();  // No toolContext — mismatch detection handled by opt-in tools
+      } catch (err) {
+        // Non-critical — _session metadata will be omitted if this fails
+        console.error("Session lifecycle error:", err);
       }
     }
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getJobsRef, getJobRef, getConceptsRef, getIdeasRef, getAppIdeasRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { ensureSession } from "../session-lifecycle.js";
 
 const JOB_STATUSES = ["draft", "active", "review", "approved", "completed", "failed", "abandoned"] as const;
 const TERMINAL_STATUSES = ["completed", "failed", "abandoned"];
@@ -91,6 +92,10 @@ Actions:
         if (!appId) return withResponseSize({ content: [{ type: "text", text: "action 'start' requires appId" }], isError: true });
         if (!title) return withResponseSize({ content: [{ type: "text", text: "action 'start' requires title" }], isError: true });
 
+        // Mismatch detection: check if job's appId/ideaId matches active session context
+        // This is a cache hit (free) — Firebase query was done in middleware
+        const sessionCheck = await ensureSession({ appId, ideaId: ideaId || undefined });
+
         // Parse attachments JSON if provided
         let parsedAttachments: any[] | null = null;
         if (attachments) {
@@ -178,7 +183,14 @@ Actions:
           }
         }
 
-        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(job, null, 2) }] });
+        const result: any = job;
+        if (sessionCheck.mismatch) {
+          result._sessionMismatch = {
+            warning: "Job appId/ideaId does not match active session context",
+            activeSession: sessionCheck.existingSession,
+          };
+        }
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
       }
 
       // ─── CLAIM ───

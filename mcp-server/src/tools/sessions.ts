@@ -4,6 +4,7 @@ import { getSessionsRef, getSessionRef, getPreferencesRef, getProfileRef, getAtt
 import { isGitHubConfigured, resolveTargetRepo, resolveFilePath, deliverToGitHub } from "../github.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { ensureSession } from "../session-lifecycle.js";
 
 const SESSION_STATUSES = ["active", "completed", "abandoned"] as const;
 
@@ -140,6 +141,10 @@ export function registerSessionTools(server: McpServer): void {
         if (!ideaId) return withResponseSize({ content: [{ type: "text" as const, text: "action 'start' requires ideaId" }], isError: true });
         if (!title) return withResponseSize({ content: [{ type: "text" as const, text: "action 'start' requires title" }], isError: true });
 
+        // Mismatch detection: check if new session's context differs from active session
+        // Cache hit (free) — Firebase query was done in middleware
+        const sessionCheck = await ensureSession({ appId: appId || undefined, ideaId });
+
         const ref = getSessionsRef(uid).push();
         const now = new Date().toISOString();
         const session: Record<string, any> = {
@@ -180,7 +185,14 @@ export function registerSessionTools(server: McpServer): void {
         // Cache active session for contextEstimate auto-increment
         activeSessionCache.set(uid, ref.key!);
 
-        return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify(session, null, 2) }] });
+        const result: any = session;
+        if (sessionCheck.mismatch) {
+          result._sessionMismatch = {
+            warning: "New session context differs from existing active session",
+            activeSession: sessionCheck.existingSession,
+          };
+        }
+        return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] });
       }
 
       // ─── UPDATE ───

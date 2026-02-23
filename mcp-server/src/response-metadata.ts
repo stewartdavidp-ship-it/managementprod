@@ -10,7 +10,7 @@
 // tool handler.
 // ═══════════════════════════════════════════════════════════════
 
-import { getContextEstimate } from "./context.js";
+import { getContextEstimate, getSessionMeta } from "./context.js";
 
 interface TextContent {
   type: "text";
@@ -81,6 +81,17 @@ export function withResponseSize(
       used: contextEstimate,
       ceiling: CONTEXT_CEILING,
     };
+  }
+
+  // Include _session metadata if resolved for this request
+  const sessionMeta = getSessionMeta();
+  if (sessionMeta) {
+    const sessionInfo: Record<string, any> = { id: sessionMeta.id };
+    if (sessionMeta.autoCreated) sessionInfo.autoCreated = true;
+    if (sessionMeta.mismatch) sessionInfo.mismatch = true;
+    if (sessionMeta.staleClosed) sessionInfo.staleClosed = sessionMeta.staleClosed;
+    if (sessionMeta.existingSession) sessionInfo.existingSession = sessionMeta.existingSession;
+    meta._session = sessionInfo;
   }
 
   result.content.push({
