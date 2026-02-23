@@ -35,6 +35,20 @@ export function registerGenerateTools(server: McpServer): void {
             isError: true,
           });
         }
+
+        // Staleness check: compare conceptChangeCount from app record with generatedAtChangeCount
+        try {
+          const countSnap = await getConfigRef(uid).child("apps").child(appId).child("conceptChangeCount").once("value");
+          const currentCount = countSnap.val() || 0;
+          const generatedAtCount = data.generatedAtChangeCount || 0;
+          if (currentCount > generatedAtCount) {
+            data._stale = true;
+            data._changesSinceGeneration = currentCount - generatedAtCount;
+          }
+        } catch {
+          // Non-critical — skip staleness check if app record read fails
+        }
+
         return withResponseSize({
           content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
         });
@@ -158,6 +172,15 @@ export function registerGenerateTools(server: McpServer): void {
 
       const markdown = lines.join("\n");
 
+      // Snapshot conceptChangeCount from app record at generation time
+      let generatedAtChangeCount = 0;
+      try {
+        const countSnap = await getConfigRef(uid).child("apps").child(appId).child("conceptChangeCount").once("value");
+        generatedAtChangeCount = countSnap.val() || 0;
+      } catch {
+        // Non-critical — default to 0 if app record read fails
+      }
+
       // Persist to Firebase
       const record = {
         appId,
@@ -166,6 +189,7 @@ export function registerGenerateTools(server: McpServer): void {
         ideaId: latestIdea?.id || null,
         ideaName: latestIdea?.name || null,
         generatedAt: new Date().toISOString(),
+        generatedAtChangeCount,
         conceptCount: {
           rules: rules.length,
           constraints: constraints.length,

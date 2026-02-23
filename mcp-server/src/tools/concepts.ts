@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef, getIdeasRef } from "../firebase.js";
+import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef, getIdeasRef, getConfigRef, getClaudeMdRef, getAttentionQueueRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
+import { writeAttentionEntry } from "./sessions.js";
 
 // Mirrors CC's ODRC_TYPES (index.html:4772)
 const ODRC_TYPES = ["OPEN", "DECISION", "RULE", "CONSTRAINT"] as const;
@@ -21,6 +22,52 @@ const ODRC_TRANSITIONS: Record<string, string[]> = {
 
 function isValidTransition(fromType: string, toType: string): boolean {
   return ODRC_TRANSITIONS[fromType]?.includes(toType) ?? false;
+}
+
+// Helper: increment conceptChangeCount on app record after concept mutations.
+// Fire-and-forget — never blocks the mutation response or throws.
+// Also checks attention queue threshold every 5th mutation.
+async function incrementConceptChangeCount(uid: string, ideaOrigin: string): Promise<void> {
+  try {
+    // Resolve ideaOrigin → appId
+    const ideaSnap = await getIdeasRef(uid).child(ideaOrigin).child("appId").once("value");
+    const appId = ideaSnap.val();
+    if (!appId) return; // No app linked — skip
+
+    // Atomic increment on app config record
+    const countRef = getConfigRef(uid).child("apps").child(appId).child("conceptChangeCount");
+    const result = await countRef.transaction((current: number | null) => (current || 0) + 1);
+    const newCount = result.snapshot.val() as number;
+
+    // Check attention queue threshold every 5th mutation
+    if (newCount % 5 === 0) {
+      // Read generatedAtChangeCount from claudeMd record
+      const claudeMdSnap = await getClaudeMdRef(uid, appId).child("generatedAtChangeCount").once("value");
+      const generatedAt = claudeMdSnap.val() || 0;
+      const delta = newCount - generatedAt;
+
+      if (delta >= 5) {
+        // Check if there's already an unresolved stale-claude-md entry for this app
+        const attentionSnap = await getAttentionQueueRef(uid)
+          .orderByChild("type")
+          .equalTo("stale-claude-md")
+          .once("value");
+        const existing = attentionSnap.val();
+        const alreadyExists = existing && Object.values(existing).some(
+          (e: any) => !e.resolved && e.detail?.includes(appId)
+        );
+
+        if (!alreadyExists) {
+          await writeAttentionEntry(uid, {
+            type: "stale-claude-md",
+            detail: `CLAUDE.md for "${appId}" is ${delta} concept changes behind. Regenerate to update project instructions.`,
+          });
+        }
+      }
+    }
+  } catch {
+    // Fire-and-forget — never crash the concept mutation
+  }
 }
 
 // Helper: update job record when concept tools are called with jobId
@@ -285,6 +332,9 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
           });
         }
 
+        // Increment conceptChangeCount on app record (fire-and-forget)
+        incrementConceptChangeCount(uid, ideaOrigin);
+
         const result: any = concept;
         if (sessionMismatch) result._sessionMismatch = sessionMismatch;
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -305,6 +355,12 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         if (scopeTags !== undefined) updates.scopeTags = scopeTags;
 
         await ref.update(updates);
+
+        // Increment conceptChangeCount if content or scopeTags changed (affects CLAUDE.md output)
+        if (content !== undefined || scopeTags !== undefined) {
+          incrementConceptChangeCount(uid, existing.ideaOrigin);
+        }
+
         return { content: [{ type: "text", text: JSON.stringify({ ...existing, ...updates }, null, 2) }] };
       }
 
@@ -412,6 +468,9 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
           });
         }
 
+        // Increment conceptChangeCount on app record (fire-and-forget)
+        incrementConceptChangeCount(uid, concept.ideaOrigin);
+
         const result: any = { newConcept };
         if (flaggedConcepts.length > 0) {
           result.flaggedForReview = flaggedConcepts;
@@ -497,6 +556,9 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
           });
         }
 
+        // Increment conceptChangeCount on app record (fire-and-forget)
+        incrementConceptChangeCount(uid, concept.ideaOrigin);
+
         return { content: [{ type: "text", text: JSON.stringify(newConcept, null, 2) }] };
       }
 
@@ -546,6 +608,9 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
           });
         }
 
+        // Increment conceptChangeCount on app record (fire-and-forget)
+        incrementConceptChangeCount(uid, concept.ideaOrigin);
+
         return { content: [{ type: "text", text: JSON.stringify({ ...concept, status: "resolved", updatedAt: now }, null, 2) }] };
       }
 
@@ -568,6 +633,9 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         const now = new Date().toISOString();
         await ref.update({ status: "built", updatedAt: now });
 
+        // Increment conceptChangeCount on app record (fire-and-forget)
+        incrementConceptChangeCount(uid, concept.ideaOrigin);
+
         return { content: [{ type: "text", text: JSON.stringify({ ...concept, status: "built", updatedAt: now }, null, 2) }] };
       }
 
@@ -588,6 +656,10 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         const now = new Date().toISOString();
         const oldIdeaOrigin = concept.ideaOrigin;
         await ref.update({ ideaOrigin: newIdeaId, updatedAt: now });
+
+        // Increment conceptChangeCount on both old and new app (affects both CLAUDE.md outputs)
+        incrementConceptChangeCount(uid, oldIdeaOrigin);
+        incrementConceptChangeCount(uid, newIdeaId);
 
         return {
           content: [{
