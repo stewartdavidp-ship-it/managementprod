@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 /**
  * CC skills registered as MCP prompts.
- * 27 skills:
+ * 28 skills:
  *   1. cc-odrc-framework — ODRC type definitions, state machine, writeback protocol
  *   2. cc-session-structure — Live session lifecycle with Firebase-backed tracking
  *   3. cc-session-protocol — Master "how to run a session" skill (Claude Chat)
@@ -30,6 +30,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
  *  25. cc-skill-router — Routing table: which skills to load for each trigger
  *  26. cc-job-creation-protocol — How Chat creates well-formed build jobs for Code
  *  27. cc-retro-journal — Shared learning journal for Chat and Code
+ *  28. cc-startup-checklist — Mandatory cold start sequence for Chat
  */
 export function registerSkillPrompts(server: McpServer): void {
 
@@ -416,6 +417,22 @@ export function registerSkillPrompts(server: McpServer): void {
       }],
     })
   );
+
+  // ─── 28. Startup Checklist ──────────────────────────────────────
+  server.prompt(
+    "cc-startup-checklist",
+    "Mandatory cold start sequence for Chat. Profile check, in-flight work, messages, session orientation, context loading, budget tracking, compaction recovery.",
+    {},
+    async () => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: SKILL_STARTUP_CHECKLIST,
+        },
+      }],
+    })
+  );
 }
 
 
@@ -758,29 +775,15 @@ This is the master protocol for running a live ideation session with Command Cen
 
 ## Before You Begin
 
+**For startup sequence, see cc-startup-checklist.** This skill covers the session work loop (Steps 1-6), not startup.
+
 You need:
 - The CC MCP server connected (you'll have access to tools like \`concept\`, \`session\`, \`idea\`, \`job\`, \`app\`, etc.)
 - An active Idea to work on (the user or seed prompt will specify this)
 
-**On startup:** Read \`cc-skill-router\` to load the command routing table. This tells you which skills to load for any user action. The router includes an embedded Quick Reference with safety rules, auth model, and available tools — this is enough for ideation sessions.
-
 **When creating any job for Code:** Read \`cc-job-creation-protocol\` first. It defines the standard format for well-formed build jobs.
 
-**On compaction recovery:** Re-read \`cc-skill-router\` alongside \`cc-session-resume\`. The router may not survive compaction since it's loaded once at startup.
-
-## Step 0: Project Instructions Dirty Flag Check
-
-After reading the profile via \`session(action="profile")\`, check \`projectInstructionsDirty\`. If true:
-
-1. **Block all normal operations.** No job checks, no ideation — update first.
-2. Tell the user: "Your project instructions need to be updated. Let me get the latest version for you."
-3. Call \`document(action="get-latest", type="project-instructions")\` to fetch the latest project instructions document (returns full content regardless of status).
-4. Present the full content to the user and instruct them to paste it into their Claude.ai project settings (Settings → Projects → Command Center → Project Instructions).
-5. Wait for the user to confirm they've updated their project instructions.
-6. Call \`session(action="profile", clearInstructionsDirty=true)\` to clear the dirty flag.
-7. Only then proceed to Step 1 and normal startup.
-
-This is a **forced update** — no dismiss, no snooze. Chat reads its operating instructions from the Claude.ai project settings, so stale instructions mean stale behavior. Chat cannot verify the update was applied — it trusts the user's confirmation and clears the flag.
+**On compaction recovery:** Re-read \`cc-startup-checklist\` alongside \`cc-session-resume\`. The checklist may not survive compaction since it's loaded once at startup.
 
 ## Step 1: Session Initialization (Server-Managed)
 
@@ -3270,7 +3273,7 @@ Then load specific sections via \`section="## Section Name"\`.
 
 | Trigger | Skill(s) to Read |
 |---|---|
-| Cold start (new conversation) | cc-session-protocol, cc-skill-router, cc-mcp-workflow, cc-retro-journal |
+| Cold start (new conversation) | cc-startup-checklist |
 | "start ideation [idea/app]" | cc-odrc-framework, cc-session-structure |
 | "run [name] lens" | cc-lens-{name} (see inventory below) |
 | "start exploration" | cc-mode-exploration |
@@ -3292,7 +3295,7 @@ Then load specific sections via \`section="## Section Name"\`.
 
 ### Cold Start Sequence
 
-On cold start: (1) Load router, (2) Check \`session(action="profile")\` for needsAttention AND \`projectInstructionsDirty\`, (3) **If \`projectInstructionsDirty\` is true**: block normal startup — notify the user their project instructions need updating, fetch the latest via \`document(get-latest, type="project-instructions")\`, present it to the user with instructions to update their Claude project settings, then call \`session(action="profile", clearInstructionsDirty=true)\` after user confirms. Only proceed after confirmation. (4) Check \`job(list, status="review")\` and \`job(list, status="draft")\`, (5) First tool response will include \`_session\` metadata — react per cc-session-protocol. Server handles session detection automatically — no explicit \`session(list, status="active")\` check needed.
+On cold start, project instructions trigger \`cc-startup-checklist\`. The checklist handles the full startup flow including profile checks, job status, message pickup, session orientation, and context loading.
 
 ## Code Routing
 
@@ -3342,7 +3345,8 @@ On cold start: (1) Load router, (2) Check \`session(action="profile")\` for need
 | 24 | cc-protocol-messaging | Inter-agent message types and conversation loop protocol |
 | 25 | cc-skill-router | This skill — routing table for all skill loading |
 | 26 | cc-job-creation-protocol | How Chat creates well-formed build jobs for Code |
-| 27 | cc-retro-journal | Shared learning journal — read on startup, write on genuine discovery |`;
+| 27 | cc-retro-journal | Shared learning journal — read on startup, write on genuine discovery |
+| 28 | cc-startup-checklist | Mandatory cold start sequence for Chat — profile, jobs, messages, session, context |`;
 
 
 const SKILL_JOB_CREATION_PROTOCOL = `# Job Creation Protocol — How Chat Creates Jobs for Code
@@ -3510,7 +3514,170 @@ Background polling scripts outlived sessions — 3 scripts at 10s intervals, ~1M
 
 
 // ═══════════════════════════════════════════════════════════════════════
-// Skill Registry — maps skill names to content for the `skill` tool
+// Skill 28: Startup Checklist — mandatory cold start sequence for Chat
+// ═══════════════════════════════════════════════════════════════════════
+
+const SKILL_STARTUP_CHECKLIST = `# Startup Checklist
+
+You MUST complete every step below before responding to the user's first message. Do not skip steps. Do not address the user's request until all blockers are cleared.
+
+## Step 1: Profile Check
+
+\\\`\\\`\\\`
+Call: session(action="profile")
+\\\`\\\`\\\`
+
+Check the response for two flags:
+
+### 1a. projectInstructionsDirty
+
+If \\\`true\\\` — **BLOCKER. Stop everything.**
+
+1. Tell the user: "Your project instructions need updating before we can proceed."
+2. Call \\\`document(action="get-latest", type="project-instructions")\\\` to fetch the latest version.
+3. Output the content as a downloadable markdown file so the user can copy it.
+4. Wait for the user to confirm they've pasted it into their Claude project settings.
+5. Call \\\`session(action="profile", clearInstructionsDirty=true)\\\` to clear the flag.
+6. Only then continue to Step 2.
+
+### 1b. needsAttention
+
+If \\\`true\\\` — note it, but not a blocker. Mention it to the user after startup completes.
+
+## Step 2: Check for In-Flight Work
+
+\\\`\\\`\\\`
+Call: job(action="list", status="review", limit=5)
+Call: job(action="list", status="draft", createdBy="claude-chat", limit=5)
+\\\`\\\`\\\`
+
+- **Review jobs**: Code flagged concerns. Present them to the user — these need resolution before new work starts.
+- **Draft jobs**: Chat-created specs waiting for Code to claim. Mention them as FYI.
+
+## Step 3: Check Messages
+
+\\\`\\\`\\\`
+Call: document(action="receive", to="claude-chat")
+\\\`\\\`\\\`
+
+Pick up any messages from Code. Present relevant ones to the user (e.g., build questions, review completions).
+
+## Step 4: Session Orientation
+
+The MCP server auto-creates sessions on any tool call. Watch for \\\`_session\\\` metadata in every response:
+
+- \\\`_session.autoCreated: true\\\` → Enrich immediately with \\\`session(action="update")\\\` — set title, mode, sessionGoal, activeIdeaId, activeAppId, presentationMode.
+- \\\`_session.mismatch: true\\\` → Present the conflict to the user. Let them choose: continue existing or complete and start fresh.
+- \\\`_session.staleClosed\\\` → Inform the user their old session was auto-closed.
+
+Check for the last completed session on the same app/idea to inherit \\\`closingSummary\\\` and \\\`nextSessionRecommendation\\\`.
+
+## Step 5: Load Active Context
+
+\\\`\\\`\\\`
+Call: idea(action="get_active", appId=[active app])
+Call: list_concepts(grouped=true, ideaId=[active idea])
+\\\`\\\`\\\`
+
+Summarize briefly: current idea, count of active concepts by type, unresolved OPENs.
+
+## Step 6: Present Opening
+
+Combine everything into a single opening message:
+
+1. Any blockers encountered and resolved (dirty flag, review jobs)
+2. Messages from Code (if any)
+3. Session context (continuing from last session's recommendation, or fresh start)
+4. Active idea + concept summary
+5. Present 2-3 focus options and ask the user to choose
+
+---
+
+## Budget Tracking Reference
+
+Track every turn: \\\`📊 Budget: [est total]K / [zone] / [headroom]\\\`
+
+### Sources to Count
+
+| Source | Estimate |
+|--------|----------|
+| System overhead | ~85K fixed |
+| MCP tool responses | Sum \\\`_responseSize\\\` from each call |
+| Web search | ~10K per call |
+| Web fetch | Use \\\`text_content_token_limit\\\` or estimate ~3-5K |
+| Conversation history | All prior user + assistant messages |
+| Past chat search | ~3-5K per call |
+| Image search | ~1K per call |
+
+### Rules
+- \\\`_contextHealth.used\\\` and \\\`.ceiling\\\` from tool responses are authoritative — override estimates
+- Flag any single MCP response over 10K: \\\`⚠️ last call: [size]\\\`
+- Call out zone transitions explicitly
+- Write budget to memory every ~5 turns: \\\`"CC budget: [total]K / [zone]. Session: [sessionId]"\\\`
+- Remove budget entry from memory when session closes
+
+### Estimation Shortcuts
+- Assistant output: ~1.5K short, ~3K medium, ~5K+ long
+- User messages: ~0.1-0.5K typical
+- 3 web searches ≈ 30K
+
+### Baseline
+~53K tool total after standard startup. ~138K with system overhead. ~486K runway to compaction.
+
+---
+
+## Compaction Recovery Protocol
+
+Compaction replaces conversation history with a lossy summary. System prompt, project instructions, and memory survive. Each cycle degrades quality.
+
+### Detection
+Both must be true:
+1. Memory contains a budget snapshot with a session ID
+2. First MCP \\\`_contextHealth.used\\\` is significantly lower than the memory value
+
+### Recovery Sequence (mandatory, in order)
+1. \\\`session(get, sessionId)\\\` from memory — restores goal, mode, idea/app
+2. \\\`list_concepts(grouped=true, ideaId)\\\` — restores current truth
+3. Check session's \\\`pendingFlush\\\` for documents awaiting delivery
+4. \\\`job(list, status=active)\\\` + \\\`job(list, status=draft)\\\` — checks in-flight work
+5. Note \\\`_contextHealth.used\\\` as new budget baseline
+
+### Post-Recovery Message
+> ⚠️ **Compaction detected** (cycle [N]). Structured state reloaded — session, concepts, and jobs are current. Conversational reasoning from earlier turns is degraded.
+>
+> **New budget baseline:** [used] / [zone] / [headroom]
+>
+> I can continue with straightforward tasks. For complex ideation or design work, a fresh chat will give better results.
+
+### Cycle Tracking
+Update memory: \\\`"CC budget: [total]K / [zone]. Session: [id]. Compaction: [N]"\\\`
+At cycle 3+, strongly recommend a fresh chat.
+
+---
+
+## Skill Router Quick Reference
+
+| Trigger | Skill(s) to Load |
+|---|---|
+| "start ideation [idea/app]" | cc-odrc-framework, cc-session-structure |
+| "run [name] lens" | cc-lens-{name} |
+| "start exploration" | cc-mode-exploration |
+| "create draft job" / build spec | cc-job-creation-protocol |
+| "generate CLAUDE.md" | cc-spec-generation |
+| "wrap up" / "done" | cc-session-structure (close section) |
+| "continue where we left off" | cc-session-continuity |
+| "capture [concept]" | cc-odrc-framework |
+| Compaction detected | cc-startup-checklist + cc-session-resume |
+
+### On Session/Job Close
+Consider cc-retro-journal for genuine discoveries (delegation insights, process improvements, collapsed assumptions).
+
+### Output Rules
+Never read docx/pptx/xlsx SKILL.md files. Output reports as markdown (.md). No Word docs unless explicitly requested.`;
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Skill Registry — maps skill names to content for the \`skill\` tool
 // ═══════════════════════════════════════════════════════════════════════
 
 interface SkillEntry {
@@ -3547,6 +3714,7 @@ const SKILL_REGISTRY: SkillEntry[] = [
   { name: "cc-skill-router", description: "Routing table: which skills to load for each trigger (Chat and Code)", content: SKILL_ROUTER },
   { name: "cc-job-creation-protocol", description: "How Chat creates well-formed build jobs for Code", content: SKILL_JOB_CREATION_PROTOCOL },
   { name: "cc-retro-journal", description: "Shared learning journal — genuine discoveries from Chat and Code that change future behavior", content: SKILL_RETRO_JOURNAL },
+  { name: "cc-startup-checklist", description: "Mandatory cold start sequence for Chat — profile check, in-flight work, messages, session orientation, context loading", content: SKILL_STARTUP_CHECKLIST },
 ];
 
 /** Get list of all skill names and descriptions */
