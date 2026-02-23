@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getDocumentsRef, getDocumentRef, getConfigRef, getProfileRef, getSessionRef, getSystemRef } from "../firebase.js";
+import { getDocumentsRef, getDocumentRef, getConfigRef, getProfileRef, getSessionRef, getDb } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { isGitHubConfigured, resolveTargetPath, resolveTargetRepo, resolveFilePath, deliverToGitHub, setupDocsRepo } from "../github.js";
 import { withResponseSize } from "../response-metadata.js";
@@ -124,7 +124,6 @@ Actions:
 
         // If sessionId provided, atomically write doc + pendingFlush entry via multi-path update
         if (sessionId) {
-          const { getDb } = await import("../firebase.js");
           const updates: Record<string, any> = {};
           updates[`command-center/${uid}/documents/${docId_push}`] = doc;
           updates[`command-center/${uid}/sessions/${sessionId}/pendingFlush/${docId_push}`] = true;
@@ -133,15 +132,42 @@ Actions:
           await ref.set(doc);
         }
 
-        // Bump system-wide instructionsVersion when project instructions are published
-        // This triggers the forced update gate for all users on their next cold start
+        // Set projectInstructionsDirty=true on ALL user profiles when project instructions are published.
+        // This triggers the forced update gate for each user on their next cold start.
         if (type === "cc-instructions") {
           try {
-            await getSystemRef().child("instructionsVersion").transaction(
-              (current: number | null) => (current || 0) + 1
-            );
+            // Get all user UIDs via Firebase REST shallow query (avoids downloading all user data).
+            // Admin SDK doesn't support shallow reads natively, so we use the REST API.
+            const admin = (await import("firebase-admin")).default;
+            const credential = admin.app().options.credential;
+            const tokenResult = credential ? await credential.getAccessToken() : null;
+            const accessToken = tokenResult?.access_token;
+
+            const databaseURL = process.env.FIREBASE_DATABASE_URL || "https://word-boxing-default-rtdb.firebaseio.com";
+
+            let userIds: string[] = [];
+            if (accessToken) {
+              const resp = await fetch(`${databaseURL}/command-center.json?shallow=true`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+              if (resp.ok) {
+                const keys = await resp.json();
+                userIds = Object.keys(keys || {}).filter(k => k !== "system");
+              }
+            }
+
+            // Multi-path update: set dirty flag on every user's profile in one write
+            if (userIds.length > 0) {
+              const updates: Record<string, any> = {};
+              const now = new Date().toISOString();
+              for (const userId of userIds) {
+                updates[`command-center/${userId}/profile/projectInstructionsDirty`] = true;
+                updates[`command-center/${userId}/profile/updatedAt`] = now;
+              }
+              await getDb().ref().update(updates);
+            }
           } catch {
-            // Non-critical — version bump failure doesn't block push
+            // Non-critical — dirty flag failure doesn't block push
           }
         }
 

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getSessionsRef, getSessionRef, getPreferencesRef, getProfileRef, getAttentionQueueRef, getDb, getDocumentRef, getConfigRef, getSystemRef } from "../firebase.js";
+import { getSessionsRef, getSessionRef, getPreferencesRef, getProfileRef, getAttentionQueueRef, getDb, getDocumentRef, getConfigRef } from "../firebase.js";
 import { isGitHubConfigured, resolveTargetRepo, resolveFilePath, deliverToGitHub } from "../github.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
@@ -44,7 +44,7 @@ export function registerSessionTools(server: McpServer): void {
   - "list": List sessions with optional filters. Optional: ideaId, appId, status, limit.
   - "delete": Delete a session. Requires sessionId. Use for test cleanup only.
   - "preferences": Read or update user preferences. Optional: presentationMode (to set).
-  - "profile": Read or update user profile. Optional fields to set: presentationMode, confirmInstructionsVersion. Returns consolidated profile with preferences and instructionsVersion (current vs confirmed). When confirmInstructionsVersion is provided, writes the confirmed version to the user's profile.`,
+  - "profile": Read or update user profile. Optional fields to set: presentationMode, clearInstructionsDirty. Returns consolidated profile with projectInstructionsDirty flag. When clearInstructionsDirty is true, clears the dirty flag on the user's profile (call after user confirms they've updated their project instructions).`,
     {
       action: z.enum(["start", "update", "add_event", "complete", "get", "list", "delete", "preferences", "profile"]).describe("Action to perform"),
       sessionId: z.string().optional().describe("Session ID (required for update/add_event/complete/get)"),
@@ -70,7 +70,7 @@ export function registerSessionTools(server: McpServer): void {
       closingSummary: z.string().optional().describe("Mini-brief written on session close"),
       nextSessionRecommendation: z.string().optional().describe("What the next session should focus on"),
       conceptsResolved: z.number().int().optional().describe("Final count of concepts resolved this session"),
-      confirmInstructionsVersion: z.number().int().optional().describe("For profile action: write this version as the user's confirmed instructions version"),
+      clearInstructionsDirty: z.boolean().optional().describe("For profile action: set to true to clear the projectInstructionsDirty flag after user confirms they updated their project instructions"),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
@@ -79,7 +79,7 @@ export function registerSessionTools(server: McpServer): void {
         action, sessionId, ideaId, appId, title, summary, eventType, detail, refId, status,
         mode, activeIdeaId, activeAppId, activeLens, targetOpens, sessionGoal,
         conceptBlockCount, contextEstimate, presentationMode, configSnapshot,
-        closingSummary, nextSessionRecommendation, conceptsResolved, confirmInstructionsVersion, limit, offset,
+        closingSummary, nextSessionRecommendation, conceptsResolved, clearInstructionsDirty, limit, offset,
       } = args;
 
       const uid = getCurrentUid();
@@ -134,27 +134,18 @@ export function registerSessionTools(server: McpServer): void {
           profile = { ...profile, ...updates };
         }
 
-        // Write confirmed instructions version if provided
-        if (confirmInstructionsVersion !== undefined) {
+        // Clear the dirty flag if user confirmed they updated their project instructions
+        if (clearInstructionsDirty === true) {
           await profileRef.update({
-            confirmedInstructionsVersion: confirmInstructionsVersion,
+            projectInstructionsDirty: false,
             updatedAt: new Date().toISOString(),
           });
-          profile.confirmedInstructionsVersion = confirmInstructionsVersion;
+          profile.projectInstructionsDirty = false;
         }
 
-        // Read canonical instructionsVersion from system config (single read, piggybacked)
-        try {
-          const systemSnap = await getSystemRef().child("instructionsVersion").once("value");
-          const currentVersion = systemSnap.val() || 0;
-          const confirmedVersion = profile.confirmedInstructionsVersion || 0;
-          profile.instructionsVersion = {
-            current: currentVersion,
-            confirmed: confirmedVersion,
-            updateRequired: currentVersion > confirmedVersion,
-          };
-        } catch {
-          // Non-critical — omit instructionsVersion if system read fails
+        // Include projectInstructionsDirty in response (defaults to false if not set)
+        if (profile.projectInstructionsDirty === undefined) {
+          profile.projectInstructionsDirty = false;
         }
 
         return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify(profile, null, 2) }] });
