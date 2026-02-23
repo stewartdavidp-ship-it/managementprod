@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getDocumentsRef, getDocumentRef, getConfigRef, getProfileRef, getSessionRef } from "../firebase.js";
+import { getDocumentsRef, getDocumentRef, getConfigRef, getProfileRef, getSessionRef, getSystemRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { isGitHubConfigured, resolveTargetPath, resolveTargetRepo, resolveFilePath, deliverToGitHub, setupDocsRepo } from "../github.js";
 import { withResponseSize } from "../response-metadata.js";
@@ -19,7 +19,8 @@ const LIFESPAN_DEFAULTS: Record<string, Lifespan> = {
   "architecture":  "short",
   "test-plan":     "short",
   "design":        "short",
-  "claude-md":     "permanent",
+  "claude-md":          "permanent",
+  "cc-instructions":    "permanent",
 };
 
 const TTL_MS: Record<string, number> = {
@@ -130,6 +131,18 @@ Actions:
           await getDb().ref().update(updates);
         } else {
           await ref.set(doc);
+        }
+
+        // Bump system-wide instructionsVersion when project instructions are published
+        // This triggers the forced update gate for all users on their next cold start
+        if (type === "cc-instructions") {
+          try {
+            await getSystemRef().child("instructionsVersion").transaction(
+              (current: number | null) => (current || 0) + 1
+            );
+          } catch {
+            // Non-critical — version bump failure doesn't block push
+          }
         }
 
         // Auto-deliver to GitHub if requested

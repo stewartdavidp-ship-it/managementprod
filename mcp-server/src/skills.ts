@@ -773,8 +773,8 @@ You need:
 After reading the profile via \`session(action="profile")\`, check \`instructionsVersion.updateRequired\`. If true:
 
 1. **Block all normal operations.** No job checks, no ideation — update first.
-2. Tell the user: "Your Claude project instructions are out of date (version {confirmed} → {current}). Let me get the latest version for you."
-3. Call \`generate_claude_md(action="get", appId="command-center")\` to fetch the current project instructions content from Firebase.
+2. Tell the user: "Your project instructions are out of date (version {confirmed} → {current}). Let me get the latest version for you."
+3. Call \`document(action="list", type="cc-instructions", status="pending")\` to find the latest project instructions document. Read its content.
 4. Present the full content to the user and instruct them to paste it into their Claude.ai project settings (Settings → Projects → Command Center → Project Instructions).
 5. Wait for the user to confirm they've updated their project instructions.
 6. Call \`session(action="profile", confirmInstructionsVersion={current})\` to write back the confirmed version.
@@ -3292,7 +3292,7 @@ Then load specific sections via \`section="## Section Name"\`.
 
 ### Cold Start Sequence
 
-On cold start: (1) Load router, (2) Check \`session(action="profile")\` for needsAttention AND \`instructionsVersion.updateRequired\`, (3) **If \`instructionsVersion.updateRequired\` is true**: block normal startup — notify the user their project instructions are outdated, call \`generate_claude_md(action="get", appId="command-center")\` to fetch the latest content, present it to the user with instructions to update their Claude project settings, then call \`session(action="profile", confirmInstructionsVersion=<current>)\` to write back confirmation. Only proceed after confirmation. (4) Check \`job(list, status="review")\` and \`job(list, status="draft")\`, (5) First tool response will include \`_session\` metadata — react per cc-session-protocol. Server handles session detection automatically — no explicit \`session(list, status="active")\` check needed.
+On cold start: (1) Load router, (2) Check \`session(action="profile")\` for needsAttention AND \`instructionsVersion.updateRequired\`, (3) **If \`instructionsVersion.updateRequired\` is true**: block normal startup — notify the user their project instructions are outdated, fetch the latest via \`document(list, type="cc-instructions")\`, present it to the user with instructions to update their Claude project settings, then call \`session(action="profile", confirmInstructionsVersion=<current>)\` to write back confirmation. Only proceed after confirmation. (4) Check \`job(list, status="review")\` and \`job(list, status="draft")\`, (5) First tool response will include \`_session\` metadata — react per cc-session-protocol. Server handles session detection automatically — no explicit \`session(list, status="active")\` check needed.
 
 ## Code Routing
 

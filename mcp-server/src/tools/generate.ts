@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getConceptsRef, getIdeasRef, getAppIdeasRef, getClaudeMdRef, getDocumentsRef, getConfigRef, getSystemRef } from "../firebase.js";
+import { getConceptsRef, getIdeasRef, getAppIdeasRef, getClaudeMdRef, getDocumentsRef, getConfigRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { isGitHubConfigured, resolveTargetPath, deliverToGitHub } from "../github.js";
 import { withResponseSize } from "../response-metadata.js";
@@ -199,17 +199,8 @@ export function registerGenerateTools(server: McpServer): void {
       };
       await getClaudeMdRef(uid, appId).set(record);
 
-      // If push, bump system-wide instructionsVersion and queue for delivery
+      // If push, queue for delivery to Claude Code
       if (isPush) {
-        // Atomic increment of system instructionsVersion — triggers update-required for all users
-        try {
-          await getSystemRef().child("instructionsVersion").transaction(
-            (current: number | null) => (current || 0) + 1
-          );
-        } catch {
-          // Non-critical — version bump failure doesn't block push
-        }
-
         const docRef = getDocumentsRef(uid).push();
         const now = new Date().toISOString();
         const doc = {
