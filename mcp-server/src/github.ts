@@ -51,6 +51,12 @@ export function resolveTargetRepo(
   const appRepo = appRepos?.prod || null;
   const isAppScoped = docType === "claude-md" || docType === "spec";
 
+  // project-instructions goes to the app's repo at root (no subPath)
+  if (docType === "project-instructions") {
+    if (appRepo) return { repo: appRepo, useSubPath: false };
+    return null;
+  }
+
   if (isAppScoped) {
     // App-scoped docs go to the app's repo with subPath
     if (appRepo) return { repo: appRepo, useSubPath: true };
