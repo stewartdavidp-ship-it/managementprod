@@ -136,6 +136,11 @@ export function getNodeContentRef(uid: string, nodeId: string) {
   return db.ref(`command-center/${uid}/knowledge/nodes/${nodeId}`);
 }
 
+// System-wide config (shared across all users)
+export function getSystemRef() {
+  return db.ref("command-center/system");
+}
+
 export function getDb(): admin.database.Database {
   return db;
 }
