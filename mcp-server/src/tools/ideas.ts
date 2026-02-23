@@ -5,7 +5,7 @@ import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 
 const IDEA_TYPES = ["base", "addon"] as const;
-const IDEA_STATUSES = ["active", "graduated", "archived"] as const;
+const IDEA_STATUSES = ["active", "graduated", "archived", "completed"] as const;
 
 // ─── list_ranked cache ───
 // Avoids 4 full-collection Firebase reads on rapid repeat calls.
@@ -19,7 +19,7 @@ export function registerIdeaTools(server: McpServer): void {
   server.tool(
     "idea",
     `Idea lifecycle tool. Actions:
-  - "list": List ideas. Optional: appId filter (sorts by sequence when filtered).
+  - "list": List ideas. Optional: appId filter (sorts by sequence when filtered), status filter. By default excludes completed and archived ideas.
   - "get": Get a single idea by ID. Requires ideaId. Returns full record.
   - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId.
   - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status.
@@ -36,7 +36,7 @@ export function registerIdeaTools(server: McpServer): void {
       description: z.string().optional().describe("Idea description (required for create, optional for update)"),
       type: z.enum(IDEA_TYPES).optional().describe("Idea type: base or addon (optional for create, default: base)"),
       parentIdeaId: z.string().optional().describe("Parent idea ID for addon ideas (optional for create)"),
-      status: z.enum(IDEA_STATUSES).optional().describe("New status (optional for update)"),
+      status: z.enum(IDEA_STATUSES).optional().describe("For update: new status. For list: filter by status (overrides default exclusion of completed/archived)."),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
@@ -50,6 +50,13 @@ export function registerIdeaTools(server: McpServer): void {
         if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
         let ideas: any[] = Object.values(data);
+
+        // Status filter: if provided, show only that status. Otherwise exclude completed and archived.
+        if (status) {
+          ideas = ideas.filter((i) => i.status === status);
+        } else {
+          ideas = ideas.filter((i) => i.status !== "completed" && i.status !== "archived");
+        }
 
         if (appId) {
           ideas = ideas
@@ -261,8 +268,8 @@ export function registerIdeaTools(server: McpServer): void {
         const allJobs: any[] = Object.values(jobsSnap.val() || {});
         const allSessions: any[] = Object.values(sessionsSnap.val() || {});
 
-        // Filter to non-archived ideas
-        let ideas = allIdeas.filter((i) => i.status !== "archived");
+        // Filter to non-archived, non-completed ideas
+        let ideas = allIdeas.filter((i) => i.status !== "archived" && i.status !== "completed");
         if (appId) {
           ideas = ideas.filter((i) => i.appId === appId);
         }
