@@ -20,7 +20,7 @@ const LIFESPAN_DEFAULTS: Record<string, Lifespan> = {
   "test-plan":     "short",
   "design":        "short",
   "claude-md":          "permanent",
-  "cc-instructions":    "permanent",
+  "project-instructions":    "permanent",
 };
 
 const TTL_MS: Record<string, number> = {
@@ -134,7 +134,7 @@ Actions:
 
         // Set projectInstructionsDirty=true on ALL user profiles when project instructions are published.
         // This triggers the forced update gate for each user on their next cold start.
-        if (type === "cc-instructions") {
+        if (type === "project-instructions") {
           try {
             // Get all user UIDs via Firebase REST shallow query (avoids downloading all user data).
             // Admin SDK doesn't support shallow reads natively, so we use the REST API.

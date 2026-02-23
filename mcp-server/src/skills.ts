@@ -774,7 +774,7 @@ After reading the profile via \`session(action="profile")\`, check \`projectInst
 
 1. **Block all normal operations.** No job checks, no ideation — update first.
 2. Tell the user: "Your project instructions need to be updated. Let me get the latest version for you."
-3. Call \`document(action="list", type="cc-instructions", status="delivered")\` to find the latest project instructions document. If none found, try \`status="pending"\`. Read its content via \`document(action="get", docId=...)\`.
+3. Call \`document(action="list", type="project-instructions", status="delivered")\` to find the latest project instructions document. If none found, try \`status="pending"\`. Read its content via \`document(action="get", docId=...)\`.
 4. Present the full content to the user and instruct them to paste it into their Claude.ai project settings (Settings → Projects → Command Center → Project Instructions).
 5. Wait for the user to confirm they've updated their project instructions.
 6. Call \`session(action="profile", clearInstructionsDirty=true)\` to clear the dirty flag.
@@ -3292,7 +3292,7 @@ Then load specific sections via \`section="## Section Name"\`.
 
 ### Cold Start Sequence
 
-On cold start: (1) Load router, (2) Check \`session(action="profile")\` for needsAttention AND \`projectInstructionsDirty\`, (3) **If \`projectInstructionsDirty\` is true**: block normal startup — notify the user their project instructions need updating, fetch the latest via \`document(list, type="cc-instructions")\`, present it to the user with instructions to update their Claude project settings, then call \`session(action="profile", clearInstructionsDirty=true)\` after user confirms. Only proceed after confirmation. (4) Check \`job(list, status="review")\` and \`job(list, status="draft")\`, (5) First tool response will include \`_session\` metadata — react per cc-session-protocol. Server handles session detection automatically — no explicit \`session(list, status="active")\` check needed.
+On cold start: (1) Load router, (2) Check \`session(action="profile")\` for needsAttention AND \`projectInstructionsDirty\`, (3) **If \`projectInstructionsDirty\` is true**: block normal startup — notify the user their project instructions need updating, fetch the latest via \`document(list, type="project-instructions")\`, present it to the user with instructions to update their Claude project settings, then call \`session(action="profile", clearInstructionsDirty=true)\` after user confirms. Only proceed after confirmation. (4) Check \`job(list, status="review")\` and \`job(list, status="draft")\`, (5) First tool response will include \`_session\` metadata — react per cc-session-protocol. Server handles session detection automatically — no explicit \`session(list, status="active")\` check needed.
 
 ## Code Routing
 
