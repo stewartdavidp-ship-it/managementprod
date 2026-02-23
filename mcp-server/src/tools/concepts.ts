@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef } from "../firebase.js";
+import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef, getIdeasRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { ensureSession } from "../session-lifecycle.js";
 
 // Mirrors CC's ODRC_TYPES (index.html:4772)
 const ODRC_TYPES = ["OPEN", "DECISION", "RULE", "CONSTRAINT"] as const;
@@ -209,6 +210,25 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         if (!content) return { content: [{ type: "text", text: "action 'create' requires content" }], isError: true };
         if (!ideaOrigin) return { content: [{ type: "text", text: "action 'create' requires ideaOrigin" }], isError: true };
 
+        // Mismatch detection: resolve idea's appId and check against active session
+        // Cache hit on ensureSession (free) — Firebase query was done in middleware
+        let sessionMismatch: any = null;
+        try {
+          const ideaSnap = await getIdeasRef(uid).child(ideaOrigin).child("appId").once("value");
+          const ideaAppId = ideaSnap.val();
+          if (ideaAppId) {
+            const sessionCheck = await ensureSession({ appId: ideaAppId, ideaId: ideaOrigin });
+            if (sessionCheck.mismatch) {
+              sessionMismatch = {
+                warning: "Concept's idea/app context does not match active session",
+                activeSession: sessionCheck.existingSession,
+              };
+            }
+          }
+        } catch {
+          // Non-critical — skip mismatch check if idea lookup fails
+        }
+
         const ref = getConceptsRef(uid).push();
         const now = new Date().toISOString();
         const concept: Record<string, any> = {
@@ -265,7 +285,9 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
           });
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(concept, null, 2) }] };
+        const result: any = concept;
+        if (sessionMismatch) result._sessionMismatch = sessionMismatch;
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       // ─── UPDATE ───

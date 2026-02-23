@@ -30,6 +30,7 @@ export interface SessionMetadata {
     startedAt: string;
   };
   staleClosed?: string; // ID of the stale session that was closed
+  _sessionData?: any;   // Internal: cached session record for tool-level mismatch checks (not serialized to responses)
 }
 
 /**
@@ -99,7 +100,8 @@ export async function resolveSession(
   // ─── Branch 3: Context matches (or no context to compare) ───
   // Update cache so contextEstimate auto-increment knows the active session
   setActiveSessionId(uid, sessionId);
-  return { id: sessionId };
+  // Include session data for tool-level mismatch checks (not serialized to responses)
+  return { id: sessionId, _sessionData: session };
 }
 
 async function autoCreateSession(uid: string): Promise<SessionMetadata> {
@@ -176,7 +178,41 @@ export async function ensureSession(
 ): Promise<SessionMetadata> {
   // Check if already resolved for this request
   const cached = getSessionMeta();
-  if (cached) return cached;
+
+  if (cached) {
+    // If no tool context provided, return cached result as-is
+    if (!toolContext || (!toolContext.appId && !toolContext.ideaId)) {
+      return cached;
+    }
+
+    // Tool provided context — run mismatch check against the cached session
+    // This avoids re-querying Firebase. We use _cachedSessionData (set during resolveSession)
+    // to compare context locally.
+    if (cached._sessionData) {
+      const session = cached._sessionData;
+      const sessionAppId = session.activeAppId || session.appId || null;
+      const sessionIdeaId = session.activeIdeaId || session.ideaId || null;
+
+      const appMatch = !toolContext.appId || toolContext.appId === sessionAppId;
+      const ideaMatch = !toolContext.ideaId || toolContext.ideaId === sessionIdeaId;
+
+      if (!appMatch || !ideaMatch) {
+        return {
+          id: cached.id,
+          mismatch: true,
+          existingSession: {
+            id: cached.id,
+            title: session.title,
+            appId: sessionAppId,
+            ideaId: sessionIdeaId,
+            startedAt: session.startedAt,
+          },
+        };
+      }
+    }
+
+    return cached;
+  }
 
   // Resolve from Firebase
   const uid = getCurrentUid();
