@@ -226,7 +226,8 @@ Actions:
           }
         }
 
-        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(tree, null, 2) }] });
+        // Lean response: just confirm creation with key fields
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ treeId: ref.key, name, created: true }, null, 2) }] });
       }
 
       // ─── UPDATE_TREE ───
@@ -299,7 +300,10 @@ Actions:
         }
 
         await ref.update(updates);
-        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...existing, ...updates }, null, 2) }] });
+
+        // Lean response: only confirm what changed
+        const fieldsUpdated = Object.keys(updates).filter((k) => k !== "updatedAt");
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ updated: true, treeId, fieldsUpdated }, null, 2) }] });
       }
 
       // ─── DELETE_TREE ───
