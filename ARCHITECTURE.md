@@ -1,6 +1,6 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-02-22 (v8.71.8)
+> **Last updated:** 2026-02-23 (v8.71.8)
 >
 > **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 27).
 
@@ -43,7 +43,7 @@
 | **Firebase project** | `word-boxing` |
 | **Firebase UID** | `oUt4ba0dYVRBfPREqoJ1yIsJKjr1` |
 | **MCP server URL** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
-| **Latest MCP revision** | `cc-mcp-server-00061-9xz` |
+| **Latest MCP revision** | `cc-mcp-server-00082-zrj` |
 
 ### Deploy Commands
 
@@ -229,19 +229,22 @@ The Evidence Engine stores curated research findings in a three-level hierarchy 
 knowledge/
 ├── forests/{forestId}          Domain groupings (e.g., "Firebase", "React")
 │   ├── name, description, tags
-│   └── treeIds[]               References to member trees
+│   ├── treeIds[]               References to member trees
+│   └── summary, summaryGeneratedAt  Cached flat routing table
 ├── trees/{treeId}              Topic-level containers
 │   ├── name, description, tokenBudget, tokenUsed
 │   ├── trustProfile            {authoritative, credible, unverified, questionable}
 │   ├── searchHistory[]         [{query, nodeIdsProduced, searchedAt}]
+│   ├── gaps[]                  [{question, priority, discoveredAt, status}]
 │   └── index/{nodeId}          Cheap routing entries (always loaded with tree)
-│       ├── question, keyFinding, tokenCost, trust
-│       └── parentId, childIds[], order
+│       ├── question, keyFinding, tokenCost, trust, tags[]
+│       ├── parentId, childIds[], order
+│       └── contradictedBy[]    Node IDs that contradict this node (denormalized)
 └── nodes/{nodeId}              Expensive content records (loaded on demand)
     ├── treeId, content, tokenCount
     ├── sources[]               [{url, document, credibility, discoveryQuery?}]
     ├── consensusNotes
-    └── crossRefs[]             [{nodeId, treeId, relationship}]
+    └── crossRefs[]             [{nodeId, treeId, relationship, addedAt}]
 ```
 
 **Key design constraint:** Firebase RTDB has no server-side field projection. The index/content split MUST be at the Firebase path level — `trees/{treeId}/index/` vs `nodes/{nodeId}/` — so loading a tree index never pulls node content.
@@ -262,9 +265,20 @@ Relationship types: `supports`, `informs`, `constrains`, `contradicts`.
 
 | Tool | Actions | Purpose |
 |------|---------|---------|
-| `knowledge_tree` | 10 actions | Forest CRUD, tree CRUD, get_index, add_search |
-| `knowledge_node` | 6 actions | Node CRUD, load, load_batch, move |
-| `concept` | +2 actions | add_knowledge_ref, remove_knowledge_ref |
+| `knowledge_tree` | 15 actions | Forest CRUD, tree CRUD, get_index, add_search, search_tags, summaries |
+| `knowledge_node` | 9 actions | Node CRUD, load, load_batch, move, add/remove_cross_ref, bulk_verify |
+| `concept` | +3 actions | add/remove_knowledge_ref, check_evidence_drift |
+
+### Health Advisory (in get_index)
+
+When `get_index` is called, a `healthAdvisory` block is conditionally included if any issues exist:
+- **Stale nodes** — nodes past the tree's `freshnessPeriodDays` threshold
+- **Contradictions** — nodes with non-empty `contradictedBy[]` index entries
+- **Open gaps** — unresolved gaps from the tree's `gaps[]` array
+
+### Evidence Drift Detection
+
+`concept(check_evidence_drift)` compares each knowledge ref's `addedAt` timestamp against the referenced node's `updatedAt`. `get_active_concepts(includeDriftCheck=true)` runs this check in bulk across all concepts with knowledge refs.
 
 ---
 

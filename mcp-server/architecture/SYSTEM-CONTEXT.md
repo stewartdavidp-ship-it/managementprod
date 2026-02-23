@@ -5,7 +5,7 @@
 >
 > **Keep current:** Update this file whenever architecture changes are made.
 >
-> **Last updated:** 2026-02-19 — Revision 27
+> **Last updated:** 2026-02-23 — Revision 28
 
 ---
 
@@ -30,7 +30,7 @@ Both agents share the same Firebase Realtime Database namespace and communicate 
 └──────────────┘
 ```
 
-**Key numbers:** 10 tools, 24 skills, 2 built-in prompts, 1 resource, 357 E2E tests.
+**Key numbers:** 13 tools, 27 skills, 2 built-in prompts, 1 resource, 357 E2E tests.
 
 ---
 
@@ -139,12 +139,16 @@ command-center/
     │       ├── name, description, appType
     │       ├── repos: { prod: "owner/repo" }
     │       ├── subPath: string | null   # Prepended to all file paths in this app's repo
+    │       ├── status: "active" | "archived"  # Archived apps excluded from list
+    │       ├── conceptChangeCount: number     # Auto-incremented on concept mutations
     │       └── lifecycle: { ... }
     │
     ├── concepts/{conceptId}/            # ODRC objects
     │   ├── type: "OPEN" | "DECISION" | "RULE" | "CONSTRAINT"
     │   ├── content, status, ideaOrigin
     │   ├── scopeTags: string[]
+    │   ├── knowledgeRefs[]              # [{nodeId, treeId, treeName, relationship, addedAt}]
+    │   ├── knowledgeRefCount: number    # Denormalized for summary views
     │   ├── resolvedBy, transitionedFrom
     │   └── sessionId, jobId             # Provenance tracking
     │
@@ -187,6 +191,30 @@ command-center/
     │
     ├── preferences/                     # User preferences (presentationMode, etc.)
     │
+    ├── profile/                         # User profile (presentationMode, attentionCount, projectInstructionsDirty)
+    │
+    ├── attentionQueue/{entryId}/        # Attention items (stale-claude-md, etc.)
+    │
+    ├── knowledge/                       # Evidence Engine (MCP-only, no browser listeners)
+    │   ├── forests/{forestId}/          # Domain groupings
+    │   │   ├── name, description, tags[], treeIds[]
+    │   │   └── summary, summaryGeneratedAt, summaryNodeCount
+    │   ├── trees/{treeId}/              # Topic containers
+    │   │   ├── name, description, tokenBudget, tokenUsed, nodeCount
+    │   │   ├── trustProfile: {authoritative, credible, unverified, questionable}
+    │   │   ├── freshnessPeriodDays, lastVerified
+    │   │   ├── searchHistory: [{query, nodeIdsProduced, searchedAt}]
+    │   │   ├── gaps: [{question, priority, discoveredAt, status}]
+    │   │   └── index/{nodeId}/          # Cheap routing entries
+    │   │       ├── question, keyFinding, tokenCost, trust, tags[]
+    │   │       ├── parentId, childIds[], order, lastVerified
+    │   │       └── contradictedBy[]     # Denormalized contradiction index
+    │   └── nodes/{nodeId}/              # Expensive content (loaded on demand)
+    │       ├── treeId, content, tokenCount
+    │       ├── sources: [{url, document, credibility, discoveryQuery?}]
+    │       ├── consensusNotes
+    │       └── crossRefs: [{nodeId, treeId, relationship, addedAt}]
+    │
     └── apiKeyHash                       # SHA-256 of CC API key
 ```
 
@@ -206,9 +234,11 @@ These `.indexOn` rules are required for server-side query filtering. Without the
 
 | Function | Path |
 |----------|------|
-| `getConfigRef()` | `command-center/config` |
+| `getConfigRef(uid)` | `command-center/{uid}/config` |
 | `getConceptsRef(uid)` | `command-center/{uid}/concepts` |
+| `getConceptRef(uid, cid)` | `command-center/{uid}/concepts/{cid}` |
 | `getIdeasRef(uid)` | `command-center/{uid}/ideas` |
+| `getIdeaRef(uid, iid)` | `command-center/{uid}/ideas/{iid}` |
 | `getAppIdeasRef(uid, appId)` | `command-center/{uid}/appIdeas/{appId}` |
 | `getSessionsRef(uid)` | `command-center/{uid}/sessions` |
 | `getSessionRef(uid, sid)` | `command-center/{uid}/sessions/{sid}` |
@@ -217,6 +247,16 @@ These `.indexOn` rules are required for server-side query filtering. Without the
 | `getClaudeMdRef(uid, appId)` | `command-center/{uid}/claudeMd/{appId}` |
 | `getDocumentsRef(uid)` | `command-center/{uid}/documents` |
 | `getDocumentRef(uid, docId)` | `command-center/{uid}/documents/{docId}` |
+| `getPreferencesRef(uid)` | `command-center/{uid}/preferences` |
+| `getProfileRef(uid)` | `command-center/{uid}/profile` |
+| `getAttentionQueueRef(uid)` | `command-center/{uid}/attentionQueue` |
+| `getForestsRef(uid)` | `command-center/{uid}/knowledge/forests` |
+| `getForestRef(uid, fid)` | `command-center/{uid}/knowledge/forests/{fid}` |
+| `getTreesRef(uid)` | `command-center/{uid}/knowledge/trees` |
+| `getTreeRef(uid, tid)` | `command-center/{uid}/knowledge/trees/{tid}` |
+| `getTreeIndexRef(uid, tid)` | `command-center/{uid}/knowledge/trees/{tid}/index` |
+| `getNodesRef(uid)` | `command-center/{uid}/knowledge/nodes` |
+| `getNodeContentRef(uid, nid)` | `command-center/{uid}/knowledge/nodes/{nid}` |
 
 ---
 
@@ -238,25 +278,28 @@ CONSTRAINT ► RULE          (external reality changed)
 RULE ──────► OPEN          (destabilized, needs rethinking)
 ```
 
-Concept statuses: `active`, `superseded`, `resolved`, `transitioned`
+Concept statuses: `active`, `superseded`, `resolved`, `transitioned`, `built`
 
 ---
 
 ## 7. Tools Reference
 
-### 10 Registered Tools
+### 13 Registered Tools
 
 | Tool | Actions | Primary User |
 |------|---------|-------------|
-| `app` | list, get, update | Both |
-| `idea` | list, create, update, graduate, archive, get_active | Chat |
-| `session` | start, update, add_event, complete, get, list | Chat |
-| `concept` | create, update, transition, supersede, resolve | Both |
-| `list_concepts` | _(query params only)_ | Both |
-| `get_active_concepts` | _(appId required)_ | Both |
-| `job` | start, claim, revise, review, approve, update, add_event, complete, get, list | Code |
+| `app` | list, get, create, update, archive | Both |
+| `idea` | list, get, create, update, graduate, archive, get_active, list_ranked, delete | Chat |
+| `session` | start, update, add_event, complete, get, list, delete, preferences, profile | Chat |
+| `concept` | get, create, update, transition, supersede, resolve, mark_built, migrate, add_knowledge_ref, remove_knowledge_ref, check_evidence_drift, delete | Both |
+| `list_concepts` | _(query params: ideaId, appId, type, status, scope, grouped, summary)_ | Both |
+| `get_active_concepts` | _(appId required, optional: includeDriftCheck)_ | Both |
+| `job` | start, claim, revise, review, approve, update, add_event, complete, get, list, delete | Code |
 | `generate_claude_md` | generate, push, get | Chat |
-| `document` | push, list, get, deliver, deliver-to-github, fail, send, receive, ack, purge, delete | Both |
+| `document` | push, list, get, get-latest, update, deliver, deliver-to-github, fail, send, receive, ack, purge, delete | Both |
+| `knowledge_tree` | list_forests, get_forest, create_forest, update_forest, delete_forest, list_trees, get_tree, create_tree, update_tree, delete_tree, get_index, add_search, search_tags, generate_summary, get_forest_summary | Both |
+| `knowledge_node` | create, update, delete, load, load_batch, move, add_cross_ref, remove_cross_ref, bulk_verify | Both |
+| `repo_file` | _(single read action: repo, path, branch)_ | Both |
 | `skill` | list, get | Chat |
 
 ### Job Event Types
@@ -295,7 +338,7 @@ Jobs serve as the universal handoff between Claude Chat and Claude Code:
 
 ## 8. Skills Reference
 
-### 24 Registered Skills
+### 27 Registered Skills
 
 | # | Skill Name | Agent | Purpose |
 |---|-----------|-------|---------|
@@ -323,6 +366,9 @@ Jobs serve as the universal handoff between Claude Chat and Claude Code:
 | 22 | `cc-lens-accessibility` | Chat | WCAG compliance, keyboard nav, screen readers, cognitive load |
 | 23 | `cc-lens-operations` | Chat | Post-launch ops: analytics, monitoring, incident response |
 | 24 | `cc-lens-security` | Chat | Security audit: attack surfaces, auth, Firebase rules |
+| 25 | `cc-skill-router` | Chat | Routes user intent to appropriate skill |
+| 26 | `cc-job-creation-protocol` | Chat | Protocol for creating well-formed draft jobs |
+| 27 | `cc-retro-journal` | Chat | Retrospective journaling for session reflection |
 
 Skills are registered both as MCP prompts (for Claude Code) and accessible via the `skill` tool (for Claude Chat, which uses tools not prompts).
 
@@ -424,7 +470,7 @@ Documents have a `lifespan` field that controls automatic cleanup:
 | `ephemeral` | immediate | Deleted from Firebase on `deliver` or `ack` | `message` |
 | `short` | 7 days | Lazy-deleted when `list` is called | `spec`, `architecture`, `test-plan`, `design` |
 | `standard` | 30 days | Lazy-deleted when `list` is called | all other types |
-| `permanent` | none | Never auto-deleted | `claude-md` |
+| `permanent` | none | Never auto-deleted; retained in Firebase after GitHub delivery | `claude-md`, `project-instructions` |
 
 **Ephemeral behavior:** When `deliver` or `ack` is called on an ephemeral document, it is immediately removed from Firebase. The response includes `_deleted: true` to indicate the document no longer exists in the database.
 
@@ -470,20 +516,23 @@ mcp-server/
 │   ├── index.ts                   # Express app, CORS, auth middleware, MCP endpoints
 │   ├── server.ts                  # MCP server creation, tool/prompt/resource registration
 │   ├── context.ts                 # AsyncLocalStorage<RequestContext>, getCurrentUid()
-│   ├── firebase.ts                # Firebase Admin init, 11 reference factory functions
+│   ├── firebase.ts                # Firebase Admin init, 23 reference factory functions
 │   ├── github.ts                  # GitHub Contents API client (auto-delivery)
-│   ├── skills.ts                  # 24 skill prompt constants, registerSkillPrompts()
+│   ├── skills.ts                  # 27 skill prompt constants, registerSkillPrompts()
 │   ├── auth/
 │   │   ├── oauth.ts               # OAuth 2.1 router (5 endpoints + sign-in page)
 │   │   └── store.ts               # In-memory OAuth state + API key validation
 │   └── tools/
-│       ├── apps.ts                # app tool (list/get/update)
-│       ├── concepts.ts            # concept, list_concepts, get_active_concepts tools
-│       ├── ideas.ts               # idea tool (CRUD + graduate/archive)
-│       ├── sessions.ts            # session tool (lifecycle + events)
+│       ├── apps.ts                # app tool (list/get/create/update/archive)
+│       ├── concepts.ts            # concept (12 actions), list_concepts, get_active_concepts
+│       ├── ideas.ts               # idea tool (9 actions: CRUD + graduate/archive/list_ranked)
+│       ├── sessions.ts            # session tool (lifecycle + events + preferences + profile)
 │       ├── jobs.ts                # job tool (lifecycle + events + outcomes)
-│       ├── generate.ts            # generate_claude_md tool (assemble + push + get)
-│       ├── documents.ts           # document tool (queue + delivery + messaging)
+│       ├── generate.ts            # generate_claude_md tool (generate/push/get)
+│       ├── documents.ts           # document tool (queue + delivery + messaging, 13 actions)
+│       ├── knowledge-tree.ts      # knowledge_tree tool (forest/tree CRUD, index, search, 15 actions)
+│       ├── knowledge-node.ts      # knowledge_node tool (node CRUD, cross-refs, bulk_verify, 9 actions)
+│       ├── repo.ts                # repo_file tool (read files from GitHub repos)
 │       └── skills.ts              # skill tool (list/get bridge for Chat)
 ├── deploy.sh                      # Build + deploy to Cloud Run + OAuth verification
 ├── e2e-test.sh                    # 303 E2E tests against live service
