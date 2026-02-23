@@ -53,6 +53,7 @@ Actions:
   - "push": Queue a document. Requires: type, appId, content, targetPath. Optional: metadata (JSON string), createdBy, lifespan, autoDeliver.
   - "list": List documents. Optional filters: appId, type, status (default: "pending"). Expired TTL docs are auto-purged. Returns newest first.
   - "get": Get a document by ID. Requires: docId.
+  - "get-latest": Get the most recent document of a given type, regardless of status. Requires: type. Optional: appId. Useful for permanent docs like project-instructions that may be pending or delivered.
   - "deliver": Mark delivered and delete ephemeral docs from Firebase. Requires: docId. Optional: deliveredBy.
   - "deliver-to-github": Commit to GitHub repo, then delete from Firebase on success. Requires: docId.
   - "fail": Mark as failed. Requires: docId, reason.
@@ -62,7 +63,7 @@ Actions:
   - "purge": Delete all delivered/failed docs older than 24h. Returns count deleted.
   - "delete": Delete a document by ID. Requires: docId. Use for test cleanup only.`,
     {
-      action: z.enum(["push", "list", "get", "deliver", "deliver-to-github", "fail", "send", "receive", "ack", "purge", "delete"]).describe("Action to perform"),
+      action: z.enum(["push", "list", "get", "get-latest", "deliver", "deliver-to-github", "fail", "send", "receive", "ack", "purge", "delete"]).describe("Action to perform"),
       docId: z.string().optional().describe("Document ID (required for get/deliver/fail/ack)"),
       type: z.string().optional().describe("Document type: claude-md, spec, architecture, test-plan, design, or custom (required for push, optional filter for list)"),
       appId: z.string().optional().describe("App ID (required for push, optional filter for list)"),
@@ -307,6 +308,31 @@ Actions:
 
         if (!doc) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] });
+      }
+
+      // ─── GET-LATEST ───
+      // Returns the most recent document of a given type, regardless of status.
+      // Useful for permanent docs (project-instructions, claude-md) that persist after delivery.
+      if (action === "get-latest") {
+        if (!type) return withResponseSize({ content: [{ type: "text", text: "action 'get-latest' requires type" }], isError: true });
+
+        const snapshot = await getDocumentsRef(uid)
+          .orderByChild("type")
+          .equalTo(type)
+          .limitToLast(10)
+          .once("value");
+        const data = snapshot.val();
+        if (!data) return withResponseSize({ content: [{ type: "text", text: `No documents found with type: ${type}` }], isError: true });
+
+        let docs: any[] = Object.values(data);
+        if (appId) docs = docs.filter((d) => d.appId === appId);
+
+        // Sort newest first and return the most recent
+        docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        const latest = docs[0];
+        if (!latest) return withResponseSize({ content: [{ type: "text", text: `No documents found with type: ${type}` }], isError: true });
+
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(latest, null, 2) }] });
       }
 
       // ─── DELIVER ───
