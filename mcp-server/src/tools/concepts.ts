@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef, getIdeasRef, getConfigRef, getClaudeMdRef, getAttentionQueueRef } from "../firebase.js";
+import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef, getIdeasRef, getConfigRef, getClaudeMdRef, getAttentionQueueRef, getNodeContentRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
@@ -230,9 +230,10 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
   - "migrate": Re-parent a concept to a different idea. Requires conceptId, newIdeaId. Updates ideaOrigin.
   - "add_knowledge_ref": Link a concept to a knowledge tree node. Requires conceptId, nodeId, treeId, treeName. Optional: relationship (supports|informs|constrains|contradicts, default: supports).
   - "remove_knowledge_ref": Unlink a concept from a knowledge tree node. Requires conceptId, nodeId.
+  - "check_evidence_drift": Check if a concept's linked knowledge nodes have been updated since they were linked. Requires conceptId. Returns drift status per ref.
   - "delete": Delete a concept. Requires conceptId. Use for test cleanup only.`,
     {
-      action: z.enum(["get", "create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "add_knowledge_ref", "remove_knowledge_ref", "delete"]).describe("Action to perform"),
+      action: z.enum(["get", "create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "add_knowledge_ref", "remove_knowledge_ref", "check_evidence_drift", "delete"]).describe("Action to perform"),
       conceptId: z.string().optional().describe("Concept ID (required for update/transition/supersede/resolve/mark_built/migrate)"),
       type: z.enum(ODRC_TYPES).optional().describe("Concept type (required for create): OPEN, DECISION, RULE, or CONSTRAINT"),
       content: z.string().optional().describe("Concept text (required for create, optional for update)"),
@@ -752,6 +753,48 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         return { content: [{ type: "text", text: JSON.stringify({ removed: nodeId, knowledgeRefCount: filtered.length }, null, 2) }] };
       }
 
+      // ─── CHECK_EVIDENCE_DRIFT ───
+      if (action === "check_evidence_drift") {
+        if (!conceptId) return withResponseSize({ content: [{ type: "text", text: "action 'check_evidence_drift' requires conceptId" }], isError: true });
+
+        const ref = getConceptsRef(uid).child(conceptId);
+        const snapshot = await ref.once("value");
+        const concept = snapshot.val();
+        if (!concept) return withResponseSize({ content: [{ type: "text", text: `Concept not found: ${conceptId}` }], isError: true });
+
+        const refs: any[] = concept.knowledgeRefs || [];
+        if (refs.length === 0) {
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ hasDrift: false, refs: [], conceptId }, null, 2) }] });
+        }
+
+        // Parallel-load all referenced node content records
+        const nodeSnaps = await Promise.all(
+          refs.map((r: any) => getNodeContentRef(uid, r.nodeId).once("value"))
+        );
+
+        let hasDrift = false;
+        const refResults = refs.map((r: any, i: number) => {
+          const node = nodeSnaps[i].val();
+          if (!node) {
+            return { nodeId: r.nodeId, treeId: r.treeId, status: "missing", drifted: true };
+          }
+          const addedAt = r.addedAt || concept.createdAt;
+          const nodeUpdatedAt = node.updatedAt || node.createdAt;
+          const drifted = nodeUpdatedAt > addedAt;
+          if (drifted) hasDrift = true;
+          return {
+            nodeId: r.nodeId,
+            treeId: r.treeId,
+            relationship: r.relationship || "supports",
+            addedAt,
+            nodeUpdatedAt,
+            drifted,
+          };
+        });
+
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ hasDrift, driftedRefCount: refResults.filter((r: any) => r.drifted).length, totalRefs: refs.length, refs: refResults, conceptId }, null, 2) }] });
+      }
+
       // ─── DELETE ───
       if (action === "delete") {
         if (!conceptId) return { content: [{ type: "text", text: "action 'delete' requires conceptId" }], isError: true };
@@ -778,8 +821,9 @@ Note: Prefer list_concepts with grouped=true for the same result with more filte
     {
       appId: z.string().describe("The app ID to get active concepts for"),
       summary: z.boolean().optional().describe("If true (default), return lean summary with truncated content. Set false for full objects."),
+      includeDriftCheck: z.boolean().optional().describe("If true, check evidence drift for concepts with knowledgeRefs. Adds evidenceDrift field to each concept. Default false."),
     },
-    async ({ appId, summary }) => {
+    async ({ appId, summary, includeDriftCheck }) => {
       // Delegate to the same logic as list_concepts(grouped=true, status="active")
       const useSummary = summary !== false;
       const uid = getCurrentUid();
@@ -795,18 +839,63 @@ Note: Prefer list_concepts with grouped=true for the same result with more filte
       const allConcepts: any[] = Object.values(allData);
       const active = allConcepts.filter((c) => ideaIds.includes(c.ideaOrigin) && c.status === "active");
 
+      // Evidence drift check: load referenced nodes and compare timestamps
+      let driftMap: Map<string, { hasDrift: boolean; driftedRefCount: number }> | null = null;
+      if (includeDriftCheck) {
+        driftMap = new Map();
+        const conceptsWithRefs = active.filter((c) => (c.knowledgeRefCount || 0) > 0 && (c.knowledgeRefs || []).length > 0);
+
+        // Collect all unique nodeIds across all concepts
+        const allNodeIds = new Set<string>();
+        for (const c of conceptsWithRefs) {
+          for (const r of (c.knowledgeRefs || [])) {
+            allNodeIds.add(r.nodeId);
+          }
+        }
+
+        // Batch-load all referenced nodes in parallel
+        const nodeIdList = Array.from(allNodeIds);
+        const nodeSnaps = await Promise.all(
+          nodeIdList.map((nId) => getNodeContentRef(uid, nId).once("value"))
+        );
+        const nodeMap = new Map<string, any>();
+        for (let i = 0; i < nodeIdList.length; i++) {
+          nodeMap.set(nodeIdList[i], nodeSnaps[i].val());
+        }
+
+        // Compute drift per concept
+        for (const c of conceptsWithRefs) {
+          let driftedCount = 0;
+          for (const r of (c.knowledgeRefs || [])) {
+            const node = nodeMap.get(r.nodeId);
+            if (!node) { driftedCount++; continue; }
+            const addedAt = r.addedAt || c.createdAt;
+            const nodeUpdatedAt = node.updatedAt || node.createdAt;
+            if (nodeUpdatedAt > addedAt) driftedCount++;
+          }
+          driftMap.set(c.id, { hasDrift: driftedCount > 0, driftedRefCount: driftedCount });
+        }
+      }
+
       const project = useSummary
-        ? (c: any) => ({
-            id: c.id,
-            type: c.type,
-            content: c.content?.length > 150 ? c.content.substring(0, 150) + "..." : c.content,
-            status: c.status,
-            scopeTags: c.scopeTags || [],
-            scope: c.scope || null,
-            ideaOrigin: c.ideaOrigin,
-            knowledgeRefCount: c.knowledgeRefCount || 0,
-          })
-        : (c: any) => c;
+        ? (c: any) => {
+            const base: any = {
+              id: c.id,
+              type: c.type,
+              content: c.content?.length > 150 ? c.content.substring(0, 150) + "..." : c.content,
+              status: c.status,
+              scopeTags: c.scopeTags || [],
+              scope: c.scope || null,
+              ideaOrigin: c.ideaOrigin,
+              knowledgeRefCount: c.knowledgeRefCount || 0,
+            };
+            if (driftMap?.has(c.id)) base.evidenceDrift = driftMap.get(c.id);
+            return base;
+          }
+        : (c: any) => {
+            if (driftMap?.has(c.id)) return { ...c, evidenceDrift: driftMap.get(c.id) };
+            return c;
+          };
 
       const grouped = {
         rules: active.filter((c) => c.type === "RULE").map(project),

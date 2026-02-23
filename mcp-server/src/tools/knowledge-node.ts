@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getTreeRef, getTreeIndexRef, getNodeContentRef, getNodesRef } from "../firebase.js";
+import { getTreeRef, getTreeIndexRef, getNodeContentRef, getNodesRef, getTreesRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 
@@ -22,9 +22,12 @@ Actions:
   - "delete": Delete a node. Requires nodeId. Removes index entry + content record. Updates tree aggregates and parent childIds.
   - "load": Load a single node's full content. Requires nodeId. Returns content, sources, crossRefs, tokenCount.
   - "load_batch": Load multiple nodes in parallel. Requires nodeIds (array, max 10). Returns map of nodeId → content record.
-  - "move": Reparent a node. Requires nodeId, newParentId (use "root" to make a root node). Updates hierarchy.`,
+  - "move": Reparent a node. Requires nodeId, newParentId (use "root" to make a root node). Updates hierarchy.
+  - "add_cross_ref": Add a cross-reference between two nodes with reciprocal creation. Requires nodeId, targetNodeId, relationship. If relationship is "contradicts", also updates contradictedBy index on both nodes. Max 50 crossRefs per node.
+  - "remove_cross_ref": Remove a cross-reference between two nodes with reciprocal removal. Requires nodeId, targetNodeId. Cleans up contradictedBy index if applicable.
+  - "bulk_verify": Mark multiple nodes as verified (refreshes lastVerified). Requires treeId, nodeIds (max 20). Atomic multi-path update.`,
     {
-      action: z.enum(["create", "update", "delete", "load", "load_batch", "move"]).describe("Action to perform"),
+      action: z.enum(["create", "update", "delete", "load", "load_batch", "move", "add_cross_ref", "remove_cross_ref", "bulk_verify"]).describe("Action to perform"),
       treeId: z.string().optional().describe("Tree ID (required for create)"),
       nodeId: z.string().optional().describe("Node ID (required for update/delete/load/move)"),
       nodeIds: z.array(z.string()).optional().describe("Node IDs for load_batch (max 10)"),
@@ -39,8 +42,10 @@ Actions:
       crossRefs: z.string().optional().describe("JSON array of cross-references: [{nodeId, treeId, relationship}]"),
       lastVerified: z.string().optional().describe("ISO date when node was last verified (optional for update)"),
       tags: z.array(z.string()).optional().describe("Keyword tags for retrieval (e.g., ['merge-conflicts', 'file-boundaries']). Written to index entry for cheap search."),
+      targetNodeId: z.string().optional().describe("Target node ID for add_cross_ref/remove_cross_ref"),
+      relationship: z.string().optional().describe("Cross-ref relationship type (e.g., 'supports', 'contradicts', 'extends', 'qualifies'). Required for add_cross_ref."),
     },
-    async ({ action, treeId, nodeId, nodeIds, question, content, keyFinding, trust, parentId, newParentId, sources, consensusNotes, crossRefs, lastVerified, tags }) => {
+    async ({ action, treeId, nodeId, nodeIds, question, content, keyFinding, trust, parentId, newParentId, sources, consensusNotes, crossRefs, lastVerified, tags, targetNodeId, relationship }) => {
       const uid = getCurrentUid();
 
       // Parse JSON string params
@@ -398,6 +403,176 @@ Actions:
 
         return withResponseSize({
           content: [{ type: "text", text: JSON.stringify({ moved: nodeId, oldParentId, newParentId: effectiveNewParentId }, null, 2) }],
+        });
+      }
+
+      // ─── ADD_CROSS_REF ───
+      if (action === "add_cross_ref") {
+        if (!nodeId) return withResponseSize({ content: [{ type: "text", text: "add_cross_ref requires nodeId" }], isError: true });
+        if (!targetNodeId) return withResponseSize({ content: [{ type: "text", text: "add_cross_ref requires targetNodeId" }], isError: true });
+        if (!relationship) return withResponseSize({ content: [{ type: "text", text: "add_cross_ref requires relationship" }], isError: true });
+        if (nodeId === targetNodeId) return withResponseSize({ content: [{ type: "text", text: "Cannot cross-reference a node to itself" }], isError: true });
+
+        // Load both nodes' content records in parallel
+        const [sourceSnap, targetSnap] = await Promise.all([
+          getNodeContentRef(uid, nodeId).once("value"),
+          getNodeContentRef(uid, targetNodeId).once("value"),
+        ]);
+        const sourceNode = sourceSnap.val();
+        const targetNode = targetSnap.val();
+        if (!sourceNode) return withResponseSize({ content: [{ type: "text", text: `Source node not found: ${nodeId}` }], isError: true });
+        if (!targetNode) return withResponseSize({ content: [{ type: "text", text: `Target node not found: ${targetNodeId}` }], isError: true });
+
+        // Check cap
+        const sourceCrossRefs: any[] = sourceNode.crossRefs || [];
+        if (sourceCrossRefs.length >= 50) {
+          return withResponseSize({ content: [{ type: "text", text: `Cross-ref cap (50) reached on source node ${nodeId}. Remove existing refs first.` }], isError: true });
+        }
+        const targetCrossRefs: any[] = targetNode.crossRefs || [];
+        if (targetCrossRefs.length >= 50) {
+          return withResponseSize({ content: [{ type: "text", text: `Cross-ref cap (50) reached on target node ${targetNodeId}. Remove existing refs first.` }], isError: true });
+        }
+
+        // Check for duplicate
+        if (sourceCrossRefs.some((r: any) => r.nodeId === targetNodeId)) {
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ warning: "Cross-ref already exists", nodeId, targetNodeId }, null, 2) }] });
+        }
+
+        const now = new Date().toISOString();
+
+        // Build reciprocal cross-ref entries
+        const sourceRef = { nodeId: targetNodeId, treeId: targetNode.treeId, relationship, addedAt: now };
+        const targetRef = { nodeId, treeId: sourceNode.treeId, relationship, addedAt: now };
+
+        sourceCrossRefs.push(sourceRef);
+        targetCrossRefs.push(targetRef);
+
+        // Build updates for content records
+        const sourceUpdates: Record<string, any> = { crossRefs: sourceCrossRefs, updatedAt: now };
+        const targetUpdates: Record<string, any> = { crossRefs: targetCrossRefs, updatedAt: now };
+
+        // Contradiction index denormalization — update contradictedBy on both index entries
+        const indexPromises: Promise<void>[] = [];
+        if (relationship === "contradicts") {
+          // Update source node's index: add targetNodeId to contradictedBy
+          const sourceIndexSnap = await getTreeIndexRef(uid, sourceNode.treeId).child(nodeId).once("value");
+          const sourceIndex = sourceIndexSnap.val();
+          if (sourceIndex) {
+            const contradictedBy: string[] = sourceIndex.contradictedBy || [];
+            if (!contradictedBy.includes(targetNodeId)) {
+              contradictedBy.push(targetNodeId);
+              indexPromises.push(getTreeIndexRef(uid, sourceNode.treeId).child(nodeId).update({ contradictedBy, updatedAt: now }));
+            }
+          }
+
+          // Update target node's index: add nodeId to contradictedBy
+          const targetIndexSnap = await getTreeIndexRef(uid, targetNode.treeId).child(targetNodeId).once("value");
+          const targetIndex = targetIndexSnap.val();
+          if (targetIndex) {
+            const contradictedBy: string[] = targetIndex.contradictedBy || [];
+            if (!contradictedBy.includes(nodeId)) {
+              contradictedBy.push(nodeId);
+              indexPromises.push(getTreeIndexRef(uid, targetNode.treeId).child(targetNodeId).update({ contradictedBy, updatedAt: now }));
+            }
+          }
+        }
+
+        await Promise.all([
+          getNodeContentRef(uid, nodeId).update(sourceUpdates),
+          getNodeContentRef(uid, targetNodeId).update(targetUpdates),
+          ...indexPromises,
+        ]);
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ added: sourceRef, reciprocal: targetRef, isContradiction: relationship === "contradicts" }, null, 2) }],
+        });
+      }
+
+      // ─── REMOVE_CROSS_REF ───
+      if (action === "remove_cross_ref") {
+        if (!nodeId) return withResponseSize({ content: [{ type: "text", text: "remove_cross_ref requires nodeId" }], isError: true });
+        if (!targetNodeId) return withResponseSize({ content: [{ type: "text", text: "remove_cross_ref requires targetNodeId" }], isError: true });
+
+        // Load both nodes' content records in parallel
+        const [sourceSnap, targetSnap] = await Promise.all([
+          getNodeContentRef(uid, nodeId).once("value"),
+          getNodeContentRef(uid, targetNodeId).once("value"),
+        ]);
+        const sourceNode = sourceSnap.val();
+        const targetNode = targetSnap.val();
+        if (!sourceNode) return withResponseSize({ content: [{ type: "text", text: `Source node not found: ${nodeId}` }], isError: true });
+
+        const now = new Date().toISOString();
+        const sourceCrossRefs: any[] = sourceNode.crossRefs || [];
+        const removedRef = sourceCrossRefs.find((r: any) => r.nodeId === targetNodeId);
+
+        if (!removedRef) {
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ warning: "Cross-ref not found", nodeId, targetNodeId }, null, 2) }] });
+        }
+
+        const filteredSource = sourceCrossRefs.filter((r: any) => r.nodeId !== targetNodeId);
+        const promises: Promise<void>[] = [
+          getNodeContentRef(uid, nodeId).update({ crossRefs: filteredSource, updatedAt: now }),
+        ];
+
+        // Remove reciprocal from target
+        if (targetNode) {
+          const targetCrossRefs: any[] = targetNode.crossRefs || [];
+          const filteredTarget = targetCrossRefs.filter((r: any) => r.nodeId !== nodeId);
+          promises.push(getNodeContentRef(uid, targetNodeId).update({ crossRefs: filteredTarget, updatedAt: now }));
+        }
+
+        // Clean up contradictedBy index entries if it was a contradiction
+        if (removedRef.relationship === "contradicts") {
+          // Remove targetNodeId from source's contradictedBy
+          const sourceIndexSnap = await getTreeIndexRef(uid, sourceNode.treeId).child(nodeId).once("value");
+          const sourceIndex = sourceIndexSnap.val();
+          if (sourceIndex?.contradictedBy) {
+            const cleaned = (sourceIndex.contradictedBy as string[]).filter((id: string) => id !== targetNodeId);
+            promises.push(getTreeIndexRef(uid, sourceNode.treeId).child(nodeId).update({ contradictedBy: cleaned, updatedAt: now }));
+          }
+
+          // Remove nodeId from target's contradictedBy
+          if (targetNode) {
+            const targetIndexSnap = await getTreeIndexRef(uid, targetNode.treeId).child(targetNodeId).once("value");
+            const targetIndex = targetIndexSnap.val();
+            if (targetIndex?.contradictedBy) {
+              const cleaned = (targetIndex.contradictedBy as string[]).filter((id: string) => id !== nodeId);
+              promises.push(getTreeIndexRef(uid, targetNode.treeId).child(targetNodeId).update({ contradictedBy: cleaned, updatedAt: now }));
+            }
+          }
+        }
+
+        await Promise.all(promises);
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ removed: { nodeId, targetNodeId }, wasContradiction: removedRef.relationship === "contradicts" }, null, 2) }],
+        });
+      }
+
+      // ─── BULK_VERIFY ───
+      if (action === "bulk_verify") {
+        if (!treeId) return withResponseSize({ content: [{ type: "text", text: "bulk_verify requires treeId" }], isError: true });
+        if (!nodeIds || nodeIds.length === 0) return withResponseSize({ content: [{ type: "text", text: "bulk_verify requires nodeIds (non-empty array)" }], isError: true });
+        if (nodeIds.length > 20) return withResponseSize({ content: [{ type: "text", text: `bulk_verify capped at 20 nodes. Requested: ${nodeIds.length}. Split into multiple calls.` }], isError: true });
+
+        // Verify tree exists
+        const treeSnap = await getTreeRef(uid, treeId).once("value");
+        const tree = treeSnap.val();
+        if (!tree) return withResponseSize({ content: [{ type: "text", text: `Tree not found: ${treeId}` }], isError: true });
+
+        const now = new Date().toISOString();
+
+        // Multi-path atomic update: set lastVerified on each index entry
+        const treeUpdates: Record<string, any> = { lastVerified: now, updatedAt: now };
+        for (const nId of nodeIds) {
+          treeUpdates[`index/${nId}/lastVerified`] = now;
+          treeUpdates[`index/${nId}/updatedAt`] = now;
+        }
+        await getTreeRef(uid, treeId).update(treeUpdates);
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ verified: nodeIds.length, treeId, lastVerified: now }, null, 2) }],
         });
       }
 

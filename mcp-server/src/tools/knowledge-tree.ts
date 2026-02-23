@@ -25,7 +25,7 @@ Actions:
   - "list_trees": List trees. Optional: forestId filter. Returns summaries with token budgets and trust profiles.
   - "get_tree": Get full tree record by ID. Requires treeId. Returns all metadata including searchHistory, trustProfile, timestamps. Does NOT include the index (use get_index for that).
   - "create_tree": Create a tree. Requires name. Optional: description, forestIds, tokenBudget (default 150000), freshnessPeriodDays (default 90).
-  - "update_tree": Update tree metadata. Requires treeId. Optional: name, description, forestIds, tokenBudget, freshnessPeriodDays.
+  - "update_tree": Update tree metadata. Requires treeId. Optional: name, description, forestIds, tokenBudget, freshnessPeriodDays, gaps (JSON array of {question, priority, discoveredAt, status}).
   - "delete_tree": Delete tree + all index entries + all node content. Removes from parent forests. Requires treeId.
   - "get_index": Load a tree's routing-table index — all node index entries for selective content loading. Requires treeId.
   - "add_search": Record a search query and its results on a tree. Requires treeId, query. Optional: nodeIdsProduced (array of node IDs created from this search). Appends to searchHistory with auto-timestamp.
@@ -49,8 +49,9 @@ Actions:
       freshnessPeriodDays: z.number().int().optional().describe("Days before nodes are considered stale (default 90)"),
       query: z.string().optional().describe("Search query text (required for add_search)"),
       nodeIdsProduced: z.array(z.string()).optional().describe("Node IDs created from a search (optional for add_search)"),
+      gaps: z.string().optional().describe("JSON array of gap objects: [{question, priority, discoveredAt?, status?}]. For update_tree. Priority: high/medium/low. Status: open/resolved (default: open)."),
     },
-    async ({ action, forestId, treeId, name, description, tags, treeIds, forestIds, tokenBudget, freshnessPeriodDays, query, nodeIdsProduced }) => {
+    async ({ action, forestId, treeId, name, description, tags, treeIds, forestIds, tokenBudget, freshnessPeriodDays, query, nodeIdsProduced, gaps }) => {
       const uid = getCurrentUid();
 
       // ═══════════════════════════════════════
@@ -244,6 +245,25 @@ Actions:
         if (tokenBudget !== undefined) updates.tokenBudget = tokenBudget;
         if (freshnessPeriodDays !== undefined) updates.freshnessPeriodDays = freshnessPeriodDays;
 
+        // Handle gaps field
+        if (gaps !== undefined) {
+          try {
+            const parsedGaps = JSON.parse(gaps);
+            if (!Array.isArray(parsedGaps)) {
+              return withResponseSize({ content: [{ type: "text", text: "gaps must be a JSON array" }], isError: true });
+            }
+            // Validate and normalize each gap entry
+            updates.gaps = parsedGaps.map((g: any) => ({
+              question: g.question || "",
+              priority: g.priority || "medium",
+              discoveredAt: g.discoveredAt || now,
+              status: g.status || "open",
+            }));
+          } catch {
+            return withResponseSize({ content: [{ type: "text", text: "gaps must be a valid JSON string" }], isError: true });
+          }
+        }
+
         // Handle forestIds changes — update old and new forest treeIds arrays
         if (forestIds !== undefined) {
           const oldForestIds: string[] = existing.forestIds || [];
@@ -359,7 +379,11 @@ Actions:
           return 0;
         });
 
-        const result = {
+        const freshnessPeriodDays = tree.freshnessPeriodDays || 90;
+        const freshnessMs = freshnessPeriodDays * 24 * 60 * 60 * 1000;
+        const nowMs = Date.now();
+
+        const result: Record<string, any> = {
           tree: {
             id: tree.id,
             name: tree.name,
@@ -369,7 +393,7 @@ Actions:
             nodeCount: tree.nodeCount || 0,
             trustProfile: tree.trustProfile || emptyTrustProfile(),
             lastVerified: tree.lastVerified || null,
-            freshnessPeriodDays: tree.freshnessPeriodDays || 90,
+            freshnessPeriodDays,
             searchHistory: tree.searchHistory || [],
           },
           index: entries.map((e: any) => ({
@@ -383,9 +407,56 @@ Actions:
             childIds: e.childIds || [],
             tags: e.tags || [],
             order: e.order || 0,
+            contradictedBy: e.contradictedBy || [],
           })),
           nodeCount: entries.length,
         };
+
+        // ─── Health Advisory ───
+        // Compute stale nodes, contradictions, gaps — only include if something to report
+        const staleNodes: any[] = [];
+        const contradictions: any[] = [];
+
+        for (const e of entries) {
+          // Staleness check
+          const verifiedAt = e.lastVerified ? new Date(e.lastVerified).getTime() : 0;
+          if (verifiedAt > 0 && (nowMs - verifiedAt) > freshnessMs) {
+            staleNodes.push({
+              nodeId: e.id,
+              question: e.question,
+              lastVerified: e.lastVerified,
+              daysSinceVerified: Math.floor((nowMs - verifiedAt) / (24 * 60 * 60 * 1000)),
+            });
+          }
+
+          // Contradiction check
+          const contradictedBy: string[] = e.contradictedBy || [];
+          if (contradictedBy.length > 0) {
+            contradictions.push({
+              nodeId: e.id,
+              question: e.question,
+              contradictedBy,
+            });
+          }
+        }
+
+        // Gaps from tree record
+        const openGaps: any[] = (tree.gaps || []).filter((g: any) => (g.status || "open") === "open");
+
+        const hasIssues = staleNodes.length > 0 || contradictions.length > 0 || openGaps.length > 0;
+        if (hasIssues) {
+          const summaryParts: string[] = [];
+          if (staleNodes.length > 0) summaryParts.push(`${staleNodes.length} stale node(s)`);
+          if (contradictions.length > 0) summaryParts.push(`${contradictions.length} contradiction(s)`);
+          if (openGaps.length > 0) summaryParts.push(`${openGaps.length} open gap(s)`);
+
+          result.healthAdvisory = {
+            staleNodes,
+            contradictions,
+            gaps: openGaps,
+            summary: summaryParts.join(", "),
+          };
+        }
 
         const budgetRemaining = (tree.tokenBudget || 150000) - (tree.tokenUsed || 0);
 
