@@ -38,8 +38,9 @@ Actions:
       consensusNotes: z.string().optional().describe("Agreement/divergence notes across sources"),
       crossRefs: z.string().optional().describe("JSON array of cross-references: [{nodeId, treeId, relationship}]"),
       lastVerified: z.string().optional().describe("ISO date when node was last verified (optional for update)"),
+      tags: z.array(z.string()).optional().describe("Keyword tags for retrieval (e.g., ['merge-conflicts', 'file-boundaries']). Written to index entry for cheap search."),
     },
-    async ({ action, treeId, nodeId, nodeIds, question, content, keyFinding, trust, parentId, newParentId, sources, consensusNotes, crossRefs, lastVerified }) => {
+    async ({ action, treeId, nodeId, nodeIds, question, content, keyFinding, trust, parentId, newParentId, sources, consensusNotes, crossRefs, lastVerified, tags }) => {
       const uid = getCurrentUid();
 
       // Parse JSON string params
@@ -77,7 +78,7 @@ Actions:
         const nId = nodeRef.key!;
 
         // Build index entry
-        const indexEntry = {
+        const indexEntry: Record<string, any> = {
           id: nId,
           question,
           keyFinding: autoKeyFinding,
@@ -86,6 +87,7 @@ Actions:
           lastVerified: now,
           parentId: parentId || null,
           childIds: [],
+          tags: tags || [],
           order: 0,
           createdAt: now,
           updatedAt: now,
@@ -193,6 +195,7 @@ Actions:
         if (keyFinding !== undefined) indexUpdates.keyFinding = keyFinding;
         if (lastVerified !== undefined) indexUpdates.lastVerified = lastVerified;
         if (parentId !== undefined) indexUpdates.parentId = parentId;
+        if (tags !== undefined) indexUpdates.tags = tags;
 
         // Tree aggregate updates
         const treeUpdates: Record<string, any> = { updatedAt: now };

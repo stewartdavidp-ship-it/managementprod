@@ -26,17 +26,21 @@ Actions:
   - "update_tree": Update tree metadata. Requires treeId. Optional: name, description, forestIds, tokenBudget, freshnessPeriodDays.
   - "delete_tree": Delete tree + all index entries + all node content. Removes from parent forests. Requires treeId.
   - "get_index": Load a tree's routing-table index — all node index entries for selective content loading. Requires treeId.
-  - "add_search": Record a search query and its results on a tree. Requires treeId, query. Optional: nodeIdsProduced (array of node IDs created from this search). Appends to searchHistory with auto-timestamp.`,
+  - "add_search": Record a search query and its results on a tree. Requires treeId, query. Optional: nodeIdsProduced (array of node IDs created from this search). Appends to searchHistory with auto-timestamp.
+  - "search_tags": Search across trees for nodes matching given tags. Requires tags (array). Optional: forestId or treeId filter. Returns matches sorted by relevance (most matching tags first).
+  - "generate_summary": Generate a cached flat routing table for a forest. Requires forestId. Assembles one line per node across all member trees. Stores on the forest record.
+  - "get_forest_summary": Get the cached routing summary for a forest. Requires forestId. Returns summary + staleness check.`,
     {
       action: z.enum([
         "list_forests", "create_forest", "update_forest", "delete_forest",
         "list_trees", "create_tree", "update_tree", "delete_tree", "get_index", "add_search",
+        "search_tags", "generate_summary", "get_forest_summary",
       ]).describe("Action to perform"),
       forestId: z.string().optional().describe("Forest ID (required for update_forest/delete_forest, optional filter for list_trees)"),
       treeId: z.string().optional().describe("Tree ID (required for update_tree/delete_tree/get_index)"),
       name: z.string().optional().describe("Name (required for create_forest/create_tree, optional for updates)"),
       description: z.string().optional().describe("Description (optional for create/update)"),
-      tags: z.array(z.string()).optional().describe("Domain tags for forests (optional for create_forest/update_forest)"),
+      tags: z.array(z.string()).optional().describe("Tags: domain tags for forests (create_forest/update_forest) or keyword tags to search for (search_tags)"),
       treeIds: z.array(z.string()).optional().describe("Tree IDs for update_forest"),
       forestIds: z.array(z.string()).optional().describe("Forest IDs for create_tree/update_tree (multi-forest membership)"),
       tokenBudget: z.number().int().optional().describe("Token budget for a tree (default 150000)"),
@@ -351,6 +355,7 @@ Actions:
             lastVerified: e.lastVerified || null,
             parentId: e.parentId || null,
             childIds: e.childIds || [],
+            tags: e.tags || [],
             order: e.order || 0,
           })),
           nodeCount: entries.length,
@@ -388,6 +393,170 @@ Actions:
 
         return withResponseSize({
           content: [{ type: "text", text: JSON.stringify({ added: searchEntry, totalSearches: history.length }, null, 2) }],
+        });
+      }
+
+      // ─── SEARCH_TAGS ───
+      if (action === "search_tags") {
+        if (!tags || tags.length === 0) return withResponseSize({ content: [{ type: "text", text: "search_tags requires tags (non-empty array)" }], isError: true });
+
+        // Determine which trees to search
+        let treeIdsToSearch: string[] = [];
+
+        if (treeId) {
+          // Single tree filter
+          treeIdsToSearch = [treeId];
+        } else if (forestId) {
+          // Forest filter — get member tree IDs
+          const forestSnap = await getForestRef(uid, forestId).once("value");
+          const forest = forestSnap.val();
+          if (!forest) return withResponseSize({ content: [{ type: "text", text: `Forest not found: ${forestId}` }], isError: true });
+          treeIdsToSearch = forest.treeIds || [];
+        } else {
+          // All trees
+          const treesSnap = await getTreesRef(uid).once("value");
+          const treesData = treesSnap.val();
+          if (treesData) treeIdsToSearch = Object.keys(treesData);
+        }
+
+        if (treeIdsToSearch.length === 0) {
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ matches: [], total: 0 }, null, 2) }] });
+        }
+
+        // Load all tree records in parallel to get names + index entries
+        const treeSnaps = await Promise.all(
+          treeIdsToSearch.map((tid) => getTreeRef(uid, tid).once("value"))
+        );
+
+        const searchTagsLower = tags.map((t) => t.toLowerCase());
+        const matches: any[] = [];
+
+        for (let i = 0; i < treeIdsToSearch.length; i++) {
+          const tree = treeSnaps[i].val();
+          if (!tree) continue;
+
+          const indexData = tree.index || {};
+          for (const entry of Object.values(indexData) as any[]) {
+            const nodeTags: string[] = (entry.tags || []).map((t: string) => t.toLowerCase());
+            const matchingTags = searchTagsLower.filter((st) => nodeTags.includes(st));
+            if (matchingTags.length > 0) {
+              matches.push({
+                nodeId: entry.id,
+                treeId: treeIdsToSearch[i],
+                treeName: tree.name,
+                question: entry.question,
+                keyFinding: entry.keyFinding,
+                tags: entry.tags || [],
+                matchingTags,
+                matchCount: matchingTags.length,
+                tokenCost: entry.tokenCost || 0,
+                trust: entry.trust || "unverified",
+              });
+            }
+          }
+        }
+
+        // Sort by match count descending (most relevant first)
+        matches.sort((a, b) => b.matchCount - a.matchCount);
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ matches, total: matches.length, searchedTrees: treeIdsToSearch.length }, null, 2) }],
+        });
+      }
+
+      // ─── GENERATE_SUMMARY ───
+      if (action === "generate_summary") {
+        if (!forestId) return withResponseSize({ content: [{ type: "text", text: "generate_summary requires forestId" }], isError: true });
+
+        const forestSnap = await getForestRef(uid, forestId).once("value");
+        const forest = forestSnap.val();
+        if (!forest) return withResponseSize({ content: [{ type: "text", text: `Forest not found: ${forestId}` }], isError: true });
+
+        const memberTreeIds: string[] = forest.treeIds || [];
+        if (memberTreeIds.length === 0) {
+          const emptySummary = "(empty forest — no trees)";
+          const now = new Date().toISOString();
+          await getForestRef(uid, forestId).update({ summary: emptySummary, summaryGeneratedAt: now, summaryNodeCount: 0, updatedAt: now });
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ summary: emptySummary, nodeCount: 0, treeCount: 0 }, null, 2) }] });
+        }
+
+        // Load all member trees in parallel
+        const treeSnaps = await Promise.all(
+          memberTreeIds.map((tid) => getTreeRef(uid, tid).once("value"))
+        );
+
+        const lines: string[] = [];
+        let totalNodes = 0;
+
+        for (let i = 0; i < memberTreeIds.length; i++) {
+          const tree = treeSnaps[i].val();
+          if (!tree) continue;
+
+          const indexData = tree.index || {};
+          const entries = Object.values(indexData) as any[];
+
+          for (const entry of entries) {
+            const tagsStr = (entry.tags && entry.tags.length > 0) ? ` [${entry.tags.join(", ")}]` : "";
+            const finding = entry.keyFinding ? ` — ${entry.keyFinding}` : "";
+            lines.push(`${tree.name} > ${entry.question}${tagsStr}${finding}`);
+            totalNodes++;
+          }
+        }
+
+        const summary = lines.join("\n");
+        const now = new Date().toISOString();
+
+        await getForestRef(uid, forestId).update({
+          summary,
+          summaryGeneratedAt: now,
+          summaryNodeCount: totalNodes,
+          updatedAt: now,
+        });
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({ summary, nodeCount: totalNodes, treeCount: memberTreeIds.length, generatedAt: now }, null, 2) }],
+        });
+      }
+
+      // ─── GET_FOREST_SUMMARY ───
+      if (action === "get_forest_summary") {
+        if (!forestId) return withResponseSize({ content: [{ type: "text", text: "get_forest_summary requires forestId" }], isError: true });
+
+        const forestSnap = await getForestRef(uid, forestId).once("value");
+        const forest = forestSnap.val();
+        if (!forest) return withResponseSize({ content: [{ type: "text", text: `Forest not found: ${forestId}` }], isError: true });
+
+        if (!forest.summary) {
+          return withResponseSize({
+            content: [{ type: "text", text: JSON.stringify({ summary: null, stale: true, reason: "no summary generated yet" }, null, 2) }],
+          });
+        }
+
+        // Check staleness: count current total nodes across member trees
+        const memberTreeIds: string[] = forest.treeIds || [];
+        let currentNodeCount = 0;
+
+        if (memberTreeIds.length > 0) {
+          const treeSnaps = await Promise.all(
+            memberTreeIds.map((tid) => getTreeRef(uid, tid).once("value"))
+          );
+          for (const snap of treeSnaps) {
+            const tree = snap.val();
+            if (tree) currentNodeCount += (tree.nodeCount || 0);
+          }
+        }
+
+        const isStale = currentNodeCount !== (forest.summaryNodeCount || 0);
+
+        return withResponseSize({
+          content: [{ type: "text", text: JSON.stringify({
+            summary: forest.summary,
+            generatedAt: forest.summaryGeneratedAt,
+            summaryNodeCount: forest.summaryNodeCount || 0,
+            currentNodeCount,
+            stale: isStale,
+            ...(isStale ? { reason: `Node count changed: ${forest.summaryNodeCount || 0} → ${currentNodeCount}. Run generate_summary to refresh.` } : {}),
+          }, null, 2) }],
         });
       }
 
