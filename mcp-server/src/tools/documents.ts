@@ -428,8 +428,20 @@ Actions:
           const result = await deliverToGitHub(routing.repo, filePath, doc.content, commitMsg, "main", token);
           const now = new Date().toISOString();
 
-          // Delete from Firebase after successful GitHub delivery (per RULE)
-          await ref.remove();
+          // Permanent docs (project-instructions, claude-md) stay in Firebase after GitHub delivery
+          // so downstream consumers (e.g. wizard, dirty flag flow) can still read them.
+          // All other types are deleted from Firebase after successful delivery.
+          const docLifespan = doc.lifespan || getDefaultLifespan(doc.type || "");
+          if (docLifespan === "permanent") {
+            await ref.update({
+              status: "delivered",
+              deliveredAt: now,
+              deliveredBy: "mcp-github",
+              "metadata/githubCommit": { sha: result.commitSha, url: result.htmlUrl, path: result.path },
+            });
+          } else {
+            await ref.remove();
+          }
 
           return withResponseSize({ content: [{ type: "text", text: JSON.stringify({
             status: "delivered",
@@ -437,7 +449,7 @@ Actions:
             path: result.path,
             commitSha: result.commitSha,
             htmlUrl: result.htmlUrl,
-            _deleted: true,
+            _deleted: docLifespan !== "permanent",
           }, null, 2) }] });
         } catch (err: any) {
           const now = new Date().toISOString();
