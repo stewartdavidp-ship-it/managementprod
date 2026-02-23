@@ -5342,7 +5342,7 @@
             try {
                 if (firebaseDb && firebaseUser) {
                     const snap = await firebaseDb.ref(`command-center/${firebaseUser.uid}/documents`)
-                        .orderByChild('type').equalTo('cc-instructions').limitToLast(1).once('value');
+                        .orderByChild('type').equalTo('project-instructions').limitToLast(1).once('value');
                     const data = snap.val();
                     if (data) {
                         const doc = Object.values(data)[0];
@@ -5368,7 +5368,7 @@ These instructions are the canonical project configuration for Command Center. T
 3. User loads these instructions into their Claude project settings
 4. All conversations in the project inherit these instructions automatically
 
-To check for updated instructions: \\\`document(action="list", type="cc-instructions")\\\`
+To check for updated instructions: \\\`document(action="list", type="project-instructions")\\\`
 
 ## On Every Conversation Start
 
