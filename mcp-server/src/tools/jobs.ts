@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getJobsRef, getJobRef, getConceptsRef, getIdeasRef, getAppIdeasRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
+import { withResponseSize } from "../response-metadata.js";
 
 const JOB_STATUSES = ["draft", "active", "review", "approved", "completed", "failed", "abandoned"] as const;
 const TERMINAL_STATUSES = ["completed", "failed", "abandoned"];
@@ -87,8 +88,8 @@ Actions:
 
       // ─── START ───
       if (action === "start") {
-        if (!appId) return { content: [{ type: "text", text: "action 'start' requires appId" }], isError: true };
-        if (!title) return { content: [{ type: "text", text: "action 'start' requires title" }], isError: true };
+        if (!appId) return withResponseSize({ content: [{ type: "text", text: "action 'start' requires appId" }], isError: true });
+        if (!title) return withResponseSize({ content: [{ type: "text", text: "action 'start' requires title" }], isError: true });
 
         // Parse attachments JSON if provided
         let parsedAttachments: any[] | null = null;
@@ -96,10 +97,10 @@ Actions:
           try {
             parsedAttachments = JSON.parse(attachments);
             if (!Array.isArray(parsedAttachments)) {
-              return { content: [{ type: "text", text: "attachments must be a JSON array" }], isError: true };
+              return withResponseSize({ content: [{ type: "text", text: "attachments must be a JSON array" }], isError: true });
             }
           } catch {
-            return { content: [{ type: "text", text: "attachments must be valid JSON" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "attachments must be valid JSON" }], isError: true });
           }
         }
 
@@ -109,7 +110,7 @@ Actions:
           try {
             parsedSnapshot = JSON.parse(conceptSnapshot);
           } catch {
-            return { content: [{ type: "text", text: "conceptSnapshot must be valid JSON" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "conceptSnapshot must be valid JSON" }], isError: true });
           }
         }
 
@@ -177,20 +178,20 @@ Actions:
           }
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(job, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(job, null, 2) }] });
       }
 
       // ─── CLAIM ───
       if (action === "claim") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'claim' requires jobId" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'claim' requires jobId" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
         if (job.status !== "draft") {
-          return { content: [{ type: "text", text: `Can only claim a draft job (current status: ${job.status})` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Can only claim a draft job (current status: ${job.status})` }], isError: true });
         }
 
         // For build jobs, enforce one active build per app
@@ -202,7 +203,7 @@ Actions:
               (j: any) => j.appId === job.appId && j.status === "active" && (j.jobType === "build" || !j.jobType) && j.id !== jobId
             );
             if (activeBuilds.length > 0) {
-              return { content: [{ type: "text", text: `Cannot claim: an active build job already exists for app '${job.appId}' (jobId: ${(activeBuilds[0] as any).id})` }], isError: true };
+              return withResponseSize({ content: [{ type: "text", text: `Cannot claim: an active build job already exists for app '${job.appId}' (jobId: ${(activeBuilds[0] as any).id})` }], isError: true });
             }
           }
         }
@@ -215,41 +216,41 @@ Actions:
           startedAt: now,
         };
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
       }
 
       // ─── REVISE ───
       if (action === "revise") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'revise' requires jobId" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'revise' requires jobId" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
         if (job.status !== "review") {
-          return { content: [{ type: "text", text: `Can only revise a job in review (current status: ${job.status})` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Can only revise a job in review (current status: ${job.status})` }], isError: true });
         }
 
         const updates = {
           status: "draft",
         };
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
       }
 
       // ─── REVIEW ───
       if (action === "review") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'review' requires jobId" }], isError: true };
-        if (!concerns || concerns.length === 0) return { content: [{ type: "text", text: "action 'review' requires concerns (non-empty array)" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'review' requires jobId" }], isError: true });
+        if (!concerns || concerns.length === 0) return withResponseSize({ content: [{ type: "text", text: "action 'review' requires concerns (non-empty array)" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
         if (job.status !== "active") {
-          return { content: [{ type: "text", text: `Can only review an active job (current status: ${job.status})` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Can only review an active job (current status: ${job.status})` }], isError: true });
         }
 
         const now = new Date().toISOString();
@@ -259,20 +260,20 @@ Actions:
           reviewedAt: now,
         };
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
       }
 
       // ─── APPROVE ───
       if (action === "approve") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'approve' requires jobId" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'approve' requires jobId" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
         if (job.status !== "review") {
-          return { content: [{ type: "text", text: `Can only approve a job in review (current status: ${job.status})` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Can only approve a job in review (current status: ${job.status})` }], isError: true });
         }
 
         const now = new Date().toISOString();
@@ -282,20 +283,20 @@ Actions:
         };
         if (resolutions !== undefined) updates.resolutions = resolutions;
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
       }
 
       // ─── UPDATE ───
       if (action === "update") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'update' requires jobId" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'update' requires jobId" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
         if (TERMINAL_STATUSES.includes(job.status)) {
-          return { content: [{ type: "text", text: `Cannot update terminal job (status: ${job.status})` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Cannot update terminal job (status: ${job.status})` }], isError: true });
         }
 
         const updates: Record<string, any> = {};
@@ -306,40 +307,40 @@ Actions:
         // instructions and attachments can only be updated on draft jobs
         if (instructions !== undefined) {
           if (job.status !== "draft") {
-            return { content: [{ type: "text", text: "instructions can only be updated on draft jobs" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "instructions can only be updated on draft jobs" }], isError: true });
           }
           updates.instructions = instructions;
         }
         if (attachments !== undefined) {
           if (job.status !== "draft") {
-            return { content: [{ type: "text", text: "attachments can only be updated on draft jobs" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "attachments can only be updated on draft jobs" }], isError: true });
           }
           try {
             const parsed = JSON.parse(attachments);
             if (!Array.isArray(parsed)) {
-              return { content: [{ type: "text", text: "attachments must be a JSON array" }], isError: true };
+              return withResponseSize({ content: [{ type: "text", text: "attachments must be a JSON array" }], isError: true });
             }
             updates.attachments = parsed;
           } catch {
-            return { content: [{ type: "text", text: "attachments must be valid JSON" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "attachments must be valid JSON" }], isError: true });
           }
         }
 
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
       }
 
       // ─── ADD_EVENT ───
       if (action === "add_event") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'add_event' requires jobId" }], isError: true };
-        if (!eventType) return { content: [{ type: "text", text: "action 'add_event' requires eventType" }], isError: true };
-        if (!detail) return { content: [{ type: "text", text: "action 'add_event' requires detail" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'add_event' requires jobId" }], isError: true });
+        if (!eventType) return withResponseSize({ content: [{ type: "text", text: "action 'add_event' requires eventType" }], isError: true });
+        if (!detail) return withResponseSize({ content: [{ type: "text", text: "action 'add_event' requires detail" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
 
         const event = {
           timestamp: new Date().toISOString(),
@@ -373,25 +374,25 @@ Actions:
         }
 
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify(event, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(event, null, 2) }] });
       }
 
       // ─── COMPLETE ───
       if (action === "complete") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'complete' requires jobId" }], isError: true };
-        if (!status) return { content: [{ type: "text", text: "action 'complete' requires status (completed/failed/abandoned)" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'complete' requires jobId" }], isError: true });
+        if (!status) return withResponseSize({ content: [{ type: "text", text: "action 'complete' requires status (completed/failed/abandoned)" }], isError: true });
         if (!TERMINAL_STATUSES.includes(status)) {
-          return { content: [{ type: "text", text: `action 'complete' requires terminal status (completed/failed/abandoned), got: ${status}` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `action 'complete' requires terminal status (completed/failed/abandoned), got: ${status}` }], isError: true });
         }
-        if (!summary) return { content: [{ type: "text", text: "action 'complete' requires summary" }], isError: true };
+        if (!summary) return withResponseSize({ content: [{ type: "text", text: "action 'complete' requires summary" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
         if (TERMINAL_STATUSES.includes(job.status)) {
-          return { content: [{ type: "text", text: `Cannot complete terminal job (status: ${job.status})` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Cannot complete terminal job (status: ${job.status})` }], isError: true });
         }
 
         const now = new Date().toISOString();
@@ -498,18 +499,18 @@ Actions:
         const completed: any = { ...job, ...updates, outcome: { ...job.outcome, testsRun, testsPassed, testsFailed, buildSuccess, deployId }, metadata: { ...job.metadata, linesAdded, linesRemoved } };
         if (conceptsBuilt.length > 0) completed.conceptsBuilt = conceptsBuilt;
         if (ideaSignal) completed.ideaSignal = ideaSignal;
-        return { content: [{ type: "text", text: JSON.stringify(completed, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(completed, null, 2) }] });
       }
 
       // ─── GET ───
       if (action === "get") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'get' requires jobId" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'get' requires jobId" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
 
         // Strip large claudeMdSnapshot by default to save context window
         if (!includeSnapshot && job.claudeMdSnapshot) {
@@ -528,14 +529,14 @@ Actions:
           }
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(job, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(job, null, 2) }] });
       }
 
       // ─── LIST ───
       if (action === "list") {
         const snapshot = await getJobsRef(uid).once("value");
         const data = snapshot.val();
-        if (!data) return { content: [{ type: "text", text: JSON.stringify([], null, 2) }] };
+        if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
         let jobs: any[] = Object.values(data);
 
@@ -572,22 +573,29 @@ Actions:
           completedAt: j.completedAt,
         }));
 
-        return { content: [{ type: "text", text: JSON.stringify({ items: lean, total, offset: skip, limit: take }, null, 2) }] };
+        const avgItemSize = lean.length > 0
+          ? Math.round(lean.reduce((sum: number, item: any) => sum + JSON.stringify(item).length, 0) / lean.length)
+          : 0;
+
+        return withResponseSize(
+          { content: [{ type: "text", text: JSON.stringify({ items: lean, total, offset: skip, limit: take }, null, 2) }] },
+          { _estimatedItemSize: avgItemSize }
+        );
       }
 
       // ─── DELETE ───
       if (action === "delete") {
-        if (!jobId) return { content: [{ type: "text", text: "action 'delete' requires jobId" }], isError: true };
+        if (!jobId) return withResponseSize({ content: [{ type: "text", text: "action 'delete' requires jobId" }], isError: true });
 
         const ref = getJobRef(uid, jobId);
         const snapshot = await ref.once("value");
-        if (!snapshot.val()) return { content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true };
+        if (!snapshot.val()) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
 
         await ref.remove();
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: jobId }) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ deleted: jobId }) }] });
       }
 
-      return { content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true };
+      return withResponseSize({ content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true });
     }
   );
 }

@@ -29,10 +29,10 @@ export function createServer(): McpServer {
   registerAppTools(server);
   registerJobTools(server);
   registerDocumentTools(server);
-  registerSkillTools(server);
-  registerRepoTools(server);
   registerKnowledgeTreeTools(server);
   registerKnowledgeNodeTools(server);
+  registerSkillTools(server);
+  registerRepoTools(server);
 
   // Register resources
   registerResources(server);

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getConfigRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
+import { withResponseSize } from "../response-metadata.js";
 
 // Summarize an app config into the fields useful for chat-first discovery
 function summarizeApp(id: string, app: any, project?: any): any {
@@ -61,9 +62,9 @@ export function registerAppTools(server: McpServer): void {
 
       if (action === "list") {
         if (!config || !config.apps) {
-          return {
+          return withResponseSize({
             content: [{ type: "text", text: JSON.stringify({ apps: [], projects: [] }, null, 2) }],
-          };
+          });
         }
 
         const projects = config.projects || {};
@@ -78,26 +79,33 @@ export function registerAppTools(server: McpServer): void {
           appCount: apps.filter((a) => a.project === id).length,
         }));
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ apps, projects: projectList }, null, 2),
-            },
-          ],
-        };
+        const avgItemSize = apps.length > 0
+          ? Math.round(apps.reduce((sum, item) => sum + JSON.stringify(item).length, 0) / apps.length)
+          : 0;
+
+        return withResponseSize(
+          {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ apps, projects: projectList }, null, 2),
+              },
+            ],
+          },
+          { _estimatedItemSize: avgItemSize }
+        );
       }
 
       // ─── CREATE ───
       if (action === "create") {
         if (!appId) {
-          return { content: [{ type: "text", text: "action 'create' requires appId" }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: "action 'create' requires appId" }], isError: true });
         }
         if (!appName) {
-          return { content: [{ type: "text", text: "action 'create' requires name" }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: "action 'create' requires name" }], isError: true });
         }
         if (config?.apps?.[appId]) {
-          return { content: [{ type: "text", text: `App already exists: ${appId}. Use action 'update' to modify it.` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `App already exists: ${appId}. Use action 'update' to modify it.` }], isError: true });
         }
 
         // Build the new app object
@@ -122,7 +130,7 @@ export function registerAppTools(server: McpServer): void {
           try {
             newApp.repos = JSON.parse(repos);
           } catch {
-            return { content: [{ type: "text", text: "repos must be a valid JSON string" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "repos must be a valid JSON string" }], isError: true });
           }
         }
 
@@ -140,7 +148,7 @@ export function registerAppTools(server: McpServer): void {
               }
             }
           } catch {
-            return { content: [{ type: "text", text: "lifecycleFields must be a valid JSON string" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "lifecycleFields must be a valid JSON string" }], isError: true });
           }
         }
 
@@ -166,18 +174,18 @@ export function registerAppTools(server: McpServer): void {
         }
         const proj = allProjects[projectId] || null;
 
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: JSON.stringify({ created: true, app: summarizeApp(appId, createdApp, proj) }, null, 2) }],
-        };
+        });
       }
 
       // ─── UPDATE ───
       if (action === "update") {
         if (!appId) {
-          return { content: [{ type: "text", text: "action 'update' requires appId" }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: "action 'update' requires appId" }], isError: true });
         }
         if (!config || !config.apps || !config.apps[appId]) {
-          return { content: [{ type: "text", text: `App not found: ${appId}. Use exact app ID for updates.` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `App not found: ${appId}. Use exact app ID for updates.` }], isError: true });
         }
 
         const updates: Record<string, any> = { updatedAt: Date.now() };
@@ -192,7 +200,7 @@ export function registerAppTools(server: McpServer): void {
           try {
             parsedRepos = JSON.parse(repos);
           } catch {
-            return { content: [{ type: "text", text: "repos must be a valid JSON string" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "repos must be a valid JSON string" }], isError: true });
           }
           const existingRepos = config.apps[appId].repos || {};
           updates.repos = { ...existingRepos, ...parsedRepos };
@@ -204,7 +212,7 @@ export function registerAppTools(server: McpServer): void {
           try {
             parsed = JSON.parse(lifecycleFields);
           } catch {
-            return { content: [{ type: "text", text: "lifecycleFields must be a valid JSON string" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "lifecycleFields must be a valid JSON string" }], isError: true });
           }
 
           const allowedLifecycleKeys = [
@@ -232,18 +240,18 @@ export function registerAppTools(server: McpServer): void {
         const projects = config.projects || {};
         const project = updatedApp.project ? projects[updatedApp.project] : null;
 
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: JSON.stringify(summarizeApp(appId, updatedApp, project), null, 2) }],
-        };
+        });
       }
 
       // ─── GET ───
       if (!appId) {
-        return { content: [{ type: "text", text: "action 'get' requires appId" }], isError: true };
+        return withResponseSize({ content: [{ type: "text", text: "action 'get' requires appId" }], isError: true });
       }
 
       if (!config || !config.apps) {
-        return { content: [{ type: "text", text: "No apps found in config" }], isError: true };
+        return withResponseSize({ content: [{ type: "text", text: "No apps found in config" }], isError: true });
       }
 
       const projects = config.projects || {};
@@ -252,9 +260,9 @@ export function registerAppTools(server: McpServer): void {
       if (config.apps[appId]) {
         const app = config.apps[appId];
         const project = app.project ? projects[app.project] : null;
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: JSON.stringify(summarizeApp(appId, app, project), null, 2) }],
-        };
+        });
       }
 
       // Fuzzy match: search by name (case-insensitive, partial)
@@ -270,18 +278,18 @@ export function registerAppTools(server: McpServer): void {
         });
 
       if (matches.length === 0) {
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: `No app found matching "${appId}". Use app with action "list" to see all available apps.` }],
           isError: true,
-        };
+        });
       }
 
       if (matches.length === 1) {
-        return { content: [{ type: "text", text: JSON.stringify(matches[0], null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(matches[0], null, 2) }] });
       }
 
       // Multiple matches — return all and let the caller pick
-      return {
+      return withResponseSize({
         content: [
           {
             type: "text",
@@ -292,7 +300,7 @@ export function registerAppTools(server: McpServer): void {
             ),
           },
         ],
-      };
+      });
     }
   );
 }

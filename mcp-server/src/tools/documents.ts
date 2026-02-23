@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getDocumentsRef, getDocumentRef, getConfigRef } from "../firebase.js";
+import { getDocumentsRef, getDocumentRef, getConfigRef, getProfileRef, getSessionRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
-import { isGitHubConfigured, resolveTargetPath, deliverToGitHub } from "../github.js";
+import { isGitHubConfigured, resolveTargetPath, resolveTargetRepo, resolveFilePath, deliverToGitHub, setupDocsRepo } from "../github.js";
+import { withResponseSize } from "../response-metadata.js";
 
 // ─── Lifespan / TTL ───────────────────────────────────────────────
 // Documents have a lifespan that determines cleanup behavior:
@@ -73,34 +74,36 @@ Actions:
       reason: z.string().optional().describe("Failure reason (required for fail)"),
       to: z.string().optional().describe("Message recipient: claude-chat, claude-code (for send/receive)"),
       autoDeliver: z.boolean().optional().describe("For 'push': if true, auto-deliver to GitHub (default: false)"),
+      sessionId: z.string().optional().describe("For 'push': link document to session's pendingFlush map for delivery on session close"),
       lifespan: z.enum(["ephemeral", "short", "standard", "permanent"]).optional().describe("Document lifespan. Defaults: messages=ephemeral, specs=short (7d), claude-md=permanent, other=standard (30d)."),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ action, docId, type, appId, content, targetPath, metadata, status, createdBy, deliveredBy, reason, to, autoDeliver, lifespan, limit, offset }) => {
+    async ({ action, docId, type, appId, content, targetPath, metadata, status, createdBy, deliveredBy, reason, to, autoDeliver, sessionId, lifespan, limit, offset }) => {
       const uid = getCurrentUid();
 
       // ─── PUSH ───
       if (action === "push") {
-        if (!type) return { content: [{ type: "text", text: "action 'push' requires type" }], isError: true };
-        if (!appId) return { content: [{ type: "text", text: "action 'push' requires appId" }], isError: true };
-        if (!content) return { content: [{ type: "text", text: "action 'push' requires content" }], isError: true };
-        if (!targetPath) return { content: [{ type: "text", text: "action 'push' requires targetPath" }], isError: true };
+        if (!type) return withResponseSize({ content: [{ type: "text", text: "action 'push' requires type" }], isError: true });
+        if (!appId) return withResponseSize({ content: [{ type: "text", text: "action 'push' requires appId" }], isError: true });
+        if (!content) return withResponseSize({ content: [{ type: "text", text: "action 'push' requires content" }], isError: true });
+        if (!targetPath) return withResponseSize({ content: [{ type: "text", text: "action 'push' requires targetPath" }], isError: true });
 
         let parsedMetadata: Record<string, any> = {};
         if (metadata) {
           try {
             parsedMetadata = JSON.parse(metadata);
           } catch {
-            return { content: [{ type: "text", text: "metadata must be a valid JSON string" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "metadata must be a valid JSON string" }], isError: true });
           }
         }
 
         const effectiveLifespan = lifespan || getDefaultLifespan(type);
         const ref = getDocumentsRef(uid).push();
+        const docId_push = ref.key!;
         const now = new Date().toISOString();
         const doc = {
-          id: ref.key,
+          id: docId_push,
           type,
           appId,
           content,
@@ -115,8 +118,19 @@ Actions:
           createdBy: createdBy || "claude-chat",
           deliveredAt: null,
           deliveredBy: null,
+          sessionId: sessionId || null,
         };
-        await ref.set(doc);
+
+        // If sessionId provided, atomically write doc + pendingFlush entry via multi-path update
+        if (sessionId) {
+          const { getDb } = await import("../firebase.js");
+          const updates: Record<string, any> = {};
+          updates[`command-center/${uid}/documents/${docId_push}`] = doc;
+          updates[`command-center/${uid}/sessions/${sessionId}/pendingFlush/${docId_push}`] = true;
+          await getDb().ref().update(updates);
+        } else {
+          await ref.set(doc);
+        }
 
         // Auto-deliver to GitHub if requested
         if (autoDeliver && isGitHubConfigured()) {
@@ -144,14 +158,14 @@ Actions:
                 });
               }
 
-              return { content: [{ type: "text", text: JSON.stringify({
+              return withResponseSize({ content: [{ type: "text", text: JSON.stringify({
                 ...doc,
                 status: "delivered",
                 deliveredAt: deliveredNow,
                 deliveredBy: "mcp-github",
                 metadata: { ...doc.metadata, githubCommit: { sha: result.commitSha, url: result.htmlUrl, path: result.path } },
                 _deleted: effectiveLifespan === "ephemeral" ? true : undefined,
-              }, null, 2) }] };
+              }, null, 2) }] });
             }
           } catch (err: any) {
             const failedNow = new Date().toISOString();
@@ -161,17 +175,17 @@ Actions:
               deliveredBy: "mcp-github",
               failureReason: err.message,
             });
-            return { content: [{ type: "text", text: JSON.stringify({
+            return withResponseSize({ content: [{ type: "text", text: JSON.stringify({
               ...doc,
               status: "failed",
               deliveredAt: failedNow,
               failureReason: err.message,
               _note: "Auto-delivery to GitHub failed. Document is in queue for manual retry.",
-            }, null, 2) }] };
+            }, null, 2) }] });
           }
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] });
       }
 
       // ─── LIST ───
@@ -185,7 +199,7 @@ Actions:
           : ref;
         const snapshot = await query.once("value");
         const data = snapshot.val();
-        if (!data) return { content: [{ type: "text", text: JSON.stringify([], null, 2) }] };
+        if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
         let docs: any[] = Object.values(data);
 
@@ -232,32 +246,40 @@ Actions:
 
         const result: any = { items: lean, total, offset: skip, limit: take };
         if (expiredIds.length > 0) result._purged = expiredIds.length;
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+
+        const avgItemSize = lean.length > 0
+          ? Math.round(lean.reduce((sum: number, item: any) => sum + JSON.stringify(item).length, 0) / lean.length)
+          : 0;
+
+        return withResponseSize(
+          { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] },
+          { _estimatedItemSize: avgItemSize }
+        );
       }
 
       // ─── GET ───
       if (action === "get") {
-        if (!docId) return { content: [{ type: "text", text: "action 'get' requires docId" }], isError: true };
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'get' requires docId" }], isError: true });
 
         const ref = getDocumentRef(uid, docId);
         const snapshot = await ref.once("value");
         const doc = snapshot.val();
 
-        if (!doc) return { content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true };
-        return { content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] };
+        if (!doc) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] });
       }
 
       // ─── DELIVER ───
       if (action === "deliver") {
-        if (!docId) return { content: [{ type: "text", text: "action 'deliver' requires docId" }], isError: true };
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'deliver' requires docId" }], isError: true });
 
         const ref = getDocumentRef(uid, docId);
         const snapshot = await ref.once("value");
         const doc = snapshot.val();
 
-        if (!doc) return { content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true };
+        if (!doc) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
         if (doc.status !== "pending") {
-          return { content: [{ type: "text", text: `Cannot deliver document with status '${doc.status}' (must be pending)` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Cannot deliver document with status '${doc.status}' (must be pending)` }], isError: true });
         }
 
         const now = new Date().toISOString();
@@ -266,7 +288,7 @@ Actions:
         // Ephemeral: delete from Firebase after delivery
         if (effectiveLifespan === "ephemeral") {
           await ref.remove();
-          return { content: [{ type: "text", text: JSON.stringify({ ...doc, status: "delivered", deliveredAt: now, deliveredBy: deliveredBy || "claude-code", _deleted: true }, null, 2) }] };
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...doc, status: "delivered", deliveredAt: now, deliveredBy: deliveredBy || "claude-code", _deleted: true }, null, 2) }] });
         }
 
         await ref.update({
@@ -275,21 +297,21 @@ Actions:
           deliveredBy: deliveredBy || "claude-code",
         });
 
-        return { content: [{ type: "text", text: JSON.stringify({ ...doc, status: "delivered", deliveredAt: now, deliveredBy: deliveredBy || "claude-code" }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...doc, status: "delivered", deliveredAt: now, deliveredBy: deliveredBy || "claude-code" }, null, 2) }] });
       }
 
       // ─── FAIL ───
       if (action === "fail") {
-        if (!docId) return { content: [{ type: "text", text: "action 'fail' requires docId" }], isError: true };
-        if (!reason) return { content: [{ type: "text", text: "action 'fail' requires reason" }], isError: true };
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'fail' requires docId" }], isError: true });
+        if (!reason) return withResponseSize({ content: [{ type: "text", text: "action 'fail' requires reason" }], isError: true });
 
         const ref = getDocumentRef(uid, docId);
         const snapshot = await ref.once("value");
         const doc = snapshot.val();
 
-        if (!doc) return { content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true };
+        if (!doc) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
         if (doc.status !== "pending") {
-          return { content: [{ type: "text", text: `Cannot fail document with status '${doc.status}' (must be pending)` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Cannot fail document with status '${doc.status}' (must be pending)` }], isError: true });
         }
 
         const now = new Date().toISOString();
@@ -300,24 +322,26 @@ Actions:
           failureReason: reason,
         });
 
-        return { content: [{ type: "text", text: JSON.stringify({ ...doc, status: "failed", deliveredAt: now, failureReason: reason }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...doc, status: "failed", deliveredAt: now, failureReason: reason }, null, 2) }] });
       }
 
       // ─── DELIVER TO GITHUB ───
       if (action === "deliver-to-github") {
-        if (!docId) return { content: [{ type: "text", text: "action 'deliver-to-github' requires docId" }], isError: true };
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'deliver-to-github' requires docId" }], isError: true });
 
         if (!isGitHubConfigured()) {
-          return { content: [{ type: "text", text: "GitHub delivery not configured. Set GITHUB_TOKEN environment variable." }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: "GitHub delivery not configured. Set GITHUB_TOKEN environment variable." }], isError: true });
         }
+
+        const token = process.env.GITHUB_TOKEN!;
 
         const ref = getDocumentRef(uid, docId);
         const snapshot = await ref.once("value");
         const doc = snapshot.val();
 
-        if (!doc) return { content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true };
+        if (!doc) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
         if (doc.status !== "pending") {
-          return { content: [{ type: "text", text: `Cannot deliver document with status '${doc.status}' (must be pending)` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `Cannot deliver document with status '${doc.status}' (must be pending)` }], isError: true });
         }
 
         // Look up app config for repo info
@@ -325,31 +349,56 @@ Actions:
         const config = configSnap.val();
         const appConfig = config?.apps?.[doc.appId];
 
-        if (!appConfig) {
-          return { content: [{ type: "text", text: `App not found in config: ${doc.appId}` }], isError: true };
-        }
-        if (!appConfig.repos?.prod) {
-          return { content: [{ type: "text", text: `No repos.prod configured for app: ${doc.appId}. Set it via app(update) with repos parameter.` }], isError: true };
+        // Look up user profile for docs-repo
+        const profileSnap = await getProfileRef(uid).once("value");
+        const profile = profileSnap.val();
+        const docsRepoName = profile?.docsRepoName || null;
+
+        // Type-based routing: resolve target repo and whether to use subPath
+        const appRepos = appConfig?.repos || null;
+        let routing = resolveTargetRepo(doc.type, appRepos, docsRepoName);
+
+        // Lazy docs-repo creation: if routing fails for non-app-scoped docs,
+        // auto-create the docs repo and retry routing
+        const isAppScoped = doc.type === "claude-md" || doc.type === "spec";
+        if (!routing && !isAppScoped && !docsRepoName) {
+          try {
+            const uidShort = uid.substring(0, 8);
+            const docsResult = await setupDocsRepo(uidShort, token);
+
+            // Store docsRepoPath on user profile
+            await getProfileRef(uid).update({ docsRepoPath: docsResult.repoPath });
+
+            // Retry routing with the new docs repo
+            routing = resolveTargetRepo(doc.type, appRepos, docsResult.repoPath);
+          } catch (setupErr: any) {
+            return withResponseSize({ content: [{ type: "text" as const, text: `Auto-setup of docs repo failed: ${setupErr.message}. You can retry or set up manually via app(action="setup-docs-repo").` }], isError: true });
+          }
         }
 
-        const resolvedPath = resolveTargetPath(doc.type, doc.routing?.targetPath || "CLAUDE.md", appConfig.subPath || null);
-        const commitMsg = `docs(${appConfig.name || doc.appId}): update ${doc.type} via CC MCP [${new Date().toISOString()}]`;
+        if (!routing) {
+          return withResponseSize({ content: [{ type: "text" as const, text: `No repo configured for delivery. App '${doc.appId}' needs repos.prod set, or configure profile.docsRepoPath for non-app-scoped docs.` }], isError: true });
+        }
+
+        const docTargetPath = doc.routing?.targetPath || "CLAUDE.md";
+        const filePath = resolveFilePath(docTargetPath, appConfig?.subPath || null, routing.useSubPath);
+        const commitMsg = `docs(${appConfig?.name || doc.appId}): update ${doc.type} via CC MCP [${new Date().toISOString()}]`;
 
         try {
-          const result = await deliverToGitHub(appConfig.repos.prod, resolvedPath, doc.content, commitMsg);
+          const result = await deliverToGitHub(routing.repo, filePath, doc.content, commitMsg, "main", token);
           const now = new Date().toISOString();
 
           // Delete from Firebase after successful GitHub delivery (per RULE)
           await ref.remove();
 
-          return { content: [{ type: "text", text: JSON.stringify({
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({
             status: "delivered",
-            repo: appConfig.repos.prod,
+            repo: routing.repo,
             path: result.path,
             commitSha: result.commitSha,
             htmlUrl: result.htmlUrl,
             _deleted: true,
-          }, null, 2) }] };
+          }, null, 2) }] });
         } catch (err: any) {
           const now = new Date().toISOString();
           await ref.update({
@@ -358,13 +407,13 @@ Actions:
             deliveredBy: "mcp-github",
             failureReason: err.message,
           });
-          return { content: [{ type: "text", text: `GitHub delivery failed: ${err.message}` }], isError: true };
+          return withResponseSize({ content: [{ type: "text", text: `GitHub delivery failed: ${err.message}` }], isError: true });
         }
       }
 
       // ─── SEND (Message) ───
       if (action === "send") {
-        if (!content) return { content: [{ type: "text", text: "action 'send' requires content" }], isError: true };
+        if (!content) return withResponseSize({ content: [{ type: "text", text: "action 'send' requires content" }], isError: true });
 
         const recipient = to || "claude-code";
         // Infer sender: if sending to claude-code, sender is claude-chat (and vice versa)
@@ -375,7 +424,7 @@ Actions:
           try {
             parsedMetadata = JSON.parse(metadata);
           } catch {
-            return { content: [{ type: "text", text: "metadata must be a valid JSON string" }], isError: true };
+            return withResponseSize({ content: [{ type: "text", text: "metadata must be a valid JSON string" }], isError: true });
           }
         }
 
@@ -404,7 +453,7 @@ Actions:
           deliveredBy: null,
         };
         await ref.set(msg);
-        return { content: [{ type: "text", text: JSON.stringify(msg, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(msg, null, 2) }] });
       }
 
       // ─── RECEIVE (Messages) ───
@@ -418,7 +467,7 @@ Actions:
           .equalTo("pending")
           .once("value");
         const data = snapshot.val();
-        if (!data) return { content: [{ type: "text", text: JSON.stringify([], null, 2) }] };
+        if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
         let msgs: any[] = Object.values(data);
         msgs = msgs.filter((d) =>
@@ -429,20 +478,20 @@ Actions:
         // Oldest first (chronological order for reading)
         msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-        return { content: [{ type: "text", text: JSON.stringify(msgs, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(msgs, null, 2) }] });
       }
 
       // ─── ACK (Acknowledge Message) ───
       if (action === "ack") {
-        if (!docId) return { content: [{ type: "text", text: "action 'ack' requires docId" }], isError: true };
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'ack' requires docId" }], isError: true });
 
         const ref = getDocumentRef(uid, docId);
         const snapshot = await ref.once("value");
         const doc = snapshot.val();
 
-        if (!doc) return { content: [{ type: "text", text: `Message not found: ${docId}` }], isError: true };
-        if (doc.type !== "message") return { content: [{ type: "text", text: `Document ${docId} is not a message (type: ${doc.type})` }], isError: true };
-        if (doc.status !== "pending") return { content: [{ type: "text", text: `Message already acknowledged (status: ${doc.status})` }], isError: true };
+        if (!doc) return withResponseSize({ content: [{ type: "text", text: `Message not found: ${docId}` }], isError: true });
+        if (doc.type !== "message") return withResponseSize({ content: [{ type: "text", text: `Document ${docId} is not a message (type: ${doc.type})` }], isError: true });
+        if (doc.status !== "pending") return withResponseSize({ content: [{ type: "text", text: `Message already acknowledged (status: ${doc.status})` }], isError: true });
 
         const now = new Date().toISOString();
         const ackResult = { ...doc, status: "delivered", deliveredAt: now, deliveredBy: doc.metadata?.to || "unknown" };
@@ -451,7 +500,7 @@ Actions:
         const effectiveLifespan = doc.lifespan || "ephemeral";
         if (effectiveLifespan === "ephemeral") {
           await ref.remove();
-          return { content: [{ type: "text", text: JSON.stringify({ ...ackResult, _deleted: true }, null, 2) }] };
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...ackResult, _deleted: true }, null, 2) }] });
         }
 
         await ref.update({
@@ -460,7 +509,7 @@ Actions:
           deliveredBy: doc.metadata?.to || "unknown",
         });
 
-        return { content: [{ type: "text", text: JSON.stringify(ackResult, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(ackResult, null, 2) }] });
       }
 
       // ─── PURGE ───
@@ -485,22 +534,22 @@ Actions:
           }
         }
 
-        return { content: [{ type: "text", text: JSON.stringify({ purged, cutoff: new Date(cutoff).toISOString() }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ purged, cutoff: new Date(cutoff).toISOString() }, null, 2) }] });
       }
 
       // ─── DELETE ───
       if (action === "delete") {
-        if (!docId) return { content: [{ type: "text", text: "action 'delete' requires docId" }], isError: true };
+        if (!docId) return withResponseSize({ content: [{ type: "text", text: "action 'delete' requires docId" }], isError: true });
 
         const ref = getDocumentRef(uid, docId);
         const snapshot = await ref.once("value");
-        if (!snapshot.val()) return { content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true };
+        if (!snapshot.val()) return withResponseSize({ content: [{ type: "text", text: `Document not found: ${docId}` }], isError: true });
 
         await ref.remove();
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: docId }) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ deleted: docId }) }] });
       }
 
-      return { content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true };
+      return withResponseSize({ content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true });
     }
   );
 }

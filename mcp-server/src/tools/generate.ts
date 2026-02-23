@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getConceptsRef, getIdeasRef, getAppIdeasRef, getClaudeMdRef, getDocumentsRef, getConfigRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { isGitHubConfigured, resolveTargetPath, deliverToGitHub } from "../github.js";
+import { withResponseSize } from "../response-metadata.js";
 
 export function registerGenerateTools(server: McpServer): void {
 
@@ -29,19 +30,19 @@ export function registerGenerateTools(server: McpServer): void {
         const snap = await getClaudeMdRef(uid, appId).once("value");
         const data = snap.val();
         if (!data) {
-          return {
+          return withResponseSize({
             content: [{ type: "text", text: `No CLAUDE.md stored for app "${appId}". Use generate_claude_md to create one first.` }],
             isError: true,
-          };
+          });
         }
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-        };
+        });
       }
 
       // ─── GENERATE / PUSH ───
       if (!appName) {
-        return { content: [{ type: "text", text: `action '${effectiveAction}' requires appName` }], isError: true };
+        return withResponseSize({ content: [{ type: "text", text: `action '${effectiveAction}' requires appName` }], isError: true });
       }
 
       // Get all idea IDs for this app
@@ -49,10 +50,10 @@ export function registerGenerateTools(server: McpServer): void {
       const ideaIds: string[] = appIdeasSnap.val() || [];
 
       if (ideaIds.length === 0) {
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: `No ideas linked to app "${appId}". Create and link ideas first.` }],
           isError: true,
-        };
+        });
       }
 
       // Get all ideas to find the latest active one
@@ -247,12 +248,12 @@ export function registerGenerateTools(server: McpServer): void {
           deliveryNote += ` _GitHub not configured — Claude Code will pick it up and write to CLAUDE.md._`;
         }
 
-        return {
+        return withResponseSize({
           content: [{ type: "text", text: `${markdown}\n\n---\n${deliveryNote}` }],
-        };
+        });
       }
 
-      return { content: [{ type: "text", text: markdown }] };
+      return withResponseSize({ content: [{ type: "text", text: markdown }] });
     }
   );
 }

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getSkillContent, getSkillNames } from "../skills.js";
+import { withResponseSize } from "../response-metadata.js";
 
 /**
  * Registers the `skill` tool — allows Claude Chat (or any MCP client)
@@ -21,7 +22,7 @@ export function registerSkillTools(server: McpServer): void {
     async ({ action, skillName }) => {
       if (action === "list") {
         const skills = getSkillNames();
-        return {
+        return withResponseSize({
           content: [{
             type: "text" as const,
             text: JSON.stringify({
@@ -30,29 +31,29 @@ export function registerSkillTools(server: McpServer): void {
               usage: "Call skill with action='get' and skillName='<name>' to retrieve the full prompt content.",
             }, null, 2),
           }],
-        };
+        });
       }
 
       // action === "get"
       if (!skillName) {
-        return {
+        return withResponseSize({
           content: [{ type: "text" as const, text: "Error: skillName is required for action='get'" }],
           isError: true,
-        };
+        });
       }
 
       const content = getSkillContent(skillName);
       if (!content) {
         const available = getSkillNames().map(s => s.name).join(", ");
-        return {
+        return withResponseSize({
           content: [{ type: "text" as const, text: `Error: Unknown skill '${skillName}'. Available skills: ${available}` }],
           isError: true,
-        };
+        });
       }
 
-      return {
+      return withResponseSize({
         content: [{ type: "text" as const, text: content }],
-      };
+      });
     }
   );
 }

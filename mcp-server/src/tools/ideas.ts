@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getIdeasRef, getAppIdeasRef, getIdeaRef, getConceptsRef, getJobsRef, getSessionsRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
+import { withResponseSize } from "../response-metadata.js";
 
 const IDEA_TYPES = ["base", "addon"] as const;
 const IDEA_STATUSES = ["active", "graduated", "archived"] as const;
@@ -45,7 +46,7 @@ export function registerIdeaTools(server: McpServer): void {
       if (action === "list") {
         const snapshot = await getIdeasRef(uid).once("value");
         const data = snapshot.val();
-        if (!data) return { content: [{ type: "text", text: JSON.stringify([], null, 2) }] };
+        if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
         let ideas: any[] = Object.values(data);
 
@@ -73,13 +74,20 @@ export function registerIdeaTools(server: McpServer): void {
           updatedAt: i.updatedAt,
         }));
 
-        return { content: [{ type: "text", text: JSON.stringify({ items: lean, total, offset: skip, limit: take }, null, 2) }] };
+        const avgItemSize = lean.length > 0
+          ? Math.round(lean.reduce((sum, item) => sum + JSON.stringify(item).length, 0) / lean.length)
+          : 0;
+
+        return withResponseSize(
+          { content: [{ type: "text", text: JSON.stringify({ items: lean, total, offset: skip, limit: take }, null, 2) }] },
+          { _estimatedItemSize: avgItemSize }
+        );
       }
 
       // ─── CREATE ───
       if (action === "create") {
-        if (!name) return { content: [{ type: "text", text: "action 'create' requires name" }], isError: true };
-        if (!description) return { content: [{ type: "text", text: "action 'create' requires description" }], isError: true };
+        if (!name) return withResponseSize({ content: [{ type: "text", text: "action 'create' requires name" }], isError: true });
+        if (!description) return withResponseSize({ content: [{ type: "text", text: "action 'create' requires description" }], isError: true });
 
         const ideaType = type || "base";
 
@@ -121,17 +129,17 @@ export function registerIdeaTools(server: McpServer): void {
           }
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(idea, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(idea, null, 2) }] });
       }
 
       // ─── UPDATE ───
       if (action === "update") {
-        if (!ideaId) return { content: [{ type: "text", text: "action 'update' requires ideaId" }], isError: true };
+        if (!ideaId) return withResponseSize({ content: [{ type: "text", text: "action 'update' requires ideaId" }], isError: true });
 
         const ref = getIdeasRef(uid).child(ideaId);
         const snapshot = await ref.once("value");
         const existing = snapshot.val();
-        if (!existing) return { content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true };
+        if (!existing) return withResponseSize({ content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true });
 
         const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
         if (name !== undefined) updates.name = name;
@@ -139,18 +147,18 @@ export function registerIdeaTools(server: McpServer): void {
         if (status !== undefined) updates.status = status;
 
         await ref.update(updates);
-        return { content: [{ type: "text", text: JSON.stringify({ ...existing, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...existing, ...updates }, null, 2) }] });
       }
 
       // ─── GRADUATE ───
       if (action === "graduate") {
-        if (!ideaId) return { content: [{ type: "text", text: "action 'graduate' requires ideaId" }], isError: true };
-        if (!appId) return { content: [{ type: "text", text: "action 'graduate' requires appId" }], isError: true };
+        if (!ideaId) return withResponseSize({ content: [{ type: "text", text: "action 'graduate' requires ideaId" }], isError: true });
+        if (!appId) return withResponseSize({ content: [{ type: "text", text: "action 'graduate' requires appId" }], isError: true });
 
         const ref = getIdeasRef(uid).child(ideaId);
         const snapshot = await ref.once("value");
         const idea = snapshot.val();
-        if (!idea) return { content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true };
+        if (!idea) return withResponseSize({ content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true });
 
         // Get existing ideas for this app
         const allSnap = await getIdeasRef(uid).once("value");
@@ -183,27 +191,27 @@ export function registerIdeaTools(server: McpServer): void {
           await appIdeasRef.set(existing);
         }
 
-        return { content: [{ type: "text", text: JSON.stringify({ ...idea, ...updates }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...idea, ...updates }, null, 2) }] });
       }
 
       // ─── ARCHIVE ───
       if (action === "archive") {
-        if (!ideaId) return { content: [{ type: "text", text: "action 'archive' requires ideaId" }], isError: true };
+        if (!ideaId) return withResponseSize({ content: [{ type: "text", text: "action 'archive' requires ideaId" }], isError: true });
 
         const ref = getIdeasRef(uid).child(ideaId);
         const snapshot = await ref.once("value");
         const idea = snapshot.val();
-        if (!idea) return { content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true };
+        if (!idea) return withResponseSize({ content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true });
 
         const now = new Date().toISOString();
         await ref.update({ status: "archived", updatedAt: now });
 
-        return { content: [{ type: "text", text: JSON.stringify({ ...idea, status: "archived", updatedAt: now }, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...idea, status: "archived", updatedAt: now }, null, 2) }] });
       }
 
       // ─── GET_ACTIVE ───
       if (action === "get_active") {
-        if (!appId) return { content: [{ type: "text", text: "action 'get_active' requires appId" }], isError: true };
+        if (!appId) return withResponseSize({ content: [{ type: "text", text: "action 'get_active' requires appId" }], isError: true });
 
         const allSnap = await getIdeasRef(uid).once("value");
         const allData = allSnap.val() || {};
@@ -212,7 +220,7 @@ export function registerIdeaTools(server: McpServer): void {
           .sort((a: any, b: any) => (a.sequence || 0) - (b.sequence || 0));
 
         const active = appIdeas.length > 0 ? appIdeas[appIdeas.length - 1] : null;
-        return { content: [{ type: "text", text: JSON.stringify(active, null, 2) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(active, null, 2) }] });
       }
 
       // ─── LIST_RANKED ───
@@ -356,12 +364,12 @@ export function registerIdeaTools(server: McpServer): void {
           delivered: rankedIdeas.filter((i) => i.tier === 0).length,
         };
 
-        const result = {
+        const result = withResponseSize({
           content: [{
             type: "text" as const,
             text: JSON.stringify({ rankedIdeas, tierSummary }, null, 2),
           }],
-        };
+        });
 
         // Cache result for 30s
         listRankedCache.set(cacheKey, { result, timestamp: Date.now() });
@@ -371,12 +379,12 @@ export function registerIdeaTools(server: McpServer): void {
 
       // ─── DELETE ───
       if (action === "delete") {
-        if (!ideaId) return { content: [{ type: "text", text: "action 'delete' requires ideaId" }], isError: true };
+        if (!ideaId) return withResponseSize({ content: [{ type: "text", text: "action 'delete' requires ideaId" }], isError: true });
 
         const ref = getIdeaRef(uid, ideaId);
         const snapshot = await ref.once("value");
         const idea = snapshot.val();
-        if (!idea) return { content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true };
+        if (!idea) return withResponseSize({ content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true });
 
         await ref.remove();
 
@@ -389,10 +397,10 @@ export function registerIdeaTools(server: McpServer): void {
           await appIdeasRef.set(updated);
         }
 
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: ideaId }) }] };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ deleted: ideaId }) }] });
       }
 
-      return { content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true };
+      return withResponseSize({ content: [{ type: "text", text: `Unknown action: ${action}` }], isError: true });
     }
   );
 }
