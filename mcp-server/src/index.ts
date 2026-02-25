@@ -80,9 +80,6 @@ async function checkPendingMessages(uid: string): Promise<void> {
   setPendingMessages(info);
 }
 
-// Create MCP server
-const mcpServer = createServer();
-
 // Create Express app
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -276,16 +273,21 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
       }
     }
 
+    // Create a NEW MCP server per request — the MCP SDK only supports one transport
+    // per server instance. Concurrent requests (e.g., Claude.ai sending parallel tool
+    // calls) would get "Already connected to a transport" with a singleton server.
+    const server = createServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
     });
 
     res.on("close", () => {
       transport.close();
+      server.close();
     });
 
     try {
-      await mcpServer.connect(transport);
+      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
       console.error("MCP request error:", err);
@@ -301,16 +303,18 @@ app.get("/mcp", authMiddleware, async (req: Request, res: Response) => {
   const firebaseUid = (req as any).firebaseUid;
 
   requestContext.run({ firebaseUid }, async () => {
+    const server = createServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
 
     res.on("close", () => {
       transport.close();
+      server.close();
     });
 
     try {
-      await mcpServer.connect(transport);
+      await server.connect(transport);
       await transport.handleRequest(req, res);
     } catch (err) {
       console.error("MCP GET error:", err);
