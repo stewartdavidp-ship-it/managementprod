@@ -31,6 +31,9 @@ function summarizeApp(id: string, app: any, project?: any): any {
     targetPath: app.targetPath || "index.html",
     subPath: app.subPath || null,
     status: app.status || "active",
+    triageNeeded: app.triageNeeded || false,
+    triageAlertCount: app.triageAlertCount || 0,
+    lastTriageAt: app.lastTriageAt || null,
   };
 }
 

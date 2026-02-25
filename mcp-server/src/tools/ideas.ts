@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getIdeasRef, getAppIdeasRef, getIdeaRef, getConceptsRef, getJobsRef, getSessionsRef } from "../firebase.js";
+import { getIdeasRef, getAppIdeasRef, getIdeaRef, getConceptsRef, getJobsRef, getSessionsRef, getConfigRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
+import { computeIdeaHealth, updateAppTriageFlags } from "../idea-health.js";
 
 const IDEA_TYPES = ["base", "addon"] as const;
 const IDEA_STATUSES = ["active", "graduated", "archived", "completed"] as const;
@@ -23,18 +24,20 @@ export function registerIdeaTools(server: McpServer): void {
   server.tool(
     "idea",
     `Idea lifecycle tool. Actions:
-  - "list": List ideas. Optional: appId, status, ideaType, intention, primaryOutput, initiative filters. Sorts by sequence when appId filtered. By default excludes completed and archived ideas.
-  - "get": Get a single idea by ID. Requires ideaId. Returns full record.
+  - "list": List ideas. Optional: appId, status, ideaType, intention, primaryOutput, initiative, hasAlerts filters. Sorts by sequence when appId filtered. By default excludes completed and archived ideas.
+  - "get": Get a single idea by ID. Requires ideaId. Returns full record including alerts.
   - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId, externalProjectKey, ideaType, intention, primaryOutput, initiative.
   - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status, externalProjectKey, externalRefs, ideaType, intention, primaryOutput, initiative.
   - "graduate": Link idea to an app. Requires ideaId, appId. Auto-calculates sequence and type.
   - "archive": Archive an idea. Requires ideaId.
   - "get_active": Get the latest active idea for an app. Requires appId.
   - "list_ranked": Rank ideas by build-readiness tier. Optional: appId filter. Returns ideas sorted by 5-tier model with activity metrics.
+  - "triage": Run full-app health computation across all active ideas. Requires appId. Returns ideas with alerts grouped by severity. Updates app triage flags.
   - "delete": Delete an idea. Requires ideaId. Also removes from appIdeas index. Use for test cleanup only.`,
     {
       ...INITIATOR_PARAM,
-      action: z.enum(["list", "get", "create", "update", "graduate", "archive", "get_active", "list_ranked", "delete"]).describe("Action to perform"),
+      action: z.enum(["list", "get", "create", "update", "graduate", "archive", "get_active", "list_ranked", "triage", "delete"]).describe("Action to perform"),
+      hasAlerts: z.boolean().optional().describe("For list: filter to only ideas with active alerts (alertCount > 0)"),
       ideaId: z.string().optional().describe("Idea ID (required for update/graduate/archive)"),
       appId: z.string().optional().describe("App ID (optional for list/create, required for graduate/get_active)"),
       name: z.string().optional().describe("Idea name (required for create, optional for update)"),
@@ -59,7 +62,7 @@ export function registerIdeaTools(server: McpServer): void {
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, ideaType, intention, primaryOutput, initiative, externalProjectKey, externalRefs, limit, offset }) => {
+    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, ideaType, intention, primaryOutput, initiative, externalProjectKey, externalRefs, hasAlerts, limit, offset }) => {
       resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
@@ -95,6 +98,9 @@ export function registerIdeaTools(server: McpServer): void {
         if (initiative) {
           ideas = ideas.filter((i) => i.initiative && i.initiative.toLowerCase() === initiative.toLowerCase());
         }
+        if (hasAlerts) {
+          ideas = ideas.filter((i) => (i.alertCount || 0) > 0);
+        }
 
         const total = ideas.length;
         const skip = offset && offset > 0 ? offset : 0;
@@ -114,6 +120,8 @@ export function registerIdeaTools(server: McpServer): void {
           appId: i.appId,
           sequence: i.sequence,
           parentIdeaId: i.parentIdeaId,
+          alertCount: i.alertCount || 0,
+          lastSessionAt: i.lastSessionAt || null,
           createdAt: i.createdAt,
           updatedAt: i.updatedAt,
         }));
@@ -446,6 +454,105 @@ export function registerIdeaTools(server: McpServer): void {
         listRankedCache.set(cacheKey, { result, timestamp: Date.now() });
 
         return result;
+      }
+
+      // ─── TRIAGE ───
+      if (action === "triage") {
+        if (!appId) return withResponseSize({ content: [{ type: "text", text: "action 'triage' requires appId" }], isError: true });
+
+        // 4 parallel Firebase reads
+        const [ideasSnap, conceptsSnap, jobsSnap, sessionsSnap] = await Promise.all([
+          getIdeasRef(uid).once("value"),
+          getConceptsRef(uid).once("value"),
+          getJobsRef(uid).once("value"),
+          getSessionsRef(uid).orderByChild("status").equalTo("completed").once("value"),
+        ]);
+
+        const allIdeas: any[] = Object.values(ideasSnap.val() || {});
+        const allConcepts: any[] = Object.values(conceptsSnap.val() || {});
+        const allJobs: any[] = Object.values(jobsSnap.val() || {});
+        const allCompletedSessions: any[] = Object.values(sessionsSnap.val() || {});
+
+        // Count ALL completed sessions for this app
+        const appSessionCount = allCompletedSessions.filter(
+          (s: any) => s.appId === appId
+        ).length;
+
+        // Filter to active app ideas
+        const appIdeas = allIdeas.filter(
+          (i: any) => i.appId === appId && i.status !== "completed" && i.status !== "archived"
+        );
+
+        // Compute health for each idea
+        const triageResults: any[] = [];
+        const multiPathUpdates: Record<string, any> = {};
+        let totalAlertCount = 0;
+
+        for (const idea of appIdeas) {
+          const ideaConcepts = allConcepts.filter(
+            (c: any) => c.ideaOrigin === idea.id && c.status === "active"
+          );
+          const activeOpenCount = ideaConcepts.filter((c: any) => c.type === "OPEN").length;
+          const ideaJobs = allJobs.filter((j: any) => j.ideaId === idea.id);
+          const completedJobCount = ideaJobs.filter((j: any) => j.status === "completed").length;
+
+          const alerts = computeIdeaHealth({
+            idea,
+            totalAppSessionCount: appSessionCount,
+            conceptCount: ideaConcepts.length,
+            activeOpenCount,
+            completedJobCount,
+            totalJobCount: ideaJobs.length,
+          });
+
+          // Stage multi-path update for this idea
+          multiPathUpdates[`${idea.id}/alerts`] = alerts.length > 0 ? alerts : null;
+          multiPathUpdates[`${idea.id}/alertCount`] = alerts.length;
+          multiPathUpdates[`${idea.id}/sessionCountAtLastHealth`] = appSessionCount;
+
+          totalAlertCount += alerts.length;
+
+          if (alerts.length > 0) {
+            triageResults.push({
+              id: idea.id,
+              name: idea.name,
+              ideaType: idea.ideaType || null,
+              intention: idea.intention || null,
+              alertCount: alerts.length,
+              alerts,
+            });
+          }
+        }
+
+        // Atomic multi-path write to update all idea alerts
+        if (Object.keys(multiPathUpdates).length > 0) {
+          await getIdeasRef(uid).update(multiPathUpdates);
+        }
+
+        // Update app triage flags
+        await updateAppTriageFlags(uid, appId, totalAlertCount);
+
+        // Sort by severity: high first
+        const severityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+        triageResults.sort((a, b) => {
+          const aMax = Math.min(...a.alerts.map((al: any) => severityOrder[al.severity] ?? 3));
+          const bMax = Math.min(...b.alerts.map((al: any) => severityOrder[al.severity] ?? 3));
+          return aMax - bMax;
+        });
+
+        return withResponseSize({
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              appId,
+              totalIdeasScanned: appIdeas.length,
+              totalAlertCount,
+              ideasWithAlerts: triageResults.length,
+              appSessionCount,
+              ideas: triageResults,
+            }, null, 2),
+          }],
+        });
       }
 
       // ─── DELETE ───

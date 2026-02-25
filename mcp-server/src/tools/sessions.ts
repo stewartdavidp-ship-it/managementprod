@@ -1,11 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getSessionsRef, getSessionRef, getPreferencesRef, getProfileRef, getAttentionQueueRef, getDb, getDocumentRef, getConfigRef } from "../firebase.js";
+import { getSessionsRef, getSessionRef, getPreferencesRef, getProfileRef, getAttentionQueueRef, getDb, getDocumentRef, getConfigRef, getIdeaRef, getConceptsRef, getJobsRef } from "../firebase.js";
 import { isGitHubConfigured, resolveTargetRepo, resolveFilePath, deliverToGitHub } from "../github.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
 import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
+import { computeIdeaHealth, updateAppTriageFlags } from "../idea-health.js";
 
 const SESSION_STATUSES = ["active", "completed", "abandoned"] as const;
 
@@ -341,6 +342,80 @@ export function registerSessionTools(server: McpServer): void {
         // Clear active session cache
         activeSessionCache.delete(uid);
 
+        // ─── IDEA HEALTH: Compute health for activeIdeaId ───
+        let _ideaHealth: any = null;
+        try {
+          const healthIdeaId = session.activeIdeaId || session.ideaId;
+          const healthAppId = session.activeAppId || session.appId;
+
+          if (healthIdeaId && healthAppId) {
+            // Update lastSessionAt unconditionally
+            await getIdeaRef(uid, healthIdeaId).update({
+              lastSessionAt: now,
+            });
+
+            // Parallel reads: idea, concepts, jobs, sessions
+            const [ideaSnap, conceptsSnap, jobsSnap, sessionsSnap] = await Promise.all([
+              getIdeaRef(uid, healthIdeaId).once("value"),
+              getConceptsRef(uid).once("value"),
+              getJobsRef(uid).once("value"),
+              getSessionsRef(uid).orderByChild("status").equalTo("completed").once("value"),
+            ]);
+
+            const idea = ideaSnap.val();
+            if (idea) {
+              const allConcepts: any[] = Object.values(conceptsSnap.val() || {});
+              const allJobs: any[] = Object.values(jobsSnap.val() || {});
+              const allCompletedSessions: any[] = Object.values(sessionsSnap.val() || {});
+
+              // Count ALL completed sessions for this app (regardless of activeIdeaId)
+              const appSessionCount = allCompletedSessions.filter(
+                (s: any) => s.appId === healthAppId
+              ).length;
+
+              // Concept counts for this idea
+              const ideaConcepts = allConcepts.filter(
+                (c: any) => c.ideaOrigin === healthIdeaId && c.status === "active"
+              );
+              const activeOpenCount = ideaConcepts.filter((c: any) => c.type === "OPEN").length;
+
+              // Job counts for this idea
+              const ideaJobs = allJobs.filter((j: any) => j.ideaId === healthIdeaId);
+              const completedJobCount = ideaJobs.filter((j: any) => j.status === "completed").length;
+
+              const alerts = computeIdeaHealth({
+                idea,
+                totalAppSessionCount: appSessionCount,
+                conceptCount: ideaConcepts.length,
+                activeOpenCount,
+                completedJobCount,
+                totalJobCount: ideaJobs.length,
+              });
+
+              // Write alerts + counter back to idea record
+              const healthUpdates: Record<string, any> = {
+                alerts: alerts.length > 0 ? alerts : null,
+                alertCount: alerts.length,
+                sessionCountAtLastHealth: appSessionCount,
+              };
+              await getIdeaRef(uid, healthIdeaId).update(healthUpdates);
+
+              // Update app triage flags if alerts exist
+              if (alerts.length > 0) {
+                await updateAppTriageFlags(uid, healthAppId, alerts.length);
+              }
+
+              _ideaHealth = {
+                ideaId: healthIdeaId,
+                alertCount: alerts.length,
+                alerts: alerts.length > 0 ? alerts : undefined,
+              };
+            }
+          }
+        } catch {
+          // Fire-and-forget — never blocks session completion
+        }
+
         // ─── PENDING FLUSH: Deliver queued documents to GitHub ───
         const flushResults: { docId: string; status: string; error?: string }[] = [];
         const pendingFlush = session.pendingFlush;
@@ -397,6 +472,7 @@ export function registerSessionTools(server: McpServer): void {
 
         const result: any = { ...session, ...updates };
         if (flushResults.length > 0) result._flushResults = flushResults;
+        if (_ideaHealth) result._ideaHealth = _ideaHealth;
 
         return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] });
       }
