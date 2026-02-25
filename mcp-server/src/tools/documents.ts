@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getDocumentsRef, getDocumentRef, getConfigRef, getProfileRef, getSessionRef, getDb } from "../firebase.js";
-import { getCurrentUid } from "../context.js";
+import { getCurrentUid, setSuppressPiggyback } from "../context.js";
+import { SURFACES, INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 import { isGitHubConfigured, resolveTargetPath, resolveTargetRepo, resolveFilePath, deliverToGitHub, setupDocsRepo } from "../github.js";
 import { withResponseSize } from "../response-metadata.js";
 
@@ -58,12 +59,13 @@ Actions:
   - "deliver": Mark delivered and delete ephemeral docs from Firebase. Requires: docId. Optional: deliveredBy.
   - "deliver-to-github": Commit to GitHub repo, then delete from Firebase on success. Requires: docId.
   - "fail": Mark as failed. Requires: docId, reason.
-  - "send": Send a message (ephemeral by default). Requires: content. Optional: to, metadata.
-  - "receive": Check for new messages. Optional: to (default: "claude-code").
+  - "send": Send a message (ephemeral by default). Requires: content, createdBy (sender surface). Optional: to, subject, metadata. Subject auto-generated from first line if omitted. Valid surfaces: ${SURFACES.join(", ")}.
+  - "receive": Check for new messages. Requires: to (your surface name). Optional: summary (boolean). Set summary=true to get envelopes only (docId, from, subject, contentSize) — then use document(get) to read full content for specific messages. Valid surfaces: ${SURFACES.join(", ")}.
   - "ack": Acknowledge and delete message from Firebase. Requires: docId.
   - "purge": Delete all delivered/failed docs older than 24h. Returns count deleted.
   - "delete": Delete a document by ID. Requires: docId. Use for test cleanup only.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["push", "list", "get", "get-latest", "update", "deliver", "deliver-to-github", "fail", "send", "receive", "ack", "purge", "delete"]).describe("Action to perform"),
       docId: z.string().optional().describe("Document ID (required for get/deliver/fail/ack)"),
       type: z.string().optional().describe("Document type: claude-md, spec, architecture, test-plan, design, or custom (required for push, optional filter for list)"),
@@ -72,17 +74,20 @@ Actions:
       targetPath: z.string().optional().describe("Where to write in repo: 'CLAUDE.md', 'specs/feature-x.md', etc. (required for push)"),
       metadata: z.string().optional().describe("JSON string of type-specific metadata (optional for push/send)"),
       status: z.string().optional().describe("Filter for list: pending, delivered, failed, all (default: pending)"),
-      createdBy: z.string().optional().describe("Who created: claude-chat, claude-code, user (default: claude-chat)"),
-      deliveredBy: z.string().optional().describe("Who consumed: claude-code, user (default: claude-code)"),
+      createdBy: z.string().optional().describe(`Who created/sender surface (required for send). Valid: ${SURFACES.join(", ")}`),
+      deliveredBy: z.string().optional().describe(`Who consumed. Valid: ${SURFACES.join(", ")}`),
       reason: z.string().optional().describe("Failure reason (required for fail)"),
-      to: z.string().optional().describe("Message recipient: claude-chat, claude-code (for send/receive)"),
+      to: z.string().optional().describe(`Message recipient (required for send/receive). Valid: ${SURFACES.join(", ")}`),
       autoDeliver: z.boolean().optional().describe("For 'push': if true, auto-deliver to GitHub (default: false)"),
       sessionId: z.string().optional().describe("For 'push': link document to session's pendingFlush map for delivery on session close"),
       lifespan: z.enum(["ephemeral", "short", "standard", "permanent"]).optional().describe("Document lifespan. Defaults: messages=ephemeral, specs=short (7d), claude-md=permanent, other=standard (30d)."),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
+      subject: z.string().optional().describe("Short subject line for messages (~80 chars). Auto-generated from first line of content if omitted. For 'send' action."),
+      summary: z.boolean().optional().describe("For 'receive': if true, return envelopes only (docId, from, subject, contentSize, createdAt) instead of full content. Use document(get) to read full messages."),
     },
-    async ({ action, docId, type, appId, content, targetPath, metadata, status, createdBy, deliveredBy, reason, to, autoDeliver, sessionId, lifespan, limit, offset }) => {
+    async ({ initiator, action, docId, type, appId, content, targetPath, metadata, status, createdBy, deliveredBy, reason, to, autoDeliver, sessionId, lifespan, limit, offset, subject, summary }) => {
+      resolveInitiator({ initiator, createdBy });
       const uid = getCurrentUid();
 
       // ─── PUSH ───
@@ -528,10 +533,10 @@ Actions:
       // ─── SEND (Message) ───
       if (action === "send") {
         if (!content) return withResponseSize({ content: [{ type: "text", text: "action 'send' requires content" }], isError: true });
+        if (!to) return withResponseSize({ content: [{ type: "text", text: "action 'send' requires 'to' (recipient surface)" }], isError: true });
 
-        const recipient = to || "claude-code";
-        // Infer sender: if sending to claude-code, sender is claude-chat (and vice versa)
-        const sender = createdBy || (recipient === "claude-code" ? "claude-chat" : "claude-code");
+        const recipient = to;
+        const sender = createdBy || "claude-chat";
 
         let parsedMetadata: Record<string, any> = {};
         if (metadata) {
@@ -542,6 +547,7 @@ Actions:
           }
         }
 
+        const effectiveSubject = subject || content.split("\n")[0].slice(0, 80);
         const effectiveLifespan = lifespan || "ephemeral";
         const ref = getDocumentsRef(uid).push();
         const now = new Date().toISOString();
@@ -549,6 +555,7 @@ Actions:
           id: ref.key,
           type: "message",
           appId: appId || null,
+          subject: effectiveSubject,
           content,
           metadata: {
             ...parsedMetadata,
@@ -572,7 +579,9 @@ Actions:
 
       // ─── RECEIVE (Messages) ───
       if (action === "receive") {
-        const recipient = to || "claude-code";
+        if (!to) return withResponseSize({ content: [{ type: "text", text: "action 'receive' requires 'to' (your surface name)" }], isError: true });
+        setSuppressPiggyback(true); // Avoid redundant _pendingMessages in response
+        const recipient = to;
 
         // v8.71.4: Server-side filter on status=pending to avoid downloading entire collection.
         // Was the #1 Firebase cost driver when polled frequently (~1MB per read).
@@ -591,6 +600,19 @@ Actions:
 
         // Oldest first (chronological order for reading)
         msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+        // Summary mode: return envelopes only (saves tokens)
+        if (summary) {
+          const envelopes = msgs.map((m: any) => ({
+            docId: m.id,
+            from: m.metadata?.from || "unknown",
+            to: m.metadata?.to || "unknown",
+            subject: m.subject || m.content?.split("\n")[0]?.slice(0, 80) || "(no subject)",
+            contentSize: m.content?.length || 0,
+            createdAt: m.createdAt,
+          }));
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify(envelopes, null, 2) }] });
+        }
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify(msgs, null, 2) }] });
       }

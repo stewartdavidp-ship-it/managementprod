@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getFileContent, isGitHubConfigured } from "../github.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 /**
  * repo_file — Read-only tool to fetch a file from a GitHub repo.
@@ -28,12 +29,14 @@ Section reads (for markdown files):
 - Pass section="__index__" to get a table of contents with estimated sizes for each section
 - Omit section to get the full file`,
     {
+      ...INITIATOR_PARAM,
       repo: z.string().describe("GitHub repo in owner/name format (e.g. 'stewartdavidp-ship-it/command-center')"),
       path: z.string().describe("File path within the repo (e.g. 'ARCHITECTURE.md')"),
       branch: z.string().optional().describe("Branch name (default: 'main')"),
       section: z.string().optional().describe("Markdown section heading to extract (e.g. '## Deploy Commands'), or '__index__' for table of contents with sizes"),
     },
-    async ({ repo, path, branch, section }) => {
+    async ({ initiator, repo, path, branch, section }) => {
+      resolveInitiator({ initiator });
       if (!isGitHubConfigured()) {
         return withResponseSize({
           content: [{ type: "text", text: "GitHub is not configured. Set GITHUB_TOKEN environment variable." }],

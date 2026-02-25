@@ -4,6 +4,7 @@ import { getJobsRef, getJobRef, getConceptsRef, getIdeasRef, getAppIdeasRef } fr
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
+import { SURFACES, INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 const JOB_STATUSES = ["draft", "active", "review", "approved", "completed", "failed", "abandoned"] as const;
 const TERMINAL_STATUSES = ["completed", "failed", "abandoned"];
@@ -51,6 +52,7 @@ Actions:
   - "list": List jobs. Optional filters: appId, ideaId, status, createdBy, jobType, limit.
   - "delete": Delete a job. Requires jobId. Use for test cleanup only.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["start", "claim", "revise", "review", "approve", "update", "add_event", "complete", "get", "list", "delete"]).describe("Action to perform"),
       jobId: z.string().optional().describe("Job ID (required for claim/revise/review/approve/update/add_event/complete/get)"),
       appId: z.string().optional().describe("App ID (required for start, optional filter for list)"),
@@ -60,7 +62,7 @@ Actions:
       attachments: z.string().optional().describe("JSON string: array of {type, label, content, targetPath?, action?} content blocks (optional for start/update, only editable on draft)"),
       conceptSnapshot: z.string().optional().describe("JSON string: {rules, constraints, decisions, opens} ODRC state at creation (optional for start)"),
       jobType: z.string().optional().describe("Job type: build|maintenance|test|skill-update|cleanup (optional for start, default: build)"),
-      createdBy: z.string().optional().describe("Creator: claude-chat|claude-code (optional for start; claude-chat creates drafts, claude-code creates active)"),
+      createdBy: z.string().optional().describe(`Creator surface (required for start). claude-chat creates drafts, others create active. Valid: ${SURFACES.join(", ")}`),
       claudeMdSnapshot: z.string().optional().describe("CLAUDE.md content being executed (optional for start — prefer attachments)"),
       preConditions: z.string().optional().describe("Notes on state going in (optional for start/update)"),
       exceptionsNoted: z.array(z.string()).optional().describe("Things flagged before starting (optional for start/update)"),
@@ -84,7 +86,8 @@ Actions:
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
       includeSnapshot: z.boolean().optional().describe("For 'get': include claudeMdSnapshot in response (default: false — saves context window)"),
     },
-    async ({ action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, limit, offset, includeSnapshot }) => {
+    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, limit, offset, includeSnapshot }) => {
+      resolveInitiator({ initiator, createdBy });
       const uid = getCurrentUid();
 
       // ─── START ───
@@ -120,7 +123,8 @@ Actions:
         }
 
         // Determine initial status: claude-chat creates drafts, everything else creates active
-        const initialStatus = createdBy === "claude-chat" ? "draft" : "active";
+        const effectiveCreatedBy = createdBy || "unknown";
+        const initialStatus = effectiveCreatedBy === "claude-chat" ? "draft" : "active";
 
         const ref = getJobsRef(uid).push();
         const now = new Date().toISOString();
@@ -131,7 +135,7 @@ Actions:
           status: initialStatus,
           title,
           jobType: jobType || "build",
-          createdBy: createdBy || "claude-code",
+          createdBy: effectiveCreatedBy,
           instructions: instructions || null,
           attachments: parsedAttachments || [],
           conceptSnapshot: parsedSnapshot || null,
@@ -224,7 +228,7 @@ Actions:
         const updates = {
           status: "active",
           claimedAt: now,
-          claimedBy: "claude-code",
+          claimedBy: initiator || createdBy || "claude-code",
           startedAt: now,
         };
         await ref.update(updates);

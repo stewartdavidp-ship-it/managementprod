@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getConfigRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 // Summarize an app config into the fields useful for chat-first discovery
 function summarizeApp(id: string, app: any, project?: any): any {
@@ -44,6 +45,7 @@ export function registerAppTools(server: McpServer): void {
   - "update": Update app metadata. Requires appId. Optional: description, appType, repos (JSON string e.g. {"prod":"owner/repo","test":"owner/testrepo"}), subPath (string), lifecycleFields (JSON string with currentMaturity, maturityTarget, problemStatement, targetAudience, userGoal, successMetric, category).
   - "archive": Soft-delete an app by setting status to "archived". Requires appId. Archived apps are excluded from list by default.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["list", "get", "create", "update", "archive"]).describe("Action: list (all apps), get (specific app), create (new app), update (modify app metadata), or archive (soft-delete)"),
       appId: z.string().optional().describe("For 'get'/'create'/'update': the app ID (e.g. 'floorplan') or partial name for get"),
       name: z.string().optional().describe("For 'create': display name of the app"),
@@ -57,7 +59,8 @@ export function registerAppTools(server: McpServer): void {
       targetPath: z.string().optional().describe("For 'create': target file path (default: 'index.html')"),
       lifecycleFields: z.string().optional().describe("For 'create'/'update': JSON string of lifecycle fields (currentMaturity, maturityTarget, problemStatement, targetAudience, userGoal, successMetric, category)"),
     },
-    async ({ action, appId, name: appName, icon, project, projectName, description, appType, repos, subPath, targetPath, lifecycleFields }) => {
+    async ({ initiator, action, appId, name: appName, icon, project, projectName, description, appType, repos, subPath, targetPath, lifecycleFields }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
       const snapshot = await getConfigRef(uid).once("value");
       const config = snapshot.val();

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getSkillContent, getSkillNames } from "../skills.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 /**
  * Registers the `skill` tool — allows Claude Chat (or any MCP client)
@@ -16,10 +17,12 @@ export function registerSkillTools(server: McpServer): void {
     "skill",
     "Retrieve a CC skill/protocol by name. Returns the full skill prompt content. Call with action='list' to see available skills, or action='get' with a skillName to retrieve one.",
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["list", "get"]).describe("'list' to see all skills, 'get' to retrieve a specific skill"),
       skillName: z.string().optional().describe("The skill name (e.g., 'cc-session-protocol'). Required for action='get'."),
     },
-    async ({ action, skillName }) => {
+    async ({ initiator, action, skillName }) => {
+      resolveInitiator({ initiator });
       if (action === "list") {
         const skills = getSkillNames();
         return withResponseSize({

@@ -132,6 +132,7 @@ async function autoCreateSession(uid: string): Promise<SessionMetadata> {
     sessionGoal: null,
     conceptBlockCount: 0,
     contextEstimate: 0,
+    contextPerSurface: {},
     presentationMode: "interactive",
     configSnapshot: null,
     closingSummary: null,

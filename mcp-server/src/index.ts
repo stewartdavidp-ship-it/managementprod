@@ -4,9 +4,9 @@ import { initFirebase } from "./firebase.js";
 import { createServer } from "./server.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey } from "./auth/store.js";
-import { requestContext, setContextEstimate } from "./context.js";
-import { incrementContextEstimate, getActiveSessionId, getPendingContextAccumulation } from "./tools/sessions.js";
-import { getSessionRef } from "./firebase.js";
+import { requestContext, setContextEstimate, setContextPerSurface, setPendingMessages, type PendingMessagesInfo } from "./context.js";
+import { getActiveSessionId, getPendingContextAccumulation, getPendingContextPerSurface } from "./tools/sessions.js";
+import { getSessionRef, getDocumentsRef } from "./firebase.js";
 import { ensureSession } from "./session-lifecycle.js";
 
 // Initialize Firebase before anything else
@@ -40,13 +40,53 @@ if (!process.env.FIREBASE_WEB_API_KEY && process.env.K_SERVICE) {
 
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
+// Check for pending messages and cache in request context for piggyback notifications.
+// Called once per HTTP request — all tool calls in a batch share the result.
+async function checkPendingMessages(uid: string): Promise<void> {
+  const snapshot = await getDocumentsRef(uid)
+    .orderByChild("status")
+    .equalTo("pending")
+    .limitToLast(20)
+    .once("value");
+
+  const data = snapshot.val();
+  if (!data) {
+    setPendingMessages(null);
+    return;
+  }
+
+  const msgs = Object.values(data as Record<string, any>)
+    .filter((d: any) => d.type === "message");
+
+  if (msgs.length === 0) {
+    setPendingMessages(null);
+    return;
+  }
+
+  // Sort oldest first for consistent ordering
+  msgs.sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  const messages = msgs.map((m: any) => ({
+    to: m.metadata?.to || "unknown",
+    from: m.metadata?.from || "unknown",
+    subject: m.subject || (m.content ? m.content.split("\n")[0].slice(0, 80) : "(no subject)"),
+  }));
+
+  const info: PendingMessagesInfo = {
+    count: msgs.length,
+    messages,
+  };
+
+  setPendingMessages(info);
+}
+
 // Create MCP server
 const mcpServer = createServer();
 
 // Create Express app
 const app = express();
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // CORS — allow Claude.ai origins
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -156,28 +196,12 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
 app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
   const firebaseUid = (req as any).firebaseUid;
 
-  // Track response size for contextEstimate auto-increment
-  let responseSize = 0;
-  const originalWrite = res.write.bind(res);
-  const originalEnd = res.end.bind(res);
-
-  res.write = function(chunk: any, ...args: any[]) {
-    if (chunk) {
-      responseSize += typeof chunk === "string" ? chunk.length : chunk.byteLength || 0;
-    }
-    return originalWrite(chunk, ...args);
-  } as any;
-
-  res.end = function(chunk?: any, ...args: any[]) {
-    if (chunk) {
-      responseSize += typeof chunk === "string" ? chunk.length : chunk.byteLength || 0;
-    }
-    // Fire-and-forget: increment contextEstimate after response completes
-    if (firebaseUid && responseSize > 0) {
-      incrementContextEstimate(firebaseUid, responseSize).catch(() => {});
-    }
-    return originalEnd(chunk, ...args);
-  } as any;
+  // Context estimation moved to withResponseSize() in response-metadata.ts
+  // Previously intercepted res.write/res.end to count HTTP bytes, but that
+  // included MCP protocol overhead (initialize, tools/list, JSON-RPC framing,
+  // SSE framing) which inflated the estimate ~20x vs actual tool content.
+  // Now we count only tool result content chars — a much better proxy for
+  // what actually enters the LLM context window.
 
   // Run the MCP handler within the user's context
   requestContext.run({ firebaseUid }, async () => {
@@ -187,10 +211,24 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
       try {
         const activeSessionId = getActiveSessionId(firebaseUid);
         if (activeSessionId) {
-          const snap = await getSessionRef(firebaseUid, activeSessionId).child("contextEstimate").once("value");
-          const firebaseValue = snap.val() || 0;
+          // Load global + per-surface context estimates in parallel (no latency increase)
+          const [globalSnap, perSurfaceSnap] = await Promise.all([
+            getSessionRef(firebaseUid, activeSessionId).child("contextEstimate").once("value"),
+            getSessionRef(firebaseUid, activeSessionId).child("contextPerSurface").once("value"),
+          ]);
+          const firebaseGlobal = globalSnap.val() || 0;
+          const firebasePerSurface: Record<string, number> = perSurfaceSnap.val() || {};
+
           const pendingAccum = getPendingContextAccumulation(firebaseUid);
-          setContextEstimate(firebaseValue + pendingAccum);
+          setContextEstimate(firebaseGlobal + pendingAccum);
+
+          // Merge Firebase per-surface with pending per-surface accumulations
+          const pendingPerSurface = getPendingContextPerSurface(firebaseUid);
+          const mergedPerSurface: Record<string, number> = { ...firebasePerSurface };
+          for (const [surface, pending] of Object.entries(pendingPerSurface)) {
+            mergedPerSurface[surface] = (mergedPerSurface[surface] || 0) + pending;
+          }
+          setContextPerSurface(mergedPerSurface);
         }
       } catch {
         // Non-critical — _contextHealth will be omitted if this fails
@@ -203,6 +241,15 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
       } catch (err) {
         // Non-critical — _session metadata will be omitted if this fails
         console.error("Session lifecycle error:", err);
+      }
+
+      // Piggyback message notifications — check for pending messages once per request.
+      // Result is cached in AsyncLocalStorage and injected into every tool response
+      // via withResponseSize() in response-metadata.ts.
+      try {
+        await checkPendingMessages(firebaseUid);
+      } catch {
+        // Non-critical — _pendingMessages will be omitted if this fails
       }
     }
 

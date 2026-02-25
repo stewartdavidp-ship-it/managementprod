@@ -4,6 +4,7 @@ import { getConceptsRef, getIdeasRef, getAppIdeasRef, getClaudeMdRef, getDocumen
 import { getCurrentUid } from "../context.js";
 import { isGitHubConfigured, resolveTargetPath, deliverToGitHub } from "../github.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 export function registerGenerateTools(server: McpServer): void {
 
@@ -15,12 +16,14 @@ export function registerGenerateTools(server: McpServer): void {
   - "push": Same as generate, but ALSO queues the document for delivery to Claude Code. Claude Code picks it up and writes it to the local repo. Requires appId, appName. Optional: appDescription.
   - "get": Retrieve the last stored CLAUDE.md for an app. Requires appId.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["generate", "push", "get"]).optional().describe("Action: generate (default), push (generate + queue for Claude Code delivery), or get (retrieve stored)."),
       appId: z.string().describe("The app ID to generate/retrieve CLAUDE.md for"),
       appName: z.string().optional().describe("Human-readable app name (required for generate)"),
       appDescription: z.string().optional().describe("App description for the 'What This App Is' section (optional for generate)"),
     },
-    async ({ action, appId, appName, appDescription }) => {
+    async ({ initiator, action, appId, appName, appDescription }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
       const effectiveAction = action || "generate";
       const isPush = effectiveAction === "push";

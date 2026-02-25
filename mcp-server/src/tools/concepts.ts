@@ -4,6 +4,7 @@ import { getConceptsRef, getConceptRef, getAppIdeasRef, getSessionRef, getJobRef
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 import { writeAttentionEntry } from "./sessions.js";
 
 // Mirrors CC's ODRC_TYPES (index.html:4772)
@@ -119,6 +120,7 @@ export function registerConceptTools(server: McpServer): void {
     `List ODRC concepts. Filter by ideaId, appId, type, or status. Returns all concepts if no filters provided.
 Set grouped=true to return concepts organized by type (rules, constraints, decisions, opens) instead of a flat list. When grouped=true, status defaults to "active".`,
     {
+      ...INITIATOR_PARAM,
       ideaId: z.string().optional().describe("Filter by origin idea ID"),
       appId: z.string().optional().describe("Filter by app ID (returns concepts from all ideas linked to this app)"),
       type: z.enum(ODRC_TYPES).optional().describe("Filter by concept type: OPEN, DECISION, RULE, or CONSTRAINT"),
@@ -129,7 +131,8 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
       limit: z.number().int().optional().describe("Max results to return (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ ideaId, appId, type, status, scope, summary, grouped, limit, offset }) => {
+    async ({ initiator, ideaId, appId, type, status, scope, summary, grouped, limit, offset }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
       const useSummary = summary !== false; // default true
       const useGrouped = grouped === true;
@@ -233,6 +236,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
   - "check_evidence_drift": Check if a concept's linked knowledge nodes have been updated since they were linked. Requires conceptId. Returns drift status per ref.
   - "delete": Delete a concept. Requires conceptId. Use for test cleanup only.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["get", "create", "update", "transition", "supersede", "resolve", "mark_built", "migrate", "add_knowledge_ref", "remove_knowledge_ref", "check_evidence_drift", "delete"]).describe("Action to perform"),
       conceptId: z.string().optional().describe("Concept ID (required for update/transition/supersede/resolve/mark_built/migrate)"),
       type: z.enum(ODRC_TYPES).optional().describe("Concept type (required for create): OPEN, DECISION, RULE, or CONSTRAINT"),
@@ -250,7 +254,8 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
       sessionId: z.string().optional().describe("Active session ID for tracking (optional for create/transition/supersede/resolve)"),
       jobId: z.string().optional().describe("Active job ID for tracking (optional for create/transition/supersede/resolve)"),
     },
-    async ({ action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, nodeId, treeId, treeName, relationship, sessionId, jobId }) => {
+    async ({ initiator, action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, nodeId, treeId, treeName, relationship, sessionId, jobId }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
       // ─── GET ───
@@ -819,11 +824,13 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
 By default returns summary fields (content truncated to 150 chars, timestamps stripped). Set summary=false for full objects.
 Note: Prefer list_concepts with grouped=true for the same result with more filtering options.`,
     {
+      ...INITIATOR_PARAM,
       appId: z.string().describe("The app ID to get active concepts for"),
       summary: z.boolean().optional().describe("If true (default), return lean summary with truncated content. Set false for full objects."),
       includeDriftCheck: z.boolean().optional().describe("If true, check evidence drift for concepts with knowledgeRefs. Adds evidenceDrift field to each concept. Default false."),
     },
-    async ({ appId, summary, includeDriftCheck }) => {
+    async ({ initiator, appId, summary, includeDriftCheck }) => {
+      resolveInitiator({ initiator });
       // Delegate to the same logic as list_concepts(grouped=true, status="active")
       const useSummary = summary !== false;
       const uid = getCurrentUid();

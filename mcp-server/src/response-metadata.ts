@@ -10,7 +10,8 @@
 // tool handler.
 // ═══════════════════════════════════════════════════════════════
 
-import { getContextEstimate, getSessionMeta } from "./context.js";
+import { getContextEstimate, getContextPerSurface, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator } from "./context.js";
+import { incrementContextEstimate } from "./tools/sessions.js";
 
 interface TextContent {
   type: "text";
@@ -68,6 +69,20 @@ export function withResponseSize(
 ): ToolResult {
   const chars = measureContentChars(result.content);
 
+  // Auto-increment context estimate with actual tool content chars.
+  // This runs at the tool-result level (not HTTP level), so it counts only
+  // what enters the LLM context — not MCP protocol overhead like tools/list,
+  // initialize responses, JSON-RPC framing, or SSE framing.
+  try {
+    const uid = getCurrentUid();
+    if (uid && chars > 0) {
+      const initiatorForIncrement = getInitiator();
+      incrementContextEstimate(uid, chars, initiatorForIncrement || undefined).catch(() => {});
+    }
+  } catch {
+    // No UID in context (shouldn't happen in normal flow)
+  }
+
   const meta: Record<string, any> = { _responseSize: chars };
   if (extraMeta) {
     Object.assign(meta, extraMeta);
@@ -76,11 +91,29 @@ export function withResponseSize(
   // Include _contextHealth if we have a context estimate for this request
   const contextEstimate = getContextEstimate();
   if (contextEstimate !== undefined) {
-    meta._contextHealth = {
-      zone: computeContextZone(contextEstimate),
-      used: contextEstimate,
-      ceiling: CONTEXT_CEILING,
-    };
+    const initiator = getInitiator();
+    const perSurface = getContextPerSurface();
+
+    if (initiator && perSurface && initiator in perSurface) {
+      // Surface-aware: zone/used reflect THIS surface's counter
+      const surfaceUsed = perSurface[initiator];
+      meta._contextHealth = {
+        zone: computeContextZone(surfaceUsed),
+        used: surfaceUsed,
+        ceiling: CONTEXT_CEILING,
+        global: {
+          zone: computeContextZone(contextEstimate),
+          used: contextEstimate,
+        },
+      };
+    } else {
+      // No initiator or surface not yet tracked — global-only (backward compat)
+      meta._contextHealth = {
+        zone: computeContextZone(contextEstimate),
+        used: contextEstimate,
+        ceiling: CONTEXT_CEILING,
+      };
+    }
   }
 
   // Include _session metadata if resolved for this request
@@ -92,6 +125,21 @@ export function withResponseSize(
     if (sessionMeta.staleClosed) sessionInfo.staleClosed = sessionMeta.staleClosed;
     if (sessionMeta.existingSession) sessionInfo.existingSession = sessionMeta.existingSession;
     meta._session = sessionInfo;
+  }
+
+  // Include _initiator if resolved for this request
+  const initiator = getInitiator();
+  if (initiator) {
+    meta._initiator = initiator;
+  }
+
+  // Include _pendingMessages if there are pending messages for any surface.
+  // Suppressed for document(receive) to avoid redundant info.
+  if (!getSuppressPiggyback()) {
+    const pendingMessages = getPendingMessages();
+    if (pendingMessages && pendingMessages.count > 0) {
+      meta._pendingMessages = pendingMessages;
+    }
   }
 
   result.content.push({

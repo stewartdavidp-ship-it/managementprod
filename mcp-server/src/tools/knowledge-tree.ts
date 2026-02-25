@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getForestsRef, getForestRef, getTreesRef, getTreeRef, getTreeIndexRef, getNodesRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 const TRUST_LEVELS = ["authoritative", "credible", "unverified", "questionable"] as const;
 
@@ -33,6 +34,7 @@ Actions:
   - "generate_summary": Generate a cached flat routing table for a forest. Requires forestId. Assembles one line per node across all member trees. Stores on the forest record.
   - "get_forest_summary": Get the cached routing summary for a forest. Requires forestId. Returns summary + staleness check.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum([
         "list_forests", "get_forest", "create_forest", "update_forest", "delete_forest",
         "list_trees", "get_tree", "create_tree", "update_tree", "delete_tree", "get_index", "add_search",
@@ -51,7 +53,8 @@ Actions:
       nodeIdsProduced: z.array(z.string()).optional().describe("Node IDs created from a search (optional for add_search)"),
       gaps: z.string().optional().describe("JSON array of gap objects: [{question, priority, discoveredAt?, status?}]. For update_tree. Priority: high/medium/low. Status: open/resolved (default: open)."),
     },
-    async ({ action, forestId, treeId, name, description, tags, treeIds, forestIds, tokenBudget, freshnessPeriodDays, query, nodeIdsProduced, gaps }) => {
+    async ({ initiator, action, forestId, treeId, name, description, tags, treeIds, forestIds, tokenBudget, freshnessPeriodDays, query, nodeIdsProduced, gaps }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
       // ═══════════════════════════════════════

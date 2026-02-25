@@ -5,6 +5,7 @@ import { isGitHubConfigured, resolveTargetRepo, resolveFilePath, deliverToGitHub
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 const SESSION_STATUSES = ["active", "completed", "abandoned"] as const;
 
@@ -44,8 +45,9 @@ export function registerSessionTools(server: McpServer): void {
   - "list": List sessions with optional filters. Optional: ideaId, appId, status, limit.
   - "delete": Delete a session. Requires sessionId. Use for test cleanup only.
   - "preferences": Read or update user preferences. Optional: presentationMode (to set).
-  - "profile": Read or update user profile. Optional fields to set: presentationMode, clearInstructionsDirty. Returns consolidated profile with projectInstructionsDirty flag. When clearInstructionsDirty is true, clears the dirty flag on the user's profile (call after user confirms they've updated their project instructions).`,
+  - "profile": Read or update user profile. Optional fields to set: presentationMode, clearInstructionsDirty, clearShowTutorial. Returns consolidated profile with projectInstructionsDirty flag and showTutorial flag. When clearInstructionsDirty is true, clears the dirty flag. When clearShowTutorial is true, sets showTutorial to false (call after user dismisses or completes the tutorial).`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["start", "update", "add_event", "complete", "get", "list", "delete", "preferences", "profile"]).describe("Action to perform"),
       sessionId: z.string().optional().describe("Session ID (required for update/add_event/complete/get)"),
       ideaId: z.string().optional().describe("Idea ID (required for start, optional filter for list)"),
@@ -71,6 +73,7 @@ export function registerSessionTools(server: McpServer): void {
       nextSessionRecommendation: z.string().optional().describe("What the next session should focus on"),
       conceptsResolved: z.number().int().optional().describe("Final count of concepts resolved this session"),
       clearInstructionsDirty: z.boolean().optional().describe("For profile action: set to true to clear the projectInstructionsDirty flag after user confirms they updated their project instructions"),
+      clearShowTutorial: z.boolean().optional().describe("For profile action: set to true to clear the showTutorial flag after user dismisses or completes the tutorial"),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
@@ -79,8 +82,9 @@ export function registerSessionTools(server: McpServer): void {
         action, sessionId, ideaId, appId, title, summary, eventType, detail, refId, status,
         mode, activeIdeaId, activeAppId, activeLens, targetOpens, sessionGoal,
         conceptBlockCount, contextEstimate, presentationMode, configSnapshot,
-        closingSummary, nextSessionRecommendation, conceptsResolved, clearInstructionsDirty, limit, offset,
+        closingSummary, nextSessionRecommendation, conceptsResolved, clearInstructionsDirty, clearShowTutorial, limit, offset,
       } = args;
+      resolveInitiator({ initiator: (args as any).initiator });
 
       const uid = getCurrentUid();
 
@@ -115,6 +119,7 @@ export function registerSessionTools(server: McpServer): void {
           profile = {
             presentationMode: prefs?.presentationMode || "interactive",
             attentionCount: 0,
+            showTutorial: true,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -143,9 +148,23 @@ export function registerSessionTools(server: McpServer): void {
           profile.projectInstructionsDirty = false;
         }
 
+        // Clear the showTutorial flag if user dismissed or completed the tutorial
+        if (clearShowTutorial === true) {
+          await profileRef.update({
+            showTutorial: false,
+            updatedAt: new Date().toISOString(),
+          });
+          profile.showTutorial = false;
+        }
+
         // Include projectInstructionsDirty in response (defaults to false if not set)
         if (profile.projectInstructionsDirty === undefined) {
           profile.projectInstructionsDirty = false;
+        }
+
+        // Include showTutorial in response (defaults to false for existing users without the field)
+        if (profile.showTutorial === undefined) {
+          profile.showTutorial = false;
         }
 
         return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify(profile, null, 2) }] });
@@ -187,6 +206,7 @@ export function registerSessionTools(server: McpServer): void {
           sessionGoal: sessionGoal || null,
           conceptBlockCount: 0,
           contextEstimate: 0,
+          contextPerSurface: {},
           presentationMode: presentationMode || "interactive",
           configSnapshot: configSnapshot ? JSON.parse(configSnapshot) : null,
           closingSummary: null,
@@ -499,10 +519,11 @@ export function registerSessionTools(server: McpServer): void {
 
 const CONTEXT_FLUSH_INTERVAL_MS = 30_000; // 30 seconds
 
-// Pending increments per uid: { sessionId, accumulated, timer }
+// Pending increments per uid: { sessionId, accumulated, perSurface, timer }
 const pendingContextIncrements = new Map<string, {
   sessionId: string;
   accumulated: number;
+  perSurface: Record<string, number>;
   timer: ReturnType<typeof setTimeout>;
 }>();
 
@@ -512,36 +533,59 @@ export function getPendingContextAccumulation(uid: string): number {
   return pending ? pending.accumulated : 0;
 }
 
+// Get pending (unflushed) per-surface context accumulations for a user
+export function getPendingContextPerSurface(uid: string): Record<string, number> {
+  const pending = pendingContextIncrements.get(uid);
+  return pending ? { ...pending.perSurface } : {};
+}
+
 async function flushContextEstimate(uid: string): Promise<void> {
   const pending = pendingContextIncrements.get(uid);
   if (!pending || pending.accumulated === 0) return;
 
-  const { sessionId, accumulated } = pending;
+  const { sessionId, accumulated, perSurface } = pending;
   pendingContextIncrements.delete(uid);
 
   try {
     const ref = getSessionRef(uid, sessionId);
-    const snap = await ref.child("contextEstimate").once("value");
-    const current = snap.val() || 0;
-    await ref.update({
-      contextEstimate: current + accumulated,
+    // Read global + per-surface in parallel (no latency increase)
+    const [globalSnap, perSurfaceSnap] = await Promise.all([
+      ref.child("contextEstimate").once("value"),
+      ref.child("contextPerSurface").once("value"),
+    ]);
+    const currentGlobal = globalSnap.val() || 0;
+    const currentPerSurface: Record<string, number> = perSurfaceSnap.val() || {};
+
+    const updates: Record<string, any> = {
+      contextEstimate: currentGlobal + accumulated,
       lastActivityAt: new Date().toISOString(),
-    });
+    };
+
+    // Write per-surface increments
+    for (const [surface, increment] of Object.entries(perSurface)) {
+      if (increment > 0) {
+        updates[`contextPerSurface/${surface}`] = (currentPerSurface[surface] || 0) + increment;
+      }
+    }
+
+    await ref.update(updates);
   } catch {
     // Fire-and-forget — never block or throw
   }
 }
 
-export async function incrementContextEstimate(uid: string, responseLength: number): Promise<void> {
+export async function incrementContextEstimate(uid: string, responseLength: number, surface?: string): Promise<void> {
   try {
     const sessionId = activeSessionCache.get(uid);
     if (!sessionId) return;
 
+    const surfaceKey = surface || "unknown";
     const existing = pendingContextIncrements.get(uid);
 
     if (existing && existing.sessionId === sessionId) {
       // Accumulate into existing pending flush
       existing.accumulated += responseLength;
+      existing.perSurface[surfaceKey] = (existing.perSurface[surfaceKey] || 0) + responseLength;
     } else {
       // New session or first call — flush any stale pending and start fresh
       if (existing) {
@@ -552,6 +596,7 @@ export async function incrementContextEstimate(uid: string, responseLength: numb
       const entry = {
         sessionId,
         accumulated: responseLength,
+        perSurface: { [surfaceKey]: responseLength },
         timer: setTimeout(() => flushContextEstimate(uid), CONTEXT_FLUSH_INTERVAL_MS),
       };
       pendingContextIncrements.set(uid, entry);

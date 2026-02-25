@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTreeRef, getTreeIndexRef, getNodeContentRef, getNodesRef, getTreesRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 const TRUST_LEVELS = ["authoritative", "credible", "unverified", "questionable"] as const;
 
@@ -27,6 +28,7 @@ Actions:
   - "remove_cross_ref": Remove a cross-reference between two nodes with reciprocal removal. Requires nodeId, targetNodeId. Cleans up contradictedBy index if applicable.
   - "bulk_verify": Mark multiple nodes as verified (refreshes lastVerified). Requires treeId, nodeIds (max 20). Atomic multi-path update.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["create", "update", "delete", "load", "load_batch", "move", "add_cross_ref", "remove_cross_ref", "bulk_verify"]).describe("Action to perform"),
       treeId: z.string().optional().describe("Tree ID (required for create)"),
       nodeId: z.string().optional().describe("Node ID (required for update/delete/load/move)"),
@@ -45,7 +47,8 @@ Actions:
       targetNodeId: z.string().optional().describe("Target node ID for add_cross_ref/remove_cross_ref"),
       relationship: z.string().optional().describe("Cross-ref relationship type (e.g., 'supports', 'contradicts', 'extends', 'qualifies'). Required for add_cross_ref."),
     },
-    async ({ action, treeId, nodeId, nodeIds, question, content, keyFinding, trust, parentId, newParentId, sources, consensusNotes, crossRefs, lastVerified, tags, targetNodeId, relationship }) => {
+    async ({ initiator, action, treeId, nodeId, nodeIds, question, content, keyFinding, trust, parentId, newParentId, sources, consensusNotes, crossRefs, lastVerified, tags, targetNodeId, relationship }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
       // Parse JSON string params

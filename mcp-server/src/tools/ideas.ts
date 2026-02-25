@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getIdeasRef, getAppIdeasRef, getIdeaRef, getConceptsRef, getJobsRef, getSessionsRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
+import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 const IDEA_TYPES = ["base", "addon"] as const;
 const IDEA_STATUSES = ["active", "graduated", "archived", "completed"] as const;
@@ -29,6 +30,7 @@ export function registerIdeaTools(server: McpServer): void {
   - "list_ranked": Rank ideas by build-readiness tier. Optional: appId filter. Returns ideas sorted by 5-tier model with activity metrics.
   - "delete": Delete an idea. Requires ideaId. Also removes from appIdeas index. Use for test cleanup only.`,
     {
+      ...INITIATOR_PARAM,
       action: z.enum(["list", "get", "create", "update", "graduate", "archive", "get_active", "list_ranked", "delete"]).describe("Action to perform"),
       ideaId: z.string().optional().describe("Idea ID (required for update/graduate/archive)"),
       appId: z.string().optional().describe("App ID (optional for list/create, required for graduate/get_active)"),
@@ -40,7 +42,8 @@ export function registerIdeaTools(server: McpServer): void {
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ action, ideaId, appId, name, description, type, parentIdeaId, status, limit, offset }) => {
+    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, limit, offset }) => {
+      resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
       // ─── LIST ───

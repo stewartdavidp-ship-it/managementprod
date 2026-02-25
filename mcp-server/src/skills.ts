@@ -433,6 +433,38 @@ export function registerSkillPrompts(server: McpServer): void {
       }],
     })
   );
+
+  // ─── 29. Tutorial ──────────────────────────────────────────────
+  server.prompt(
+    "cc-tutorial",
+    "Guided onboarding tutorial — builds a grocery list app through 9 steps, teaching ODRC, knowledge trees, lenses, jobs, and messaging.",
+    {},
+    async () => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: SKILL_TUTORIAL,
+        },
+      }],
+    })
+  );
+
+  // ─── 30. Code Startup Checklist ────────────────────────────────
+  server.prompt(
+    "cc-code-startup-checklist",
+    "Cold start sequence for Code — messages, documents, jobs, build protocol loading.",
+    {},
+    async () => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: SKILL_CODE_STARTUP_CHECKLIST,
+        },
+      }],
+    })
+  );
 }
 
 
@@ -1278,6 +1310,21 @@ Call: job
   linesRemoved: [number]
   conceptsAddressed: ["conceptId1", "conceptId2", ...]
 \`\`\`
+
+### Step 6c: Notify Chat
+
+After completing the job, send a message to Chat so it knows the build is finished:
+
+\`\`\`
+Call: document
+  action: "send"
+  to: "claude-chat"
+  createdBy: "claude-code"
+  content: "Job completed: [job title]. Status: [completed/failed]. Summary: [brief summary of what was built and any issues]."
+  metadata: {"jobId": "[jobId]", "appId": "[appId]", "ideaId": "[ideaId]", "status": "[completed/failed]"}
+\`\`\`
+
+This enables the bidirectional handoff — Chat will see the message via piggyback notifications on its next tool call, or on its next startup.
 
 ## Step 7: Retrospective Check
 
@@ -3274,6 +3321,7 @@ Then load specific sections via \`section="## Section Name"\`.
 | Trigger | Skill(s) to Read |
 |---|---|
 | Cold start (new conversation) | cc-startup-checklist |
+| "start tutorial" | cc-tutorial |
 | "start ideation [idea/app]" | cc-odrc-framework, cc-session-structure |
 | "run [name] lens" | cc-lens-{name} (see inventory below) |
 | "start exploration" | cc-mode-exploration |
@@ -3346,7 +3394,9 @@ On cold start, project instructions trigger \`cc-startup-checklist\`. The checkl
 | 25 | cc-skill-router | This skill — routing table for all skill loading |
 | 26 | cc-job-creation-protocol | How Chat creates well-formed build jobs for Code |
 | 27 | cc-retro-journal | Shared learning journal — read on startup, write on genuine discovery |
-| 28 | cc-startup-checklist | Mandatory cold start sequence for Chat — profile, jobs, messages, session, context |`;
+| 28 | cc-startup-checklist | Mandatory cold start sequence for Chat — profile, jobs, messages, session, context |
+| 29 | cc-tutorial | Guided onboarding tutorial — builds a grocery list app through 9 steps |
+| 30 | cc-code-startup-checklist | Cold start sequence for Code — messages, jobs, documents, session |`;
 
 
 const SKILL_JOB_CREATION_PROTOCOL = `# Job Creation Protocol — How Chat Creates Jobs for Code
@@ -3446,7 +3496,7 @@ After creating the job, send a message to Code:
 Call: document
   action: "send"
   to: "claude-code"
-  type: "message"
+  createdBy: "claude-chat"
   content: "New [jobType] job posted: [title]. Job ID: [jobId]. Ready for claim."
 \\\`\\\`\\\`
 
@@ -3519,6 +3569,11 @@ Background polling scripts outlived sessions — 3 scripts at 10s intervals, ~1M
 
 const SKILL_STARTUP_CHECKLIST = `# Startup Checklist
 
+**Your surface identity: \\\`claude-chat\\\`**
+Use this as your \\\`createdBy\\\` when calling \\\`document(action="send")\\\` or \\\`job(action="start")\\\`. Use it as \\\`to\\\` when calling \\\`document(action="receive")\\\`.
+
+**Piggyback message notifications:** Every MCP tool response may include \\\`_pendingMessages\\\` metadata listing unread messages for all surfaces. Each message has \\\`to\\\`, \\\`from\\\`, and \\\`subject\\\` fields. If you see messages where \\\`to: "claude-chat"\\\`, call \\\`document(action="receive", to="claude-chat", summary=true)\\\` to get envelopes first (saves tokens). Then use \\\`document(action="get", docId=...)\\\` to read full content only for messages you need. Present relevant ones to the user.
+
 You MUST complete every step below before responding to the user's first message. Do not skip steps. Do not address the user's request until all blockers are cleared.
 
 ## Step 1: Profile Check
@@ -3540,7 +3595,21 @@ If \\\`true\\\` — **BLOCKER. Stop everything.**
 5. Call \\\`session(action="profile", clearInstructionsDirty=true)\\\` to clear the flag.
 6. Only then continue to Step 2.
 
-### 1b. needsAttention
+### 1b. showTutorial
+
+If \\\`true\\\` — the user hasn't seen the onboarding tutorial yet.
+
+After completing ALL other startup steps (2-6), present a widget BEFORE the opening message:
+
+> **Welcome to Command Center!** Want a hands-on tutorial that walks you through the full workflow by building a real app? (~20 min)
+>
+> **Yes, let's go!** / **Skip for now**
+
+- Either choice: call \\\`session(action="profile", clearShowTutorial=true)\\\` to clear the flag
+- "Yes" → load \\\`cc-tutorial\\\` skill and begin the tutorial flow
+- "Skip" → tell the user they can say "start tutorial" anytime, then continue with the normal opening message
+
+### 1c. needsAttention
 
 If \\\`true\\\` — note it, but not a blocker. Mention it to the user after startup completes.
 
@@ -3659,6 +3728,7 @@ At cycle 3+, strongly recommend a fresh chat.
 
 | Trigger | Skill(s) to Load |
 |---|---|
+| "start tutorial" | cc-tutorial |
 | "start ideation [idea/app]" | cc-odrc-framework, cc-session-structure |
 | "run [name] lens" | cc-lens-{name} |
 | "start exploration" | cc-mode-exploration |
@@ -3674,6 +3744,472 @@ Consider cc-retro-journal for genuine discoveries (delegation insights, process 
 
 ### Output Rules
 Never read docx/pptx/xlsx SKILL.md files. Output reports as markdown (.md). No Word docs unless explicitly requested.`;
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Skill 29: Tutorial — Guided onboarding through 9 steps
+// ═══════════════════════════════════════════════════════════════════════
+
+const SKILL_TUTORIAL = `# CC Tutorial — Guided Onboarding
+
+You are running a guided tutorial that walks the user through the full Command Center workflow by building a real grocery list app. This is a CONVERSATION GUIDE — be natural and fluid, not robotic. Weave feature explanations into the conversation organically.
+
+## Key Principles
+
+- Each step creates real CC artifacts (ideas, concepts, jobs)
+- 5 user decision points shape the final app
+- Feature callouts woven conversationally, not in formatted boxes
+- Track progress via session metadata: \\\`session(action="update", tutorialStep=[1-9])\\\`
+- Resume detection: if a "Smart Grocery List" idea already exists with concepts, offer "Resume where you left off?" or "Start fresh?"
+
+## Step 1 — Welcome
+
+Brief intro to CC's value proposition: CC helps you think through ideas rigorously before building. It captures decisions, constraints, and open questions so your build specs are complete and your code agent knows exactly what to build.
+
+Mention: "By the way, CC supports two presentation modes — interactive (with widgets and visual elements) and CLI (text-only). You're currently in interactive mode."
+
+Transition: "Let's build something real. How about a smart grocery list app?"
+
+\\\`session(action="update", tutorialStep=1)\\\`
+
+## Step 2 — Create the Idea
+
+Create the idea:
+
+\\\`\\\`\\\`
+Call: idea
+  action: "create"
+  name: "Smart Grocery List"
+  description: "A grocery list app that auto-categorizes items by store department and sorts them by your preferred walking route."
+\\\`\\\`\\\`
+
+Tell the user what just happened: "I created an Idea in CC. Ideas are how CC tracks what you're building — they hold all the decisions, constraints, and open questions for a feature. You can see all your ideas anytime by saying 'show my ideas'."
+
+Mention the idea lifecycle: ideas start as standalone, then can be linked to an app when ready to build.
+
+\\\`session(action="update", tutorialStep=2)\\\`
+
+## Step 3 — Validation (First Decision Point)
+
+**USER DECISION: Which store?**
+
+Present a widget with common grocery store options:
+- Trader Joe's
+- Whole Foods
+- Kroger / Ralphs
+- Target
+- Costco
+
+After the user picks, create a DECISION concept:
+
+\\\`\\\`\\\`
+Call: concept
+  action: "create"
+  type: "DECISION"
+  content: "Target store: [user's choice]. The app's department taxonomy and aisle layout will be modeled after this store's typical organization."
+  ideaOrigin: [ideaId]
+  scopeTags: ["ux", "data-model"]
+\\\`\\\`\\\`
+
+Then create an OPEN question:
+
+\\\`\\\`\\\`
+Call: concept
+  action: "create"
+  type: "OPEN"
+  content: "Can we reliably categorize grocery items into store departments? What taxonomy should we use?"
+  ideaOrigin: [ideaId]
+  scopeTags: ["data-model", "research"]
+\\\`\\\`\\\`
+
+Explain naturally: "I just created two things in CC — a DECISION and an OPEN. CC uses four concept types: OPENs are unresolved questions, DECISIONs are choices we've made, RULEs are things that must never be violated, and CONSTRAINTs are external realities we can't change. Together they're called ODRC — it's how CC keeps your thinking organized. You can always say 'show my concepts' to see them."
+
+\\\`session(action="update", tutorialStep=3)\\\`
+
+## Step 4 — Research
+
+Do a web search for grocery categorization data:
+
+\\\`\\\`\\\`
+Web search: "grocery item categorization taxonomy dataset departments aisles"
+\\\`\\\`\\\`
+
+Create a knowledge tree and node with the findings:
+
+\\\`\\\`\\\`
+Call: knowledge_tree
+  action: "create_tree"
+  name: "Grocery Categorization Research"
+  description: "Research into grocery item taxonomies and department structures"
+
+Call: knowledge_node
+  action: "create"
+  treeId: [treeId]
+  question: "What taxonomy exists for categorizing grocery items by department?"
+  content: "[Summarize findings — mention Instacart dataset: 134 aisles, 21 departments, ~50K products. Note that a simplified version (15-20 departments) would work well for our app.]"
+  trust: "credible"
+  keyFinding: "Instacart's public dataset provides a proven taxonomy: 21 departments covering all grocery categories"
+  sources: "[JSON array with source URLs]"
+\\\`\\\`\\\`
+
+Now transition the OPEN to a DECISION with evidence:
+
+\\\`\\\`\\\`
+Call: concept
+  action: "transition"
+  conceptId: [the OPEN concept ID]
+  newType: "DECISION"
+
+Call: concept
+  action: "supersede"
+  conceptId: [the now-DECISION concept ID]
+  newContent: "Use a simplified Instacart-derived taxonomy with ~20 departments. Items will be categorized using keyword matching against department names and common items."
+
+Call: concept
+  action: "add_knowledge_ref"
+  conceptId: [conceptId]
+  nodeId: [nodeId]
+  treeId: [treeId]
+  treeName: "Grocery Categorization Research"
+  relationship: "supports"
+\\\`\\\`\\\`
+
+Explain: "I just did something important — I turned that open question into a decision, backed by research. CC tracks this provenance so you always know WHY a decision was made. Knowledge trees store your research so it's reusable across ideas. Say 'show research' anytime to see what's been collected."
+
+### Competitive Quick-Look
+
+Before moving to UX, do a brief competitive callout: "Before we design the UX, let's see what's already out there. Google Keep is the obvious baseline — it handles lists but has zero grocery intelligence. No auto-categorization, no aisle sorting. That's our differentiation."
+
+Create a DECISION capturing competitive positioning:
+
+\\\`\\\`\\\`
+Call: concept
+  action: "create"
+  type: "DECISION"
+  content: "Google Keep as UX baseline — match its simplicity for list management, beat it on smart categorization and store-aware aisle sorting."
+  ideaOrigin: [ideaId]
+  scopeTags: ["competitive", "ux"]
+\\\`\\\`\\\`
+
+Explain lenses: "What we just did is a quick competitive lens — focused analysis of what's already out there and where we can win. CC has a full set of lenses you can run during any session: competitive, technical, economics, accessibility, and more. Say 'run competitive lens' in a real session for a deeper analysis."
+
+\\\`session(action="update", tutorialStep=4)\\\`
+
+## Step 5 — UX Lens (Two Decision Points)
+
+**USER DECISION: App name**
+
+Ask: "What should we call your grocery app? Something fun like 'CartSmart' or 'AislePilot'? Or type your own name."
+
+Create a DECISION with their choice.
+
+**USER DECISION: Store walk order**
+
+Present a widget:
+- Perimeter first (produce → deli → dairy → meat, then center aisles)
+- Aisle by aisle (systematic left-to-right sweep)
+- Wander freely (no specific order — group by department only)
+
+Create a DECISION with their choice.
+
+Mention: "This is another lens in action — the UX lens. Each lens brings a different perspective to the same idea."
+
+\\\`session(action="update", tutorialStep=5)\\\`
+
+## Step 6 — Technical Lens (Two Decision Points)
+
+**USER DECISION: Pick 2 features**
+
+Present a multi-select widget:
+- ⭐ Favorites / frequent items
+- 🔢 Quantity tracking
+- 💰 Budget estimate per trip
+- 👥 Shared list (family sync)
+
+Create DECISIONs for the two selected features.
+
+Create a CONSTRAINT:
+
+\\\`\\\`\\\`
+Call: concept
+  action: "create"
+  type: "CONSTRAINT"
+  content: "Tutorial app scope limit: core categorization + sorting + 2 optional features. No external APIs, no authentication, local storage only."
+  ideaOrigin: [ideaId]
+  scopeTags: ["architecture", "scope"]
+\\\`\\\`\\\`
+
+Explain: "That CONSTRAINT is different from a DECISION — it's an external reality we're working within. The tutorial app needs to be buildable in one shot, so we're capping scope. In real projects, constraints come from things like budget, timeline, API limitations, or platform requirements."
+
+**USER DECISION: Visual theme**
+
+Present a widget:
+- 🌙 Clean light
+- 🌑 Dark mode
+- 🏪 Store-branded colors (uses the selected store's palette)
+- 🎨 Colorful / playful
+
+Create a DECISION with their choice.
+
+If the user selected "Budget estimate" as one of their features, call it out: "Nice pick on the budget feature — that'll add real utility. We'll track price estimates per item and show a running trip total."
+
+\\\`session(action="update", tutorialStep=6)\\\`
+
+## Step 7 — Spec Build
+
+Compile all decisions into a job. First, read back all concepts:
+
+\\\`\\\`\\\`
+Call: list_concepts
+  grouped: true
+  ideaId: [ideaId]
+\\\`\\\`\\\`
+
+Then create the job:
+
+\\\`\\\`\\\`
+Call: job
+  action: "start"
+  appId: "tutorial-grocery-app"
+  ideaId: [ideaId]
+  title: "Build Smart Grocery List App"
+  createdBy: "claude-chat"
+  instructions: "[Compile all decisions into a build spec — include store name, app name, walk order, 2 selected features, theme, department taxonomy, scope constraints. Specify: single HTML file, React via CDN, local storage, static Instacart-derived taxonomy embedded, no external APIs.]"
+\\\`\\\`\\\`
+
+Show the user what's in the spec — summarize the key decisions and how they map to what will be built.
+
+Mention: "This is what CC calls a 'job' — it's the handoff artifact between Chat (where we think) and Code (where we build). The spec captures every decision we made so Code knows exactly what to build. CC can also generate a CLAUDE.md file that gives Code full project context — say 'generate CLAUDE.md' in a real session."
+
+\\\`session(action="update", tutorialStep=7)\\\`
+
+## Step 8 — Handoff to Code
+
+Send a message to Code:
+
+\\\`\\\`\\\`
+Call: document
+  action: "send"
+  to: "claude-code"
+  createdBy: "claude-chat"
+  content: "Tutorial job ready for build. Job ID: [jobId]. App: tutorial-grocery-app. This is the onboarding tutorial — build the grocery list app per the job spec."
+  metadata: {"jobId": "[jobId]", "appId": "tutorial-grocery-app", "ideaId": "[ideaId]", "tutorial": true}
+\\\`\\\`\\\`
+
+Tell the user:
+
+"I've sent the build spec to Claude Code. Here's what to do next:
+
+1. Open Claude Code (in your terminal or IDE)
+2. Say: **'Chat sent a message'**
+3. Code will pick up the job, read the spec, and build your grocery app
+
+When Code is done, it'll send a message back. Come back here and say **'Code sent a message'** — I'll review the build against our spec."
+
+Explain the messaging system: "CC uses a message queue so Chat and Code can communicate asynchronously. Neither needs to be running at the same time — messages wait until the other picks them up."
+
+\\\`session(action="update", tutorialStep=8)\\\`
+
+## Step 9 — Review (triggered when user returns)
+
+When the user comes back and says "Code sent a message" or similar:
+
+\\\`\\\`\\\`
+Call: document
+  action: "receive"
+  to: "claude-chat"
+\\\`\\\`\\\`
+
+Read Code's completion message. Then review the build against the spec:
+
+- Check each decision is reflected in the app
+- Note anything Code flagged or deviated from
+- If the job included a deploy URL or file path, share it with the user
+
+Tell the user: "This is the maker/checker pattern — Chat creates the spec (maker), Code builds it, then Chat reviews (checker). This ensures nothing gets lost between thinking and building."
+
+\\\`session(action="update", tutorialStep=9)\\\`
+
+## Completion
+
+Summarize what the user learned:
+1. **Ideas** — How CC tracks what you're building
+2. **ODRC** — The four concept types that organize your thinking
+3. **Knowledge trees** — Research storage with evidence linking
+4. **Lenses** — Focused analysis tools for different perspectives
+5. **Jobs** — The handoff between Chat and Code
+6. **Messages** — Async communication between agents
+7. **Maker/checker** — The review cycle that catches gaps
+8. **Cleanup** — How to clean up artifacts when you're done with an idea
+
+### Cleanup
+
+Present a cleanup choice widget:
+- 🧹 Clean up (recommended) — remove all tutorial artifacts
+- 📦 Keep everything — tutorial artifacts stay as reference
+
+If user picks "Keep everything": say "Your tutorial idea, concepts, research, and grocery app will stay in your project as reference. You can always delete them later." Then present the closing widget below.
+
+If user picks "Clean up":
+
+1. Create a cleanup job for Code:
+
+\\\`\\\`\\\`
+Call: job
+  action: "start"
+  appId: "tutorial-grocery-app"
+  title: "Tutorial Cleanup"
+  createdBy: "claude-chat"
+  jobType: "cleanup"
+  instructions: "Delete all tutorial artifacts: [list the idea ID, all concept IDs created during the tutorial, the knowledge tree ID, the build job ID, and grocery-app.html from the GitHub Pages repo]. Complete the job when done."
+\\\`\\\`\\\`
+
+2. Send message to Code:
+
+\\\`\\\`\\\`
+Call: document
+  action: "send"
+  to: "claude-code"
+  createdBy: "claude-chat"
+  content: "Tutorial cleanup job ready. Delete all tutorial artifacts per the job spec."
+\\\`\\\`\\\`
+
+3. Tell the user: "I've queued a cleanup job. Next time you're in Code, say 'Chat sent a message' and it'll handle the rest."
+
+Then present the closing widget below.
+
+Present a closing widget:
+- 🚀 Start my own project
+- 📋 Explore CC commands
+- 👍 I'm good for now
+
+If "Explore CC commands" — show a quick reference:
+
+| Command | What it does |
+|---------|-------------|
+| "show my ideas" | List all your ideas |
+| "show my concepts" | Show ODRC concepts for current idea |
+| "show research" | Browse knowledge trees |
+| "start ideation [topic]" | Begin a new ideation session |
+| "run [name] lens" | Focused analysis (technical, UX, economics, etc.) |
+| "create draft job" | Package decisions into a build spec |
+| "generate CLAUDE.md" | Create project instructions for Code |
+| "start tutorial" | Replay this tutorial |
+
+If "Start my own project" — transition directly into a new ideation session.`;
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Skill 30: Code Startup Checklist — Cold start for Claude Code
+// ═══════════════════════════════════════════════════════════════════════
+
+const SKILL_CODE_STARTUP_CHECKLIST = `# Code Startup Checklist
+
+**Your surface identity: \\\`claude-code\\\`**
+Use this as your \\\`createdBy\\\` when calling \\\`document(action="send")\\\` or \\\`job(action="start")\\\`. Use it as \\\`to\\\` when calling \\\`document(action="receive")\\\`.
+
+**Piggyback message notifications:** Every MCP tool response may include \\\`_pendingMessages\\\` metadata listing unread messages for all surfaces. Each message has \\\`to\\\`, \\\`from\\\`, and \\\`subject\\\` fields. If you see messages where \\\`to: "claude-code"\\\`, call \\\`document(action="receive", to="claude-code", summary=true)\\\` to get envelopes first (saves tokens). Then use \\\`document(action="get", docId=...)\\\` to read full content only for messages you need to act on.
+
+You MUST complete every step below when starting a new session. This is the Code-side equivalent of Chat's cc-startup-checklist.
+
+## Step 1: Check for Messages
+
+\\\`\\\`\\\`
+Call: document
+  action: "receive"
+  to: "claude-code"
+\\\`\\\`\\\`
+
+Pick up any pending messages from Chat. These may contain:
+- Build instructions or context
+- Tutorial handoffs
+- Review requests or follow-ups
+
+If messages are found, acknowledge each one:
+
+\\\`\\\`\\\`
+Call: document
+  action: "ack"
+  docId: [each message ID]
+\\\`\\\`\\\`
+
+## Step 2: Check for Pending Documents
+
+\\\`\\\`\\\`
+Call: document
+  action: "list"
+  status: "pending"
+\\\`\\\`\\\`
+
+Look for pending documents that need local delivery:
+- \\\`claude-md\\\` type → deliver to project root as CLAUDE.md
+- \\\`spec\\\` type → deliver to the specified targetPath
+- \\\`project-instructions\\\` type → notify user to update their project settings
+
+For each document that should be delivered locally:
+
+\\\`\\\`\\\`
+Call: document
+  action: "deliver"
+  docId: [docId]
+\\\`\\\`\\\`
+
+## Step 3: Check for Draft Jobs
+
+\\\`\\\`\\\`
+Call: job
+  action: "list"
+  status: "draft"
+  limit: 5
+\\\`\\\`\\\`
+
+If draft jobs exist:
+- Show the user what's available (title, app, creation date)
+- If only one draft job, offer to claim it immediately
+- If multiple, let the user choose
+
+To claim a job:
+
+\\\`\\\`\\\`
+Call: job
+  action: "claim"
+  jobId: [jobId]
+\\\`\\\`\\\`
+
+Also check for active jobs (in case of session recovery):
+
+\\\`\\\`\\\`
+Call: job
+  action: "list"
+  status: "active"
+  limit: 5
+\\\`\\\`\\\`
+
+## Step 4: Check for Active Jobs (Recovery)
+
+If there are active jobs claimed by this agent, you may be resuming a build. Check the job details and continue where you left off.
+
+## Step 5: Load Build Protocol
+
+If you have a job to work on, load the build protocol:
+
+\\\`\\\`\\\`
+Call: skill
+  action: "get"
+  skillName: "cc-build-protocol"
+\\\`\\\`\\\`
+
+Follow the build protocol from the appropriate step based on the job's current state.
+
+## Step 6: Present Status
+
+Tell the user what you found:
+- Messages received (if any)
+- Documents delivered (if any)
+- Jobs available or in progress
+- Ready state
+
+If no work is pending, let the user know you're ready for instructions.`;
 
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -3715,6 +4251,8 @@ const SKILL_REGISTRY: SkillEntry[] = [
   { name: "cc-job-creation-protocol", description: "How Chat creates well-formed build jobs for Code", content: SKILL_JOB_CREATION_PROTOCOL },
   { name: "cc-retro-journal", description: "Shared learning journal — genuine discoveries from Chat and Code that change future behavior", content: SKILL_RETRO_JOURNAL },
   { name: "cc-startup-checklist", description: "Mandatory cold start sequence for Chat — profile check, in-flight work, messages, session orientation, context loading", content: SKILL_STARTUP_CHECKLIST },
+  { name: "cc-tutorial", description: "Guided onboarding tutorial — builds a grocery list app through 9 steps, teaching ODRC, knowledge trees, lenses, jobs, and messaging", content: SKILL_TUTORIAL },
+  { name: "cc-code-startup-checklist", description: "Cold start sequence for Code — messages, documents, jobs, build protocol loading", content: SKILL_CODE_STARTUP_CHECKLIST },
 ];
 
 /** Get list of all skill names and descriptions */
