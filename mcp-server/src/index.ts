@@ -125,6 +125,7 @@ app.get("/", (_req: Request, res: Response) => {
   res.json({
     name: "cc-mcp-server",
     version: "1.0.0",
+    environment: process.env.BASE_URL?.includes("-test-") ? "test" : "prod",
     description: "Command Center MCP Server — ODRC concept management for Claude.ai",
     status: "ok",
   });

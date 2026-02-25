@@ -4,15 +4,37 @@
 # ═══════════════════════════════════════════════════════════════
 #
 # Usage:
-#   bash deploy.sh              # Build + deploy
+#   bash deploy.sh              # Build + deploy to TEST (default)
+#   bash deploy.sh --prod       # Build + deploy to PRODUCTION (confirmation required)
 #   bash deploy.sh --build-only # Just build TypeScript, don't deploy
+#
+# ── ENVIRONMENTS ────────────────────────────────────────────────
+#
+# TEST  (cc-mcp-server-test) — Dave validates MCP server code changes.
+#       Max 1 instance. Not connected to Claude.ai OAuth.
+#       Only Dave's Claude Code connects here during MCP dev.
+#
+# PROD  (cc-mcp-server) — All users (Claude.ai + Claude Code).
+#       Max 3 instances. Connected to Claude.ai OAuth.
+#       Promote from test after validation.
+#
+# Both environments share the same Firebase RTDB (word-boxing).
+#
+# ── PROMOTION WORKFLOW ──────────────────────────────────────────
+#
+#   1. bash deploy.sh              # deploy to test
+#   2. bash e2e-test.sh            # run tests against test
+#   3. Smoke test from Claude Code  # .mcp.json cc-mcp-test entry
+#   4. bash deploy.sh --prod       # promote to prod (confirmation prompt)
+#   5. bash e2e-test.sh --prod     # optional: verify prod
 #
 # ── SETUP CHECKLIST (first time or after issues) ──────────────
 #
 # 1. Deploy:
-#      bash deploy.sh
+#      bash deploy.sh              # test
+#      bash deploy.sh --prod       # prod
 #
-# 2. Claude.ai (Chat) — Connect MCP integration:
+# 2. Claude.ai (Chat) — Connect MCP integration (PROD only):
 #    a. Go to Claude.ai → Settings → Integrations → Add MCP Server
 #    b. Enter URL: https://cc-mcp-server-300155036194.us-central1.run.app/mcp
 #    c. It will open a sign-in page — use Google Sign-In or paste your Firebase UID
@@ -26,13 +48,16 @@
 #        "cc-mcp": {
 #          "type": "http",
 #          "url": "https://cc-mcp-server-300155036194.us-central1.run.app/mcp",
-#          "headers": {
-#            "Authorization": "Bearer cc_{uid}_{secret}"
-#          }
+#          "headers": { "Authorization": "Bearer cc_{uid}_{secret}" }
+#        },
+#        "cc-mcp-test": {
+#          "type": "http",
+#          "url": "https://cc-mcp-server-test-300155036194.us-central1.run.app/mcp",
+#          "headers": { "Authorization": "Bearer cc_{uid}_{secret}" }
 #        }
 #      }
 #    }
-#    The API key is generated in CC app and stored as SHA-256 hash in Firebase.
+#    Same API key works on both (shared Firebase). Only Dave needs cc-mcp-test.
 #
 # ── TROUBLESHOOTING ───────────────────────────────────────────
 #
@@ -70,27 +95,65 @@
 
 set -e
 
-SERVICE="cc-mcp-server"
+# ── Environment Selection ─────────────────────────────────────
+# Default: test. Use --prod for production.
+ENV="test"
+BUILD_ONLY=false
+for arg in "$@"; do
+  case $arg in
+    --prod) ENV="prod" ;;
+    --build-only) BUILD_ONLY=true ;;
+  esac
+done
+
 REGION="us-central1"
 PROJECT_NUMBER="300155036194"
-BASE_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 FIREBASE_WEB_API_KEY="AIzaSyBQVwn8vOrFTzLlm2MYIPBwgZV2xR9AuhM"
+
+if [ "$ENV" = "prod" ]; then
+  SERVICE="cc-mcp-server"
+  MAX_INSTANCES=3
+else
+  SERVICE="cc-mcp-server-test"
+  MAX_INSTANCES=1
+fi
+
+BASE_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 
 # Build TypeScript first
 echo "Building TypeScript..."
 npm run build
 echo "Build complete."
 
-if [ "$1" = "--build-only" ]; then
+if [ "$BUILD_ONLY" = true ]; then
   echo "Build-only mode — skipping deploy."
   exit 0
 fi
 
+# Production confirmation gate
+if [ "$ENV" = "prod" ]; then
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════╗"
+  echo "║  ⚠️  DEPLOYING TO PRODUCTION                             ║"
+  echo "║  Service: cc-mcp-server                                  ║"
+  echo "║  This affects ALL users (Claude.ai + Claude Code)        ║"
+  echo "║  OAuth tokens will be wiped — users must reconnect       ║"
+  echo "╚══════════════════════════════════════════════════════════╝"
+  echo ""
+  read -p "Type 'yes' to confirm production deploy: " confirm
+  if [ "$confirm" != "yes" ]; then
+    echo "Aborted."
+    exit 1
+  fi
+fi
+
 echo ""
 echo "Deploying to Cloud Run..."
-echo "  Service:  $SERVICE"
-echo "  Region:   $REGION"
-echo "  BASE_URL: $BASE_URL"
+echo "  Environment: $ENV"
+echo "  Service:     $SERVICE"
+echo "  Region:      $REGION"
+echo "  BASE_URL:    $BASE_URL"
+echo "  Max instances: $MAX_INSTANCES"
 echo ""
 
 gcloud run deploy "$SERVICE" \
@@ -102,10 +165,10 @@ gcloud run deploy "$SERVICE" \
   --memory=256Mi \
   --timeout=60 \
   --min-instances=0 \
-  --max-instances=3
+  --max-instances=$MAX_INSTANCES
 
 echo ""
-echo "Deploy complete."
+echo "Deploy complete ($ENV)."
 echo ""
 
 # Verify OAuth metadata is correct
@@ -122,4 +185,9 @@ else
 fi
 
 echo ""
-echo "Ready. If Claude.ai shows connection errors, disconnect and reconnect the MCP integration."
+if [ "$ENV" = "prod" ]; then
+  echo "Ready. If Claude.ai shows connection errors, disconnect and reconnect the MCP integration."
+else
+  echo "Test deploy ready. Validate with: bash e2e-test.sh"
+  echo "When satisfied, promote with: bash deploy.sh --prod"
+fi

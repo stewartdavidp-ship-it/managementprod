@@ -1,10 +1,24 @@
 #!/bin/bash
 # E2E Test Suite for CC MCP Server (10 tools)
 # Tests all actions, cross-tool tracking, state machine, and edge cases.
+#
+# Usage:
+#   bash e2e-test.sh          # Run against TEST (default)
+#   bash e2e-test.sh --prod   # Run against PRODUCTION
 
 set -e
 
-URL="https://cc-mcp-server-300155036194.us-central1.run.app/mcp"
+# ── Environment Selection ─────────────────────────────────────
+ENV="test"
+for arg in "$@"; do
+  case $arg in --prod) ENV="prod" ;; esac
+done
+
+if [ "$ENV" = "prod" ]; then
+  URL="https://cc-mcp-server-300155036194.us-central1.run.app/mcp"
+else
+  URL="https://cc-mcp-server-test-300155036194.us-central1.run.app/mcp"
+fi
 AUTH="Authorization: Bearer cc_oUt4ba0dYVRBfPREqoJ1yIsJKjr1_wxityxnkh8pqw1vu7ztmp"
 PASS=0
 FAIL=0
