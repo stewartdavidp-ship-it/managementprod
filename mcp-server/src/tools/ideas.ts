@@ -7,6 +7,9 @@ import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 
 const IDEA_TYPES = ["base", "addon"] as const;
 const IDEA_STATUSES = ["active", "graduated", "archived", "completed"] as const;
+const IDEA_TYPE_CLASSES = ["primary", "auxiliary", "placeholder"] as const;
+const INTENTIONS = ["new", "add", "fix"] as const;
+const PRIMARY_OUTPUTS = ["code", "presentation", "spreadsheet", "document", "analysis"] as const;
 
 // ─── list_ranked cache ───
 // Avoids 4 full-collection Firebase reads on rapid repeat calls.
@@ -20,10 +23,10 @@ export function registerIdeaTools(server: McpServer): void {
   server.tool(
     "idea",
     `Idea lifecycle tool. Actions:
-  - "list": List ideas. Optional: appId filter (sorts by sequence when filtered), status filter. By default excludes completed and archived ideas.
+  - "list": List ideas. Optional: appId, status, ideaType, intention, primaryOutput, initiative filters. Sorts by sequence when appId filtered. By default excludes completed and archived ideas.
   - "get": Get a single idea by ID. Requires ideaId. Returns full record.
-  - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId, externalProjectKey.
-  - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status, externalProjectKey, externalRefs.
+  - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId, externalProjectKey, ideaType, intention, primaryOutput, initiative.
+  - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status, externalProjectKey, externalRefs, ideaType, intention, primaryOutput, initiative.
   - "graduate": Link idea to an app. Requires ideaId, appId. Auto-calculates sequence and type.
   - "archive": Archive an idea. Requires ideaId.
   - "get_active": Get the latest active idea for an app. Requires appId.
@@ -39,6 +42,10 @@ export function registerIdeaTools(server: McpServer): void {
       type: z.enum(IDEA_TYPES).optional().describe("Idea type: base or addon (optional for create, default: base)"),
       parentIdeaId: z.string().optional().describe("Parent idea ID for addon ideas (optional for create)"),
       status: z.enum(IDEA_STATUSES).optional().describe("For update: new status. For list: filter by status (overrides default exclusion of completed/archived)."),
+      ideaType: z.enum(IDEA_TYPE_CLASSES).optional().describe("Idea classification: primary (core platform), auxiliary (supporting/maintenance), or placeholder (parked/future). Default: primary on create. Also used as list filter."),
+      intention: z.enum(INTENTIONS).optional().describe("What this idea intends to do: new (greenfield), add (extend existing), fix (correct/repair). Optional for create/update. Also used as list filter."),
+      primaryOutput: z.enum(PRIMARY_OUTPUTS).optional().describe("Primary deliverable type: code, presentation, spreadsheet, document, or analysis. Optional for create/update. Also used as list filter."),
+      initiative: z.string().optional().describe("Freeform initiative label for grouping related ideas (e.g., 'Q1 platform hardening'). Optional for create/update. Also used as list filter (case-insensitive exact match)."),
       externalProjectKey: z.string().optional().describe("External project identifier, e.g. Jira project key 'ENG' or Linear team ID (optional for create/update)"),
       externalRefs: z.array(z.object({
         system: z.string().describe("External system identifier (e.g., 'jira', 'linear', 'github')"),
@@ -52,7 +59,7 @@ export function registerIdeaTools(server: McpServer): void {
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, externalProjectKey, externalRefs, limit, offset }) => {
+    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, ideaType, intention, primaryOutput, initiative, externalProjectKey, externalRefs, limit, offset }) => {
       resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
@@ -76,6 +83,18 @@ export function registerIdeaTools(server: McpServer): void {
             .filter((i) => i.appId === appId)
             .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
         }
+        if (ideaType) {
+          ideas = ideas.filter((i) => i.ideaType === ideaType);
+        }
+        if (intention) {
+          ideas = ideas.filter((i) => i.intention === intention);
+        }
+        if (primaryOutput) {
+          ideas = ideas.filter((i) => i.primaryOutput === primaryOutput);
+        }
+        if (initiative) {
+          ideas = ideas.filter((i) => i.initiative && i.initiative.toLowerCase() === initiative.toLowerCase());
+        }
 
         const total = ideas.length;
         const skip = offset && offset > 0 ? offset : 0;
@@ -88,6 +107,10 @@ export function registerIdeaTools(server: McpServer): void {
           name: i.name,
           status: i.status,
           type: i.type,
+          ideaType: i.ideaType || null,
+          intention: i.intention || null,
+          primaryOutput: i.primaryOutput || null,
+          initiative: i.initiative || null,
           appId: i.appId,
           sequence: i.sequence,
           parentIdeaId: i.parentIdeaId,
@@ -122,7 +145,7 @@ export function registerIdeaTools(server: McpServer): void {
         if (!name) return withResponseSize({ content: [{ type: "text", text: "action 'create' requires name" }], isError: true });
         if (!description) return withResponseSize({ content: [{ type: "text", text: "action 'create' requires description" }], isError: true });
 
-        const ideaType = type || "base";
+        const ideaTypeChain = type || "base";
 
         // Calculate sequence if linked to an app
         let sequence = 1;
@@ -141,7 +164,8 @@ export function registerIdeaTools(server: McpServer): void {
           id: ref.key,
           name,
           description,
-          type: ideaType,
+          type: ideaTypeChain,
+          ideaType: ideaType || "primary",
           appId: appId || null,
           parentIdeaId: parentIdeaId || null,
           sequence,
@@ -149,6 +173,9 @@ export function registerIdeaTools(server: McpServer): void {
           createdAt: now,
           updatedAt: now,
         };
+        if (intention) idea.intention = intention;
+        if (primaryOutput) idea.primaryOutput = primaryOutput;
+        if (initiative) idea.initiative = initiative;
         if (externalProjectKey) idea.externalProjectKey = externalProjectKey;
         await ref.set(idea);
 
@@ -179,6 +206,10 @@ export function registerIdeaTools(server: McpServer): void {
         if (name !== undefined) updates.name = name;
         if (description !== undefined) updates.description = description;
         if (status !== undefined) updates.status = status;
+        if (ideaType !== undefined) updates.ideaType = ideaType;
+        if (intention !== undefined) updates.intention = intention;
+        if (primaryOutput !== undefined) updates.primaryOutput = primaryOutput;
+        if (initiative !== undefined) updates.initiative = initiative;
         if (externalProjectKey !== undefined) updates.externalProjectKey = externalProjectKey;
         if (externalRefs !== undefined) updates.externalRefs = externalRefs;
 
@@ -369,6 +400,10 @@ export function registerIdeaTools(server: McpServer): void {
             id: ideaId2,
             name: idea.name,
             appId: idea.appId || null,
+            ideaType: idea.ideaType || null,
+            intention: idea.intention || null,
+            primaryOutput: idea.primaryOutput || null,
+            initiative: idea.initiative || null,
             tier,
             tierLabel: TIER_LABELS[tier],
             neglected,
