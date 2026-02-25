@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { initFirebase } from "./firebase.js";
 import { createServer } from "./server.js";
 import { createOAuthRouter } from "./auth/oauth.js";
-import { validateAccessToken, validateApiKey } from "./auth/store.js";
+import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
 import { requestContext, setContextEstimate, setContextPerSurface, setPendingMessages, type PendingMessagesInfo } from "./context.js";
 import { getActiveSessionId, getPendingContextAccumulation, getPendingContextPerSurface } from "./tools/sessions.js";
 import { getSessionRef, getDocumentsRef } from "./firebase.js";
@@ -134,7 +134,7 @@ app.get("/", (_req: Request, res: Response) => {
 // Auth middleware — extracts Firebase UID from bearer token and stores in request
 // Supports two token types:
 //   1. CC API keys (cc_{uid}_{secret}) — persistent, stored in Firebase RTDB, for Claude Code
-//   2. OAuth access tokens (UUID) — in-memory, for Claude.ai Chat
+//   2. OAuth access tokens (UUID) — persistent, stored in Firebase RTDB with SHA-256 hashing, for Claude.ai Chat
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   // Dev mode: use FIREBASE_UID env var
   if (process.env.NODE_ENV === "development" || process.env.SKIP_AUTH === "true") {
@@ -156,11 +156,15 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   }
 
   const token = authHeader.slice(7);
+  const ip = req.ip || (req.headers["x-forwarded-for"] as string) || null;
+
+  // Trigger periodic cleanup of expired tokens/auth codes (fire-and-forget)
+  triggerCleanup();
 
   // CC API key path — persistent keys stored in Firebase RTDB (survives cold starts)
   if (token.startsWith("cc_")) {
     try {
-      const apiKeyResult = await validateApiKey(token);
+      const apiKeyResult = await validateApiKey(token, ip);
       if (apiKeyResult) {
         (req as any).firebaseUid = apiKeyResult.uid;
         next();
@@ -176,18 +180,18 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
     return;
   }
 
-  // OAuth token path — in-memory store (for Claude.ai Chat)
-  const validToken = validateAccessToken(token);
+  // OAuth token path — Firebase RTDB with SHA-256 hashing + in-memory cache
+  const validToken = await validateAccessToken(token, ip);
   if (!validToken) {
     res.status(401).json({
       error: "invalid_token",
-      error_description: "Token expired or invalid",
+      error_description: "Token expired or invalid. Reconnect this MCP server in Settings.",
     });
     return;
   }
 
   // Attach the user's Firebase UID to the request
-  (req as any).firebaseUid = validToken.firebase_uid;
+  (req as any).firebaseUid = validToken.uid;
   next();
 }
 

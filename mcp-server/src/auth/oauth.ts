@@ -4,10 +4,14 @@ import admin from "firebase-admin";
 import {
   registerClient,
   getClient,
+  validateClientSecret,
   createAuthCode,
   consumeAuthCode,
   createAccessToken,
   validateApiKey,
+  revokeToken,
+  revokeAllUserTokens,
+  hashToken,
 } from "./store.js";
 
 export function createOAuthRouter(baseUrl: string): Router {
@@ -20,6 +24,7 @@ export function createOAuthRouter(baseUrl: string): Router {
       authorization_endpoint: `${baseUrl}/authorize`,
       token_endpoint: `${baseUrl}/token`,
       registration_endpoint: `${baseUrl}/register`,
+      revocation_endpoint: `${baseUrl}/revoke`,
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code"],
       code_challenge_methods_supported: ["S256", "plain"],
@@ -36,21 +41,26 @@ export function createOAuthRouter(baseUrl: string): Router {
   });
 
   // Dynamic Client Registration (RFC 7591)
-  router.post("/register", (req: Request, res: Response) => {
-    const client = registerClient(req.body);
-    res.status(201).json({
-      client_id: client.client_id,
-      client_secret: client.client_secret,
-      client_name: client.client_name,
-      redirect_uris: client.redirect_uris,
-      grant_types: client.grant_types,
-      response_types: client.response_types,
-      token_endpoint_auth_method: client.token_endpoint_auth_method,
-    });
+  router.post("/register", async (req: Request, res: Response) => {
+    try {
+      const client = await registerClient(req.body);
+      res.status(201).json({
+        client_id: client.client_id,
+        client_secret: client.client_secret,
+        client_name: client.client_name,
+        redirect_uris: client.redirect_uris,
+        grant_types: client.grant_types,
+        response_types: client.response_types,
+        token_endpoint_auth_method: client.token_endpoint_auth_method,
+      });
+    } catch (err: any) {
+      console.error("Client registration error:", err);
+      res.status(500).json({ error: "server_error", error_description: "Registration failed" });
+    }
   });
 
   // Authorization Endpoint — Google Sign-In to auto-resolve Firebase UID
-  router.get("/authorize", (req: Request, res: Response) => {
+  router.get("/authorize", async (req: Request, res: Response) => {
     const {
       client_id,
       redirect_uri,
@@ -65,7 +75,7 @@ export function createOAuthRouter(baseUrl: string): Router {
       return;
     }
 
-    const client = getClient(client_id);
+    const client = await getClient(client_id);
     if (!client) {
       res.status(400).json({ error: "invalid_client" });
       return;
@@ -171,7 +181,7 @@ export function createOAuthRouter(baseUrl: string): Router {
     <div class="manual-section">
       <label>Or connect with your CC API key</label>
       <input type="text" id="apiKeyInput" placeholder="cc_xxxxxxx_xxxxxxxxxx">
-      <p class="hint">Settings → CC API Key in Command Center</p>
+      <p class="hint">Settings &rarr; CC API Key in Command Center</p>
       <button class="manual-btn" onclick="submitApiKey()">Connect with API Key</button>
     </div>
   </div>
@@ -280,7 +290,7 @@ export function createOAuthRouter(baseUrl: string): Router {
 </html>`);
   });
 
-  // Verify Google ID token → extract Firebase UID → create auth code → redirect
+  // Verify Google ID token -> extract Firebase UID -> create auth code -> redirect
   router.post("/authorize/verify", async (req: Request, res: Response) => {
     const { client_id, redirect_uri, state, code_challenge, code_challenge_method, id_token } = req.body;
 
@@ -289,7 +299,7 @@ export function createOAuthRouter(baseUrl: string): Router {
       return;
     }
 
-    const client = getClient(client_id);
+    const client = await getClient(client_id);
     if (!client) {
       res.status(400).json({ error: "invalid_client" });
       return;
@@ -322,7 +332,6 @@ export function createOAuthRouter(baseUrl: string): Router {
   });
 
   // API Key authentication — validates CC API key against Firebase RTDB hash
-  // Secure alternative to Google Sign-In for environments where popups don't work (e.g., Claude.ai)
   router.post("/authorize/api-key", async (req: Request, res: Response) => {
     const { client_id, redirect_uri, state, code_challenge, code_challenge_method, api_key } = req.body;
 
@@ -331,15 +340,15 @@ export function createOAuthRouter(baseUrl: string): Router {
       return;
     }
 
-    const client = getClient(client_id);
+    const client = await getClient(client_id);
     if (!client) {
       res.status(400).json({ error: "invalid_client" });
       return;
     }
 
     try {
-      // Validate API key against SHA-256 hash stored in Firebase
-      const result = await validateApiKey(api_key);
+      const ip = req.ip || (req.headers["x-forwarded-for"] as string) || null;
+      const result = await validateApiKey(api_key, ip);
       if (!result) {
         res.status(401).json({
           error: "invalid_token",
@@ -370,7 +379,7 @@ export function createOAuthRouter(baseUrl: string): Router {
   });
 
   // Token Endpoint
-  router.post("/token", (req: Request, res: Response) => {
+  router.post("/token", async (req: Request, res: Response) => {
     const { grant_type, code, redirect_uri, client_id, client_secret, code_verifier } = req.body;
 
     if (grant_type !== "authorization_code") {
@@ -387,10 +396,20 @@ export function createOAuthRouter(baseUrl: string): Router {
 
     // Validate client
     const resolvedClientId = client_id || authCode.client_id;
-    const client = getClient(resolvedClientId);
+    const client = await getClient(resolvedClientId);
     if (!client) {
       res.status(401).json({ error: "invalid_client" });
       return;
+    }
+
+    // Validate client_secret
+    const ip = req.ip || (req.headers["x-forwarded-for"] as string) || null;
+    if (client_secret) {
+      const secretValid = await validateClientSecret(resolvedClientId, client_secret, ip);
+      if (!secretValid) {
+        res.status(401).json({ error: "invalid_client", error_description: "Client secret mismatch" });
+        return;
+      }
     }
 
     // Validate redirect_uri matches
@@ -423,13 +442,40 @@ export function createOAuthRouter(baseUrl: string): Router {
     }
 
     // Issue access token — carries the user's Firebase UID from the auth code
-    const token = createAccessToken(resolvedClientId, authCode.firebase_uid);
+    try {
+      const token = await createAccessToken(resolvedClientId, authCode.firebase_uid, ip);
+      res.json(token);
+    } catch (err: any) {
+      console.error("Token creation error:", err);
+      res.status(500).json({ error: "server_error", error_description: "Token creation failed" });
+    }
+  });
 
-    res.json({
-      access_token: token.access_token,
-      token_type: "Bearer",
-      expires_in: 86400, // 24 hours
-    });
+  // Token Revocation (RFC 7009)
+  router.post("/revoke", async (req: Request, res: Response) => {
+    const { token } = req.body;
+
+    if (!token) {
+      res.status(400).json({ error: "invalid_request", error_description: "Token required" });
+      return;
+    }
+
+    try {
+      const tokenHash = hashToken(token);
+      // Look up the token to find the UID
+      const { getTokenIndexEntryRef } = await import("../firebase.js");
+      const snapshot = await getTokenIndexEntryRef(tokenHash).once("value");
+      const data = snapshot.val();
+
+      if (data) {
+        await revokeToken(tokenHash, data.uid);
+      }
+      // RFC 7009: always return 200 even if token not found
+      res.sendStatus(200);
+    } catch (err: any) {
+      console.error("Token revocation error:", err);
+      res.status(500).json({ error: "server_error" });
+    }
   });
 
   return router;

@@ -141,6 +141,35 @@ export function getSystemRef() {
   return db.ref("command-center/system");
 }
 
+// ─── OAuth refs (system-wide + per-user) ───
+export function getOAuthClientsRef() {
+  return db.ref("command-center/system/oauth/clients");
+}
+
+export function getOAuthClientRef(clientId: string) {
+  return db.ref(`command-center/system/oauth/clients/${clientId}`);
+}
+
+export function getTokenIndexRef() {
+  return db.ref("command-center/system/oauth/tokenIndex");
+}
+
+export function getTokenIndexEntryRef(tokenHash: string) {
+  return db.ref(`command-center/system/oauth/tokenIndex/${tokenHash}`);
+}
+
+export function getAuditLogRef() {
+  return db.ref("command-center/system/oauth/auditLog");
+}
+
+export function getUserTokensRef(uid: string) {
+  return db.ref(`command-center/${uid}/oauth/tokens`);
+}
+
+export function getUserTokenRef(uid: string, tokenHash: string) {
+  return db.ref(`command-center/${uid}/oauth/tokens/${tokenHash}`);
+}
+
 export function getDb(): admin.database.Database {
   return db;
 }

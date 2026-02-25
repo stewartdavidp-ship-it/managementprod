@@ -62,8 +62,9 @@
 # ── TROUBLESHOOTING ───────────────────────────────────────────
 #
 # "Connection failed" in Claude.ai after deploy:
-#   → Disconnect and reconnect the MCP integration (OAuth tokens are in-memory,
-#     lost on redeploy). The deploy script verifies OAuth metadata automatically.
+#   → OAuth tokens now persist in Firebase RTDB (SHA-256 hashed). Deploys should
+#     NOT require reconnection. If it still fails, disconnect and reconnect the
+#     MCP integration. The deploy script verifies OAuth metadata automatically.
 #
 # "auth/invalid-api-key" on Google Sign-In page:
 #   → FIREBASE_WEB_API_KEY env var is missing. Re-run deploy.sh.
@@ -137,7 +138,7 @@ if [ "$ENV" = "prod" ]; then
   echo "║  ⚠️  DEPLOYING TO PRODUCTION                             ║"
   echo "║  Service: cc-mcp-server                                  ║"
   echo "║  This affects ALL users (Claude.ai + Claude Code)        ║"
-  echo "║  OAuth tokens will be wiped — users must reconnect       ║"
+  echo "║  OAuth tokens persist in Firebase — no reconnect needed  ║"
   echo "╚══════════════════════════════════════════════════════════╝"
   echo ""
   read -p "Type 'yes' to confirm production deploy: " confirm
@@ -186,7 +187,7 @@ fi
 
 echo ""
 if [ "$ENV" = "prod" ]; then
-  echo "Ready. If Claude.ai shows connection errors, disconnect and reconnect the MCP integration."
+  echo "Ready. OAuth tokens persist across deploys — users should NOT need to reconnect."
 else
   echo "Test deploy ready. Validate with: bash e2e-test.sh"
   echo "When satisfied, promote with: bash deploy.sh --prod"
