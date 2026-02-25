@@ -11,11 +11,12 @@
 | Section | Description | ~Size |
 |---------|-------------|-------|
 | Quick Reference | File paths, deploy commands, safety rules | 2.2K |
-| Overview | What CC is, tech stack summary | 0.5K |
+| Overview | What CC is, tech stack summary, data/decision layer principle | 0.8K |
 | Ecosystem Map | Cloud Run, Firebase, GitHub, auth model | 2.7K |
 | Component Hierarchy | React component tree, navigation tabs | 1.1K |
 | Firebase Realtime Listeners | Active/suspended listeners, limits, costs | 1.8K |
 | Data Flow | Browser↔Firebase↔MCP↔Functions data paths | 2.8K |
+| ODRC Concept Lifecycle | State machine, transitions, operations, history chain | 2.0K |
 | Knowledge Tree System | Evidence Engine: forests, trees, nodes, concept pointers | 2.5K |
 | Idea Health System | Staleness matrix, triage flags, health computation integration | 1.5K |
 | Cost Architecture | Firebase billing, guardrails, incident history | 1.5K |
@@ -78,6 +79,14 @@ cd /Users/davidstewart/Downloads/firebase-functions && firebase deploy --only da
 Command Center (CC) is an **AI ideation rigor platform** — a structured system for turning vague ideas into well-formed, buildable specifications before code is written. It manages ODRC concepts (OPENs, DECISIONs, RULEs, CONSTRAINTs), ideation sessions, build jobs, and inter-agent messaging between Claude Chat and Claude Code.
 
 CC is a single-file React application deployed via GitHub Pages. It uses React 18 via CDN, Tailwind CSS via CDN, and Firebase Realtime Database for persistence.
+
+### Design Principle: Data Layer / Decision Layer
+
+CC is the data and persistence layer. Claude is the reasoning and decision layer. The MCP server is the interface between them.
+
+- **CC (MCP server + Firebase)** persists, indexes, queries, and serves structured data. It enforces schema validation, computes deterministic signals (staleness, scope creep), and manages lifecycle state machines. It does not make reasoning decisions about what to build, how to design, or whether a concept is good.
+- **Claude (Chat + Code)** reasons, decides, creates, and reviews. Chat does ideation and specification. Code does implementation. Both operate through MCP tools — they read structured state, make decisions, and write results back.
+- **The boundary:** if it requires judgment, it's Claude's job. If it requires persistence or computation, it's CC's job. This prevents reasoning logic from creeping into the MCP server and data management from creeping into skills.
 
 ---
 
@@ -234,6 +243,63 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 
 ---
 
+## ODRC Concept Lifecycle
+
+ODRC (OPEN, DECISION, RULE, CONSTRAINT) is the concept system that structures ideation output. Each concept type has a distinct role:
+
+- **OPEN** — An unresolved question or uncertainty
+- **DECISION** — A chosen direction that answers an OPEN
+- **RULE** — A durable pattern that emerged from multiple decisions
+- **CONSTRAINT** — An external reality that bounds what's possible
+
+### Concept States
+
+| State | Meaning |
+|-------|---------|
+| `active` | Current and in effect |
+| `superseded` | Replaced by newer content (same type) |
+| `resolved` | Answered or no longer relevant (typically OPENs) |
+| `transitioned` | Evolved into a different type |
+| `built` | Implemented in code (DECISIONs only) |
+
+### Type Transitions
+
+Valid type changes follow a directed state machine:
+
+```
+OPEN → DECISION          (question answered)
+OPEN → RULE              (question resolved into durable pattern)
+OPEN → CONSTRAINT        (question revealed external reality)
+DECISION → RULE          (decision hardened into pattern)
+CONSTRAINT → DECISION    (external reality changed, now a choice)
+CONSTRAINT → RULE        (external reality internalized as pattern)
+RULE → OPEN              (destabilized, needs rethinking)
+```
+
+### Operations
+
+| Operation | Effect |
+|-----------|--------|
+| `create` | New concept in `active` state, linked to origin idea |
+| `transition` | Changes type. Old concept marked `transitioned`, new concept created with new type. History chain via `transitionedTo` pointer |
+| `supersede` | Replaces content, same type. Old concept marked `superseded`. History chain via `supersededBy` pointer |
+| `resolve` | Marks an OPEN as done (question answered or no longer relevant) |
+| `mark_built` | Marks a DECISION as implemented in code. Only valid for active DECISIONs |
+
+### History Chain
+
+When a concept is superseded or transitioned, the original retains pointers to its successor (`supersededBy` / `transitionedTo`). This preserves decision archaeology — you can trace how a concept evolved across ideas and phases.
+
+### MCP Tools
+
+| Tool | Relevant Actions |
+|------|-----------------|
+| `concept` | create, update, transition, supersede, resolve, mark_built, migrate, add/remove_knowledge_ref, check_evidence_drift |
+| `list_concepts` | Filter by idea, app, type, status. `grouped=true` returns by-type breakdown |
+| `get_active_concepts` | Current truth: all active concepts across all ideas for an app |
+
+---
+
 ## Knowledge Tree System
 
 The Evidence Engine stores curated research findings in a three-level hierarchy under `command-center/{uid}/knowledge/`. This system is MCP-only (no browser listeners).
@@ -307,7 +373,7 @@ Ideas carry classification metadata for automated management:
 |-------|--------|---------|
 | `ideaType` | `primary` / `auxiliary` / `placeholder` | Importance tier — drives staleness thresholds |
 | `intention` | `new` / `add` / `fix` | What kind of work — drives urgency |
-| `primaryOutput` | `code` / `presentation` / `document` / `analysis` | Output type — analysis gets 1.5x staleness multiplier |
+| `primaryOutput` | `code` / `presentation` / `spreadsheet` / `document` / `analysis` | Output type — analysis gets 1.5x staleness multiplier |
 | `initiative` | freeform string | Cross-idea grouping label |
 
 ### Staleness Threshold Matrix
@@ -407,7 +473,7 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 | PERF-4 | **No Firebase budget alerts** — Blaze plan has no spending caps. | Medium | Enable Cloud Billing Budget API, set $25/month alert. |
 | PERF-5 | **Firebase Functions SDK upgrade needed** — `firebase-functions@4.9.0`, Node.js 20 deprecates 2026-04-30. | Medium | Upgrade to v5.x + nodejs22 before April 2026. |
 | DEBT-4 | **Second CC user** (`ptYPWbTDlCPvrKTq2NmWWHuEvkv1`) — Test account? Clean up if unneeded. | Low | |
-| DEBT-5 | **CC line count documentation stale** | Low | Update after next major change. |
+| ~~DEBT-5~~ | ~~CC line count documentation stale~~ | ~~Low~~ | **Resolved** (2026-02-25) — updated to ~16,959 lines |
 | DEBT-12 | **Firebase SA JSON in Downloads folder** — Should move to secure location. | Medium | User action required. |
 | DEBT-13 | **Game Shelf functions not in firebase-functions repo** — 22 functions in separate codebase. | Low | Consider consolidating. |
 
