@@ -17,6 +17,7 @@
 | Firebase Realtime Listeners | Active/suspended listeners, limits, costs | 1.8K |
 | Data Flow | Browser↔Firebase↔MCP↔Functions data paths | 2.8K |
 | Knowledge Tree System | Evidence Engine: forests, trees, nodes, concept pointers | 2.5K |
+| Idea Health System | Staleness matrix, triage flags, health computation integration | 1.5K |
 | Cost Architecture | Firebase billing, guardrails, incident history | 1.5K |
 | CC Cloud Functions | domainProxy, documentCleanup, Game Shelf note | 0.7K |
 | Repositories | GitHub repos (public/private) | 0.4K |
@@ -68,7 +69,7 @@ cd /Users/davidstewart/Downloads/firebase-functions && firebase deploy --only da
 2. **Never create polling scripts for `document(receive)`** — use MCP tools instead. See SYSTEM-CONTEXT.md Section 17.
 3. **`domainProxy` requires Firebase Auth token** — all 3 call sites in index.html pass Bearer token via `Authorization` header
 4. **Deploy Firebase Functions with `--only functions:NAME`** — bare `--only functions` will try to delete 22 Game Shelf functions
-5. **MCP server deploys go to test first** — `bash deploy.sh` defaults to test. Only promote to prod (`bash deploy.sh --prod`) after verifying on test. Prod deploy wipes in-memory OAuth tokens — Claude.ai users must reconnect.
+5. **MCP server deploys go to test first** — `bash deploy.sh` defaults to test. Only promote to prod (`bash deploy.sh --prod`) after verifying on test.
 
 ---
 
@@ -126,6 +127,8 @@ CC is a single-file React application deployed via GitHub Pages. It uses React 1
 | Claude.ai (Chat) | OAuth 2.1 with PKCE | `/register` → `/authorize` → Google Sign-In or CC API Key → `/token` |
 | Claude Code (CLI) | CC API Key | `cc_{uid}_{secret}` validated against SHA-256 hash in Firebase RTDB |
 | domainProxy | Firebase ID Token | CC browser passes Bearer token in `Authorization` header |
+
+**OAuth token persistence:** OAuth tokens are stored in Firebase RTDB under `command-center/oauth-tokens/` with SHA-256 hashed keys. Tokens survive Cloud Run cold starts and redeployments — Claude.ai users no longer need to reconnect after prod deploys.
 
 ---
 
@@ -216,10 +219,14 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 
 ### MCP Server → Firebase
 - **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
-- **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes)
+- **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes), OAuth tokens
 - **Per-surface context tracking:** Each surface (claude-code, claude-chat, etc.) gets independent `_contextHealth` zone/used via `surfaces.ts` registry
+- **Context budget tracking:** Surfaces report `contextEstimate` on every tool call. Server compares against its own floor and returns `surfaceEstimate`, `estimatedZone`, `driftDetected`, `serverFloor` in `_contextHealth`
 - **Piggyback notifications:** Pending messages for the calling surface are injected into every tool response as `_pendingMessages`
+- **Idea health computation:** On `session.complete`, computes health for the active idea (staleness, scope creep, empty primary, completion candidates). Full-app scan via `idea(triage)`. See [Idea Health System](#idea-health-system)
+- **External integration refs:** Concepts, ideas, and jobs support optional `externalRefs[]` arrays for linking to Jira, Linear, etc. Ideas also support `externalProjectKey`
 - **Test/Prod split:** Both environments share same Firebase RTDB — same data, different code versions
+- **Express body limit:** 10MB (raised from 1MB to support large document pushes)
 
 ### Cloud Functions → Firebase
 - **domainProxy:** Authenticated CORS proxy for Porkbun/GoDaddy APIs (requires Firebase ID token)
@@ -288,6 +295,45 @@ When `get_index` is called, a `healthAdvisory` block is conditionally included i
 
 ---
 
+## Idea Health System
+
+Server-side health computation evaluates idea staleness, scope creep, and completion readiness. Implemented in `mcp-server/src/idea-health.ts` as pure functions (callers provide data).
+
+### Idea Classification Fields
+
+Ideas carry classification metadata for automated management:
+
+| Field | Values | Purpose |
+|-------|--------|---------|
+| `ideaType` | `primary` / `auxiliary` / `placeholder` | Importance tier — drives staleness thresholds |
+| `intention` | `new` / `add` / `fix` | What kind of work — drives urgency |
+| `primaryOutput` | `code` / `presentation` / `document` / `analysis` | Output type — analysis gets 1.5x staleness multiplier |
+| `initiative` | freeform string | Cross-idea grouping label |
+
+### Staleness Threshold Matrix
+
+Health alerts are counter-based (sessions without activity), not time-based. Each idea stores `sessionCountAtLastHealth`; delta = total completed app sessions − stored count.
+
+| ideaType | intention | Threshold (sessions) | Severity |
+|----------|-----------|---------------------|----------|
+| placeholder | * | 2 | high |
+| auxiliary | fix | 3 | high |
+| auxiliary | add/new | 5 | medium |
+| primary | fix | 0 (flags as mistyped) | high |
+| primary | add | 8 | medium |
+| primary | new | 12 | low |
+
+Additional checks: scope creep (placeholder with 3+ concepts, auxiliary with 10+ concepts), empty primary (0 concepts after 3+ sessions), completion candidates (all jobs completed).
+
+### Integration Points
+
+- **`session.complete`** — Fire-and-forget: computes health for `activeIdeaId` only. Writes `alerts[]`, `alertCount`, `sessionCountAtLastHealth` to idea. Updates app `triageNeeded`/`triageAlertCount` if alerts found. Never blocks session completion.
+- **`idea(triage)`** — Full-app scan: evaluates all active ideas, atomic multi-path write, returns ideas sorted by severity.
+- **`idea(list, hasAlerts=true)`** — Filter to ideas with active alerts.
+- **App record** — `triageNeeded` (boolean), `triageAlertCount` (number), `lastTriageAt` (timestamp) visible in `app(get)` and `app(list)`.
+
+---
+
 ## Cost Architecture
 
 Firebase RTDB charges ~$1/GB for bandwidth. The primary cost driver is listener re-downloads: every write to a watched path triggers all listeners on that path to re-download their entire query result set.
@@ -342,7 +388,7 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 | # | Issue | Status |
 |---|-------|--------|
 | 1 | Sessions have no "Load More" — only 15 most recent visible in browser | Open |
-| 2 | MCP server cold starts lose OAuth tokens — configured with 0 min instances | Open (SEC-1) |
+| 2 | ~~MCP server cold starts lose OAuth tokens~~ | **Resolved** (2026-02-25) — tokens now persist in Firebase RTDB |
 | 3 | CLAUDE.md generator can produce duplicates across ideas | Open |
 | 4 | Shared Firebase project `word-boxing` hosts CC + Game Shelf | Accepted |
 
@@ -354,7 +400,6 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 
 | ID | Item | Severity | Notes |
 |----|------|----------|-------|
-| SEC-1 | **In-memory OAuth token store** — Cold starts wipe tokens. Claude.ai users must reconnect. | Medium | Fix: Firebase-backed store. Cost vs UX tradeoff — `minInstances: 1` adds ~$18/month. |
 | SEC-2 | **`Math.random()` for API key secret** — Not cryptographically secure. | Low | Acceptable single-user. Upgrade to `crypto.randomBytes()` if multi-user. |
 | SEC-5 | **`teamMembership` write rule template** — Allows any auth user to write under any `$uid`. Not deployed. | Low | Fix template before deploying team features. |
 | PERF-1 | **`documentCleanup` full tree read** — Downloads ~787KB daily. | Low | Optimize if CC data grows past 10MB. |
@@ -366,10 +411,14 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 | DEBT-12 | **Firebase SA JSON in Downloads folder** — Should move to secure location. | Medium | User action required. |
 | DEBT-13 | **Game Shelf functions not in firebase-functions repo** — 22 functions in separate codebase. | Low | Consider consolidating. |
 
-### Resolved (2026-02-20)
+### Resolved (2026-02-25)
+
+| ID | Resolution |
+|----|-----------|
+| SEC-1 | OAuth tokens now persist in Firebase RTDB with SHA-256 hashed keys. Cold starts no longer wipe tokens. |
 
 <details>
-<summary>Click to expand resolved items from v8.71.5 and v8.71.6 security hardening</summary>
+<summary>Click to expand resolved items from v8.71.5 and v8.71.6 security hardening (2026-02-20)</summary>
 
 | ID | Resolution |
 |----|-----------|
@@ -393,7 +442,7 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 
 ## Disaster Recovery
 
-All source code is in GitHub. Updated 2026-02-20.
+All source code is in GitHub. Updated 2026-02-25.
 
 ### Deployed Services
 
