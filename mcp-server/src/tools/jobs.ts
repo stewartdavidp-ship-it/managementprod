@@ -45,7 +45,7 @@ Actions:
   - "revise": Send a reviewed job back to draft for Chat revision. Requires jobId. Validates status=review. Sets status=draft.
   - "review": Flag spec concerns. Requires jobId, concerns. Validates status=active. Sets status=review.
   - "approve": Approve a reviewed job. Requires jobId. Optional: resolutions. Validates status=review. Sets status=approved.
-  - "update": Update job fields. Requires jobId. instructions and attachments can only be updated on draft jobs.
+  - "update": Update job fields. Requires jobId. instructions and attachments can only be updated on draft jobs. externalRefs can be updated on any non-terminal job.
   - "add_event": Append event to job log. Requires jobId, eventType, detail. Optional: refId.
   - "complete": Finalize job. Requires jobId, status (completed/failed/abandoned), summary. Optional: filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId.
   - "get": Get job by ID. Requires jobId.
@@ -84,9 +84,18 @@ Actions:
       deployId: z.string().optional().describe("Deploy record ID (optional for complete)"),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
+      externalRefs: z.array(z.object({
+        system: z.string().describe("External system identifier (e.g., 'jira', 'linear', 'github')"),
+        externalId: z.string().describe("ID in the external system"),
+        externalUrl: z.string().optional().describe("Direct link to the external item"),
+        refType: z.string().optional().describe("Type of external item (e.g., 'issue', 'pr', 'ticket')"),
+        syncDirection: z.enum(["push", "pull", "bidirectional"]).optional().describe("Sync direction"),
+        lastSyncedAt: z.string().optional().describe("ISO timestamp of last sync"),
+        syncStatus: z.enum(["current", "stale", "conflict"]).optional().describe("Current sync status"),
+      })).max(50).optional().describe("External system references (optional for update). Max 50 entries."),
       includeSnapshot: z.boolean().optional().describe("For 'get': include claudeMdSnapshot in response (default: false — saves context window)"),
     },
-    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, limit, offset, includeSnapshot }) => {
+    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, externalRefs, limit, offset, includeSnapshot }) => {
       resolveInitiator({ initiator, createdBy });
       const uid = getCurrentUid();
 
@@ -341,6 +350,7 @@ Actions:
             return withResponseSize({ content: [{ type: "text", text: "attachments must be valid JSON" }], isError: true });
           }
         }
+        if (externalRefs !== undefined) updates.externalRefs = externalRefs;
 
         await ref.update(updates);
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });

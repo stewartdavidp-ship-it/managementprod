@@ -225,7 +225,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
     `ODRC concept mutation tool. Actions:
   - "get": Get a single concept by ID. Requires conceptId. Returns full record including knowledgeRefs.
   - "create": Create a new concept. Requires type (OPEN/DECISION/RULE/CONSTRAINT), content, ideaOrigin. Optional: scopeTags, sessionId, jobId.
-  - "update": Update content or scopeTags on an active concept. Requires conceptId. Optional: content, scopeTags.
+  - "update": Update content or scopeTags on an active concept. Requires conceptId. Optional: content, scopeTags, externalRefs.
   - "transition": Transition to a new type following state machine (OPEN→DECISION/RULE/CONSTRAINT, DECISION→RULE, CONSTRAINT→DECISION/RULE, RULE→OPEN). Requires conceptId, newType. Optional: sessionId, jobId.
   - "supersede": Replace content, same type. Requires conceptId, newContent. Optional: sessionId, jobId.
   - "resolve": Mark as resolved (typically OPENs). Requires conceptId. Optional: sessionId, jobId.
@@ -247,6 +247,15 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
       newIdeaId: z.string().optional().describe("New idea ID to migrate concept to (required for migrate)"),
       scope: z.enum(["global", "app", "idea"]).optional().describe("Concept scope: global (cross-app), app (within one app), or idea (current phase only). Optional for create/update."),
       scopeTags: z.array(z.string()).optional().describe("Scope tags (optional for create/update)"),
+      externalRefs: z.array(z.object({
+        system: z.string().describe("External system identifier (e.g., 'jira', 'linear', 'github')"),
+        externalId: z.string().describe("ID in the external system"),
+        externalUrl: z.string().optional().describe("Direct link to the external item"),
+        refType: z.string().optional().describe("Type of external item (e.g., 'issue', 'epic', 'spike', 'page')"),
+        syncDirection: z.enum(["push", "pull", "bidirectional"]).optional().describe("Sync direction"),
+        lastSyncedAt: z.string().optional().describe("ISO timestamp of last sync"),
+        syncStatus: z.enum(["current", "stale", "conflict"]).optional().describe("Current sync status"),
+      })).max(50).optional().describe("External system references (optional for update). Max 50 entries."),
       nodeId: z.string().optional().describe("Knowledge node ID (required for add_knowledge_ref/remove_knowledge_ref)"),
       treeId: z.string().optional().describe("Knowledge tree ID (required for add_knowledge_ref)"),
       treeName: z.string().optional().describe("Knowledge tree name for display (required for add_knowledge_ref)"),
@@ -254,7 +263,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
       sessionId: z.string().optional().describe("Active session ID for tracking (optional for create/transition/supersede/resolve)"),
       jobId: z.string().optional().describe("Active job ID for tracking (optional for create/transition/supersede/resolve)"),
     },
-    async ({ initiator, action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, nodeId, treeId, treeName, relationship, sessionId, jobId }) => {
+    async ({ initiator, action, conceptId, type, content, newContent, newType, ideaOrigin, newIdeaId, scope, scopeTags, externalRefs, nodeId, treeId, treeName, relationship, sessionId, jobId }) => {
       resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
@@ -372,6 +381,7 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         if (content !== undefined) updates.content = content;
         if (scope !== undefined) updates.scope = scope;
         if (scopeTags !== undefined) updates.scopeTags = scopeTags;
+        if (externalRefs !== undefined) updates.externalRefs = externalRefs;
 
         await ref.update(updates);
 

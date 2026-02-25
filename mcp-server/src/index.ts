@@ -4,7 +4,7 @@ import { initFirebase } from "./firebase.js";
 import { createServer } from "./server.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
-import { requestContext, setContextEstimate, setContextPerSurface, setPendingMessages, type PendingMessagesInfo } from "./context.js";
+import { requestContext, setContextEstimate, setContextPerSurface, setSurfaceContextEstimate, setPendingMessages, type PendingMessagesInfo } from "./context.js";
 import { getActiveSessionId, getPendingContextAccumulation, getPendingContextPerSurface } from "./tools/sessions.js";
 import { getSessionRef, getDocumentsRef } from "./firebase.js";
 import { ensureSession } from "./session-lifecycle.js";
@@ -246,6 +246,24 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
       } catch (err) {
         // Non-critical — _session metadata will be omitted if this fails
         console.error("Session lifecycle error:", err);
+      }
+
+      // Extract surface-reported contextEstimate from tool call arguments (if present).
+      // This is the "base handler" approach — parsed at middleware level, not per-tool.
+      // The parameter is accepted by Zod via INITIATOR_PARAM on every tool.
+      if (!Array.isArray(req.body) && req.body?.method === "tools/call") {
+        const ce = req.body.params?.arguments?.contextEstimate;
+        if (typeof ce === "number" && ce >= 0) {
+          setSurfaceContextEstimate(ce);
+
+          // Persist to session record (fire-and-forget)
+          const activeSessionId2 = getActiveSessionId(firebaseUid);
+          if (activeSessionId2) {
+            getSessionRef(firebaseUid, activeSessionId2)
+              .update({ lastContextEstimate: ce })
+              .catch(() => {});
+          }
+        }
       }
 
       // Piggyback message notifications — check for pending messages once per request.

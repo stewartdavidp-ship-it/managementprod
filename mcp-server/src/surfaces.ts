@@ -39,12 +39,20 @@ export function parseSurface(value: string | undefined): Surface | null {
 }
 
 /**
- * Shared Zod schema fragment for the initiator parameter.
+ * Shared Zod schema fragment for base parameters included on every tool.
  * Spread into every tool's schema: { ...INITIATOR_PARAM, action: z.enum(...), ... }
+ *
+ * Includes:
+ *   - initiator: calling surface identifier
+ *   - contextEstimate: optional context window usage reported by the surface
+ *     (extracted at middleware level in index.ts, not per-tool)
  */
 export const INITIATOR_PARAM = {
   initiator: z.enum(SURFACES).optional().describe(
     "Calling surface identifier. Helps the server tailor responses and track provenance."
+  ),
+  contextEstimate: z.number().int().optional().describe(
+    "Surface-reported context window usage in characters. Server compares against its own floor to detect drift."
   ),
 } as const;
 

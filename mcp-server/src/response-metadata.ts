@@ -10,7 +10,7 @@
 // tool handler.
 // ═══════════════════════════════════════════════════════════════
 
-import { getContextEstimate, getContextPerSurface, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator } from "./context.js";
+import { getContextEstimate, getContextPerSurface, getSurfaceContextEstimate, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator } from "./context.js";
 import { incrementContextEstimate } from "./tools/sessions.js";
 
 interface TextContent {
@@ -31,6 +31,7 @@ const ZONE_GREEN_MAX = 312_000;   // < 50%
 const ZONE_YELLOW_MAX = 468_000;  // 50-75%
 const ZONE_RED_MAX = 562_000;     // 75-90%
 // > 90% = imminent
+const BASELINE_OVERHEAD = 85_000; // Approximate non-tool context (system prompt, instructions, etc.)
 
 function computeContextZone(used: number): string {
   if (used < ZONE_GREEN_MAX) return "green";
@@ -93,11 +94,14 @@ export function withResponseSize(
   if (contextEstimate !== undefined) {
     const initiator = getInitiator();
     const perSurface = getContextPerSurface();
+    const surfaceContextEstimate = getSurfaceContextEstimate();
+
+    let healthObj: Record<string, any>;
 
     if (initiator && perSurface && initiator in perSurface) {
       // Surface-aware: zone/used reflect THIS surface's counter
       const surfaceUsed = perSurface[initiator];
-      meta._contextHealth = {
+      healthObj = {
         zone: computeContextZone(surfaceUsed),
         used: surfaceUsed,
         ceiling: CONTEXT_CEILING,
@@ -108,12 +112,23 @@ export function withResponseSize(
       };
     } else {
       // No initiator or surface not yet tracked — global-only (backward compat)
-      meta._contextHealth = {
+      healthObj = {
         zone: computeContextZone(contextEstimate),
         used: contextEstimate,
         ceiling: CONTEXT_CEILING,
       };
     }
+
+    // Enrich with surface-reported estimate when provided
+    if (surfaceContextEstimate !== undefined) {
+      const serverFloor = contextEstimate + BASELINE_OVERHEAD;
+      healthObj.surfaceEstimate = surfaceContextEstimate;
+      healthObj.estimatedZone = computeContextZone(surfaceContextEstimate);
+      healthObj.driftDetected = surfaceContextEstimate < contextEstimate;
+      healthObj.serverFloor = serverFloor;
+    }
+
+    meta._contextHealth = healthObj;
   }
 
   // Include _session metadata if resolved for this request

@@ -21,8 +21,9 @@ export interface RequestContext {
   firebaseUid: string;
   initiator?: Surface; // Calling surface, set by resolveInitiator() in tool handlers
   sessionMeta?: SessionMetadata;
-  contextEstimate?: number; // Cached from Firebase per-request for _contextHealth
+  contextEstimate?: number; // Cached from Firebase per-request for _contextHealth (server's tracked total)
   contextPerSurface?: Record<string, number>; // Per-surface breakdown from Firebase + pending
+  surfaceContextEstimate?: number; // Surface-reported context usage (from contextEstimate tool param)
   pendingMessages?: PendingMessagesInfo | null; // Cached per-request for piggyback notifications (null = checked, none found)
   suppressPiggyback?: boolean; // Set by document(receive) to avoid redundant info
 }
@@ -121,5 +122,18 @@ export function setInitiator(surface: Surface): void {
   const ctx = requestContext.getStore();
   if (ctx) {
     ctx.initiator = surface;
+  }
+}
+
+// Get the surface-reported context estimate for this request
+export function getSurfaceContextEstimate(): number | undefined {
+  return requestContext.getStore()?.surfaceContextEstimate;
+}
+
+// Set the surface-reported context estimate (called from middleware in index.ts)
+export function setSurfaceContextEstimate(estimate: number): void {
+  const ctx = requestContext.getStore();
+  if (ctx) {
+    ctx.surfaceContextEstimate = estimate;
   }
 }

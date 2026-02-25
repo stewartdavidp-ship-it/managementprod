@@ -22,8 +22,8 @@ export function registerIdeaTools(server: McpServer): void {
     `Idea lifecycle tool. Actions:
   - "list": List ideas. Optional: appId filter (sorts by sequence when filtered), status filter. By default excludes completed and archived ideas.
   - "get": Get a single idea by ID. Requires ideaId. Returns full record.
-  - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId.
-  - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status.
+  - "create": Create a new idea. Requires name, description. Optional: type (base/addon), appId, parentIdeaId, externalProjectKey.
+  - "update": Update name, description, or status. Requires ideaId. Optional: name, description, status, externalProjectKey, externalRefs.
   - "graduate": Link idea to an app. Requires ideaId, appId. Auto-calculates sequence and type.
   - "archive": Archive an idea. Requires ideaId.
   - "get_active": Get the latest active idea for an app. Requires appId.
@@ -39,10 +39,20 @@ export function registerIdeaTools(server: McpServer): void {
       type: z.enum(IDEA_TYPES).optional().describe("Idea type: base or addon (optional for create, default: base)"),
       parentIdeaId: z.string().optional().describe("Parent idea ID for addon ideas (optional for create)"),
       status: z.enum(IDEA_STATUSES).optional().describe("For update: new status. For list: filter by status (overrides default exclusion of completed/archived)."),
+      externalProjectKey: z.string().optional().describe("External project identifier, e.g. Jira project key 'ENG' or Linear team ID (optional for create/update)"),
+      externalRefs: z.array(z.object({
+        system: z.string().describe("External system identifier (e.g., 'jira', 'linear', 'github')"),
+        externalId: z.string().describe("ID in the external system"),
+        externalUrl: z.string().optional().describe("Direct link to the external item"),
+        refType: z.string().optional().describe("Type of external item (e.g., 'epic', 'project', 'milestone')"),
+        syncDirection: z.enum(["push", "pull", "bidirectional"]).optional().describe("Sync direction"),
+        lastSyncedAt: z.string().optional().describe("ISO timestamp of last sync"),
+        syncStatus: z.enum(["current", "stale", "conflict"]).optional().describe("Current sync status"),
+      })).max(50).optional().describe("External system references (optional for update). Max 50 entries."),
       limit: z.number().int().optional().describe("Max results to return for list action (default: 20)"),
       offset: z.number().int().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, limit, offset }) => {
+    async ({ initiator, action, ideaId, appId, name, description, type, parentIdeaId, status, externalProjectKey, externalRefs, limit, offset }) => {
       resolveInitiator({ initiator });
       const uid = getCurrentUid();
 
@@ -127,7 +137,7 @@ export function registerIdeaTools(server: McpServer): void {
 
         const ref = getIdeasRef(uid).push();
         const now = new Date().toISOString();
-        const idea = {
+        const idea: Record<string, any> = {
           id: ref.key,
           name,
           description,
@@ -139,6 +149,7 @@ export function registerIdeaTools(server: McpServer): void {
           createdAt: now,
           updatedAt: now,
         };
+        if (externalProjectKey) idea.externalProjectKey = externalProjectKey;
         await ref.set(idea);
 
         // Update app's ideas index if linked
@@ -168,6 +179,8 @@ export function registerIdeaTools(server: McpServer): void {
         if (name !== undefined) updates.name = name;
         if (description !== undefined) updates.description = description;
         if (status !== undefined) updates.status = status;
+        if (externalProjectKey !== undefined) updates.externalProjectKey = externalProjectKey;
+        if (externalRefs !== undefined) updates.externalRefs = externalRefs;
 
         await ref.update(updates);
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...existing, ...updates }, null, 2) }] });
