@@ -1,6 +1,6 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-02-23 (v8.71.8)
+> **Last updated:** 2026-02-25 (v8.72.0)
 >
 > **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 27).
 
@@ -35,15 +35,15 @@
 
 | Item | Value |
 |------|-------|
-| **CC app** | `/Users/davidstewart/Downloads/command-center/index.html` (single-file, v8.71.8) |
+| **CC app** | `/Users/davidstewart/Downloads/command-center/index.html` (single-file, v8.72.0) |
 | **MCP server** | `/Users/davidstewart/Downloads/command-center/mcp-server/src/` |
 | **Firebase Functions** | `/Users/davidstewart/Downloads/firebase-functions/functions/index.js` |
 | **Firebase Rules** | `/Users/davidstewart/Downloads/firebase-functions/database.rules.json` |
 | **GH Pages site** | `/Users/davidstewart/Downloads/command-center-test/` → `stewartdavidp-ship-it.github.io/command-center-test/` |
 | **Firebase project** | `word-boxing` |
 | **Firebase UID** | `oUt4ba0dYVRBfPREqoJ1yIsJKjr1` |
-| **MCP server URL** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
-| **Latest MCP revision** | `cc-mcp-server-00082-zrj` |
+| **MCP server (prod)** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
+| **MCP server (test)** | `https://cc-mcp-server-test-300155036194.us-central1.run.app` |
 
 ### Deploy Commands
 
@@ -51,8 +51,9 @@
 # CC browser app → GitHub Pages
 cp index.html ../command-center-test/ && cd ../command-center-test && git add index.html && git commit -m "v8.x.x" && git push
 
-# MCP server → Cloud Run
-cd mcp-server && npm run build && gcloud run deploy cc-mcp-server --source . --region us-central1 --project word-boxing --allow-unauthenticated
+# MCP server → Cloud Run (test by default, --prod for production)
+cd mcp-server && bash deploy.sh          # deploys to cc-mcp-server-test
+cd mcp-server && bash deploy.sh --prod   # deploys to cc-mcp-server (confirmation required)
 
 # Firebase Functions (CC only — MUST target specific functions, Game Shelf deployed separately)
 cd /Users/davidstewart/Downloads/firebase-functions && firebase deploy --only functions:domainProxy,functions:documentCleanup --project word-boxing
@@ -67,6 +68,7 @@ cd /Users/davidstewart/Downloads/firebase-functions && firebase deploy --only da
 2. **Never create polling scripts for `document(receive)`** — use MCP tools instead. See SYSTEM-CONTEXT.md Section 17.
 3. **`domainProxy` requires Firebase Auth token** — all 3 call sites in index.html pass Bearer token via `Authorization` header
 4. **Deploy Firebase Functions with `--only functions:NAME`** — bare `--only functions` will try to delete 22 Game Shelf functions
+5. **MCP server deploys go to test first** — `bash deploy.sh` defaults to test. Only promote to prod (`bash deploy.sh --prod`) after verifying on test. Prod deploy wipes in-memory OAuth tokens — Claude.ai users must reconnect.
 
 ---
 
@@ -94,7 +96,7 @@ CC is a single-file React application deployed via GitHub Pages. It uses React 1
 │  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
 │  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
 │  └─────────────┘                  │  (Cloud Run)         │             │
-│                                    │  13 tools, 27 skills │             │
+│                                    │  13 tools, 30 skills │             │
 │  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
 │  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
 │  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
@@ -111,7 +113,8 @@ CC is a single-file React application deployed via GitHub Pages. It uses React 1
 | Service | Where It Runs | Purpose |
 |---------|--------------|---------|
 | CC Browser App | GitHub Pages | UI for ODRC management, jobs, sessions, settings |
-| CC MCP Server | Cloud Run (`us-central1`) | Tools + skills for Claude Chat/Code |
+| CC MCP Server (prod) | Cloud Run (`cc-mcp-server`, `us-central1`) | Tools + skills for all users |
+| CC MCP Server (test) | Cloud Run (`cc-mcp-server-test`, `us-central1`) | Validates MCP changes before prod promotion |
 | Firebase Cloud Functions | GCP (`word-boxing`) | CC: DNS proxy + doc cleanup. Game Shelf: 22 functions (separate codebase) |
 | Firebase RTDB | GCP (`word-boxing`) | All persistent data under `command-center/{uid}/` |
 
@@ -202,6 +205,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
     CC Browser    MCP Server    Cloud Functions
     (listeners)   (reads/writes) (triggers/scheduled)
     4 active      13 tools       domainProxy, documentCleanup
+                  30 skills
 ```
 
 ### Browser → Firebase
@@ -213,7 +217,9 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 ### MCP Server → Firebase
 - **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
 - **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes)
-- **Debounced:** `contextEstimate` flushed every 30 seconds (not per-call)
+- **Per-surface context tracking:** Each surface (claude-code, claude-chat, etc.) gets independent `_contextHealth` zone/used via `surfaces.ts` registry
+- **Piggyback notifications:** Pending messages for the calling surface are injected into every tool response as `_pendingMessages`
+- **Test/Prod split:** Both environments share same Firebase RTDB — same data, different code versions
 
 ### Cloud Functions → Firebase
 - **domainProxy:** Authenticated CORS proxy for Porkbun/GoDaddy APIs (requires Firebase ID token)
@@ -394,7 +400,8 @@ All source code is in GitHub. Updated 2026-02-20.
 | Service | Platform | Recovery Path |
 |---------|----------|---------------|
 | CC browser app | GitHub Pages | Push to `command-center-test` repo |
-| MCP server | Cloud Run (`cc-mcp-server`) | See deploy commands in Quick Reference |
+| MCP server (prod) | Cloud Run (`cc-mcp-server`) | `cd mcp-server && bash deploy.sh --prod` |
+| MCP server (test) | Cloud Run (`cc-mcp-server-test`) | `cd mcp-server && bash deploy.sh` |
 | Cloud Functions | Firebase | See deploy commands in Quick Reference |
 | RTDB rules | Firebase | See deploy commands in Quick Reference |
 
@@ -407,11 +414,12 @@ All source code is in GitHub. Updated 2026-02-20.
 
 ### Environment Variables (Cloud Run)
 
-Required for MCP server rebuild:
+Required for MCP server rebuild (both test and prod):
 - `FIREBASE_PROJECT_ID` — `word-boxing`
 - `FIREBASE_WEB_API_KEY` — Firebase Web API key (from Firebase console → Project Settings)
 - `GITHUB_TOKEN` — GitHub PAT for repo operations
-- `BASE_URL` — `https://cc-mcp-server-300155036194.us-central1.run.app`
+- `BASE_URL` — prod: `https://cc-mcp-server-300155036194.us-central1.run.app` / test: `https://cc-mcp-server-test-300155036194.us-central1.run.app`
+- `ENVIRONMENT` — `prod` or `test` (shown in health check response)
 
 ### Not Version-Controlled (Accepted)
 
