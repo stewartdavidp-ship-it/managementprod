@@ -5549,18 +5549,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
             }
         };
 
-        const copyMcpConfig = () => {
-            const config = JSON.stringify({
-                mcpServers: {
-                    "cc-mcp": {
-                        type: "http",
-                        url: "https://cc-mcp-server-300155036194.us-central1.run.app/mcp"
-                    }
-                }
-            }, null, 2);
-            navigator.clipboard.writeText(config);
-            setMcpConfigCopied(true);
-        };
+        const MCP_SERVER_URL = 'https://cc-mcp-server-300155036194.us-central1.run.app/mcp';
 
         const handleComplete = () => {
             onComplete(token.trim(), {
@@ -6280,8 +6269,8 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                         Copy the server URL below, then add it from within Claude Code:
                                     </p>
                                     <div className="flex items-center gap-2 p-3 bg-slate-700/80 border border-slate-600/50 rounded-lg mb-3">
-                                        <code className="flex-1 text-xs text-indigo-300 font-mono select-all break-all">https://cc-mcp-server-300155036194.us-central1.run.app/mcp</code>
-                                        <button onClick={() => { navigator.clipboard.writeText('https://cc-mcp-server-300155036194.us-central1.run.app/mcp'); setMcpConfigCopied(true); }}
+                                        <code className="flex-1 text-xs text-indigo-300 font-mono select-all break-all">{MCP_SERVER_URL}</code>
+                                        <button onClick={() => { navigator.clipboard.writeText(MCP_SERVER_URL); setMcpConfigCopied(true); }}
                                             className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors ${
                                                 mcpConfigCopied ? 'bg-green-700 text-green-200' : 'bg-indigo-600 hover:bg-indigo-500'
                                             }`}>
@@ -6358,7 +6347,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                 </div>
                                 <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
                                     <span className={`text-sm ${mcpConfigCopied ? 'text-green-400' : 'text-slate-500'}`}>{mcpConfigCopied ? '✓' : '○'}</span>
-                                    <span className="text-sm text-slate-300">Claude Code {mcpConfigCopied ? '— .mcp.json ready, sign in on first launch' : '— set up anytime from Settings'}</span>
+                                    <span className="text-sm text-slate-300">Claude Code {mcpConfigCopied ? '— MCP server URL copied, add in Claude Code settings' : '— set up anytime from Settings'}</span>
                                 </div>
                             </div>
 
