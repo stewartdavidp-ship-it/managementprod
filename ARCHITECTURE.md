@@ -57,11 +57,16 @@ cp index.html ../command-center-test/ && cd ../command-center-test && git add in
 cd mcp-server && bash deploy.sh          # deploys to cc-mcp-server-test
 cd mcp-server && bash deploy.sh --prod   # deploys to cc-mcp-server (confirmation required)
 
+# Firebase Functions & Rules
+# Canonical rules source: /Users/davidstewart/Developer/gs-active/firebase-functions/database.rules.json
+# Deploy location: /Users/davidstewart/Developer/gameshelf-functions/ (has firebase.json)
+# Workflow: edit rules in gs-active, copy to gameshelf-functions, deploy from there
+
 # Firebase Functions (CC only — MUST target specific functions, Game Shelf deployed separately)
-cd /Users/davidstewart/Downloads/firebase-functions && firebase deploy --only functions:domainProxy,functions:documentCleanup --project word-boxing
+cd /Users/davidstewart/Developer/gameshelf-functions && firebase deploy --only functions:domainProxy,functions:documentCleanup --project word-boxing
 
 # Firebase RTDB Rules
-cd /Users/davidstewart/Downloads/firebase-functions && firebase deploy --only database --project word-boxing
+cd /Users/davidstewart/Developer/gameshelf-functions && firebase deploy --only database --project word-boxing
 ```
 
 ### Safety Rules (Do Not Violate)
