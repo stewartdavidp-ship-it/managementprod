@@ -5364,10 +5364,6 @@
         const [instructionsCopied, setInstructionsCopied] = React.useState(false);
         const [instructionsText, setInstructionsText] = React.useState('');
         const [instructionsLoading, setInstructionsLoading] = React.useState(false);
-        const [apiKey, setApiKey] = React.useState(() => {
-            try { return localStorage.getItem('cc_api_key') || ''; } catch { return ''; }
-        });
-        const [showApiKey, setShowApiKey] = React.useState(false);
         const [mcpConfigCopied, setMcpConfigCopied] = React.useState(false);
 
         // Tutorial state
@@ -5551,31 +5547,12 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
             }
         };
 
-        const generateApiKey = async () => {
-            if (!firebaseUser) return;
-            const secret = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-            const key = 'cc_' + firebaseUser.uid + '_' + secret;
-            setApiKey(key);
-            localStorage.setItem('cc_api_key', key);
-            localStorage.setItem('gs_api_key', key);
-            if (firebaseDb) {
-                const encoder = new TextEncoder();
-                const data = encoder.encode(key);
-                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-                const hashArray = Array.from(new Uint8Array(hashBuffer));
-                const keyHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                firebaseDb.ref('command-center/' + firebaseUser.uid + '/apiKeyHash').set(keyHash);
-                firebaseDb.ref('command-center/' + firebaseUser.uid + '/apiKey').remove();
-            }
-        };
-
         const copyMcpConfig = () => {
             const config = JSON.stringify({
                 mcpServers: {
                     "cc-mcp": {
                         type: "http",
-                        url: "https://cc-mcp-server-300155036194.us-central1.run.app/mcp",
-                        headers: { Authorization: "Bearer " + apiKey }
+                        url: "https://cc-mcp-server-300155036194.us-central1.run.app/mcp"
                     }
                 }
             }, null, 2);
@@ -5711,7 +5688,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                     { icon: '🔗', label: 'Connect GitHub', desc: 'One-click authorization — no tokens to create' },
                                     { icon: '📂', label: 'Create a Claude.ai Project', desc: 'A dedicated workspace with project instructions loaded' },
                                     { icon: '🧩', label: 'Add an MCP connector', desc: 'Bridges Claude Chat to Command Center' },
-                                    { icon: '💻', label: 'Connect Claude Code (optional)', desc: 'Give the CLI the same CC tools' },
+                                    { icon: '💻', label: 'Connect Claude Code (optional)', desc: 'Same CC tools via OAuth — no API keys needed' },
                                 ].map((item, i) => (
                                     <div key={i} className="flex items-center gap-3 p-3 bg-slate-700/30 rounded-lg">
                                         <span className="text-xl flex-shrink-0">{item.icon}</span>
@@ -5728,7 +5705,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                 <div className="flex gap-2 items-start">
                                     <span className="text-amber-400 text-sm mt-0.5">ℹ️</span>
                                     <div className="text-xs text-slate-400 space-y-1">
-                                        <span><strong className="text-amber-300">Claude Pro plan required.</strong> MCP integrations require a Claude Pro, Team, or Enterprise plan.</span>
+                                        <span><strong className="text-amber-300">Claude Pro plan required.</strong> MCP connectors require a Claude Pro, Team, or Enterprise plan.</span>
                                         <br />
                                         <span><strong className="text-slate-300">Claude Code (CLI) strongly recommended.</strong> CC is designed for both Chat and Code working together. You can use ideation features with Chat alone, but the full build lifecycle requires Claude Code installed locally.</span>
                                     </div>
@@ -6197,7 +6174,7 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                             <h3 className="text-lg font-semibold mb-2">Connect the MCP Server</h3>
                             <p className="text-sm text-slate-400 mb-4 leading-relaxed">
                                 The MCP (Model Context Protocol) server is the bridge that connects Claude to the Command Center data store.
-                                By adding it as an integration, Claude gains access to CC's tools — ideas, concepts, sessions, and more.
+                                By adding it as a connector, Claude gains access to CC's tools — ideas, concepts, sessions, and more.
                             </p>
 
                             <div className="space-y-4">
@@ -6213,39 +6190,45 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                     </div>
                                 </div>
 
-                                {/* Step 2: Open integrations page */}
+                                {/* Step 2: Open connectors page */}
                                 <div>
-                                    <p className="text-xs font-medium text-slate-300 mb-2">2. Add the integration in Claude.ai</p>
+                                    <p className="text-xs font-medium text-slate-300 mb-2">2. Add the connector in Claude.ai</p>
                                     <p className="text-xs text-slate-500 mb-2 leading-relaxed">
-                                        Open the Integrations page, click <strong className="text-slate-400">Add more</strong>, then <strong className="text-slate-400">Add custom integration</strong>. Paste the URL and sign in with the same Google account from Step 1.
+                                        Open the Connectors page, scroll to the bottom, and click <strong className="text-slate-400">Add custom connector</strong>. Paste the URL and sign in with the same Google account from Step 1.
                                     </p>
-                                    <a href="https://claude.ai/settings/integrations" target="_blank" rel="noopener noreferrer"
+                                    <a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener noreferrer"
                                         className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600/50 rounded-lg text-sm font-medium text-slate-300 transition-colors">
-                                        Open Claude.ai Integrations
+                                        Open Claude.ai Connectors
                                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
                                     </a>
                                 </div>
 
                                 {/* Step 3: Configure tool permissions */}
                                 <div>
-                                    <p className="text-xs font-medium text-slate-300 mb-2">3. Configure tool permissions (recommended)</p>
+                                    <p className="text-xs font-medium text-slate-300 mb-2">3. Set tool permissions to "Always allow"</p>
                                     <p className="text-xs text-slate-500 mb-2 leading-relaxed">
-                                        Once added, open the CC MCP connector settings. Under <strong className="text-slate-400">Tool permissions</strong>, set to <strong className="text-slate-400">Always allow</strong> so Claude can use CC tools without asking each time.
+                                        Click <strong className="text-slate-400">Configure</strong> on the MCP Server connector. You'll see a <strong className="text-slate-400">Tool permissions</strong> section with an <strong className="text-slate-400">Other tools</strong> group. Change the dropdown from "Custom" to <strong className="text-slate-400">Always allow</strong>.
                                     </p>
                                     {/* Visual mock of tool permissions UI */}
                                     <div className="p-3 bg-slate-900/60 border border-slate-700/30 rounded-lg">
                                         <p className="text-xs text-slate-500 mb-2">Look for this on the connector page:</p>
                                         <div className="bg-slate-800/80 rounded border border-slate-600/30 p-3 space-y-2">
+                                            <div className="text-xs text-slate-300 font-medium">Tool permissions</div>
+                                            <p className="text-[10px] text-slate-500">Choose when Claude is allowed to use these tools</p>
                                             <div className="flex items-center justify-between">
-                                                <span className="text-xs text-slate-300 font-medium">Tool permissions</span>
-                                            </div>
-                                            <p className="text-xs text-slate-500">Choose when Claude is allowed to use these tools</p>
-                                            <div className="flex items-center gap-2">
-                                                <div className="flex-1 flex items-center justify-between px-3 py-1.5 bg-slate-700 border border-slate-500/50 rounded text-xs text-green-400 font-medium">
-                                                    <span>Always allow</span>
-                                                    <span className="text-slate-500 ml-1">▾</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-slate-400">▾</span>
+                                                    <span className="text-xs text-slate-300">Other tools</span>
+                                                    <span className="text-[10px] text-slate-500 bg-slate-700 px-1.5 py-0.5 rounded">13</span>
                                                 </div>
-                                                <span className="text-xs text-slate-600">← select this</span>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 border border-green-500/50 rounded text-xs text-green-400 font-medium">
+                                                        <span>✓</span>
+                                                        <span>Always allow</span>
+                                                        <span className="text-slate-500 ml-1">▾</span>
+                                                    </div>
+                                                    <span className="text-xs text-slate-600">← select this</span>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -6270,68 +6253,62 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                             {progressDots}
                             <h3 className="text-lg font-semibold mb-2">Connect Claude Code (optional)</h3>
                             <p className="text-sm text-slate-400 mb-4 leading-relaxed">
-                                If you use Claude Code (the CLI tool), you can give it the same CC tools that Claude Chat has.
-                                Both Chat and Code share the same data store — ideas, concepts, jobs, and everything stays in sync.
+                                If you use Claude Code (the CLI), it can connect to the same CC data store.
+                                It authenticates via OAuth — the same Google Sign-In you used in Step 1.
                             </p>
 
                             <div className="space-y-4">
-                                {/* Step 1: Generate API Key */}
+                                {/* Sub-step 1: Install Claude Code */}
                                 <div>
-                                    <p className="text-xs font-medium text-slate-300 mb-2">1. Generate an API key</p>
-                                    <div className="flex items-center gap-2 p-2.5 bg-slate-700/80 border border-slate-600/50 rounded-lg">
-                                        {apiKey ? (
-                                            <React.Fragment>
-                                                <input type={showApiKey ? 'text' : 'password'} readOnly value={apiKey}
-                                                    className="flex-1 bg-transparent text-xs font-mono text-slate-300 outline-none min-w-0"
-                                                    onClick={e => e.target.select()} />
-                                                <button onClick={() => setShowApiKey(!showApiKey)}
-                                                    className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs" title={showApiKey ? 'Hide' : 'Show'}>
-                                                    {showApiKey ? '🙈' : '👁️'}
-                                                </button>
-                                                <button onClick={() => navigator.clipboard.writeText(apiKey)}
-                                                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium whitespace-nowrap text-white">
-                                                    Copy
-                                                </button>
-                                            </React.Fragment>
-                                        ) : (
-                                            <React.Fragment>
-                                                <span className="flex-1 text-xs text-slate-500 italic">No key yet</span>
-                                                <button onClick={generateApiKey} disabled={!firebaseUser}
-                                                    className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded text-xs font-medium text-white whitespace-nowrap transition-colors">
-                                                    Generate
-                                                </button>
-                                            </React.Fragment>
-                                        )}
-                                    </div>
+                                    <p className="text-xs font-medium text-slate-300 mb-2">1. Install Claude Code (if you haven't already)</p>
+                                    <p className="text-xs text-slate-500 mb-2 leading-relaxed">
+                                        Claude Code is a CLI tool that builds from specs, deploys code, and logs progress back to CC.
+                                    </p>
+                                    <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600/50 rounded-lg text-sm font-medium text-slate-300 transition-colors">
+                                        Claude Code Getting Started
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                    </a>
                                 </div>
 
-                                {/* Step 2: Copy .mcp.json config */}
+                                {/* Sub-step 2: Copy and save .mcp.json */}
                                 <div>
-                                    <p className="text-xs font-medium text-slate-300 mb-2">2. Copy the <code className="text-xs text-indigo-300">.mcp.json</code> config</p>
-                                    <button onClick={copyMcpConfig} disabled={!apiKey}
+                                    <p className="text-xs font-medium text-slate-300 mb-2">2. Add the CC MCP config to your project</p>
+                                    <p className="text-xs text-slate-500 mb-2 leading-relaxed">
+                                        Copy this config and save it as <strong className="text-slate-400">.mcp.json</strong> in the root of the directory where you run Claude Code.
+                                    </p>
+                                    <button onClick={copyMcpConfig}
                                         className={`w-full px-4 py-2.5 border rounded-lg text-sm font-medium transition-colors ${
                                             mcpConfigCopied
                                                 ? 'bg-green-900/20 border-green-800/30 text-green-300'
-                                                : apiKey
-                                                    ? 'bg-slate-700 hover:bg-slate-600 border-slate-600/50 text-slate-300'
-                                                    : 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                                                : 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500 text-white'
                                         }`}>
-                                        {mcpConfigCopied ? '✓ Config copied!' : 'Copy .mcp.json Config'}
+                                        {mcpConfigCopied ? '✓ Config Copied!' : 'Copy .mcp.json Config'}
                                     </button>
-                                    <p className="text-xs text-slate-500 mt-1.5">
-                                        {!apiKey ? 'Generate an API key first.' : 'Includes your API key for authentication.'}
-                                    </p>
+                                    {mcpConfigCopied && (
+                                        <div className="mt-2 p-2.5 bg-slate-900/60 border border-slate-700/30 rounded-lg">
+                                            <pre className="text-[10px] text-slate-400 font-mono whitespace-pre overflow-x-auto">
+{JSON.stringify({ mcpServers: { "cc-mcp": { type: "http", url: "https://cc-mcp-server-...us-central1.run.app/mcp" } } }, null, 2)}
+                                            </pre>
+                                        </div>
+                                    )}
                                 </div>
 
-                                {/* Step 3: Save the file */}
+                                {/* Sub-step 3: Launch and authenticate */}
                                 <div>
-                                    <p className="text-xs font-medium text-slate-300 mb-1">3. Save as <code className="text-xs text-indigo-300">.mcp.json</code> in your project root</p>
+                                    <p className="text-xs font-medium text-slate-300 mb-1">3. Launch Claude Code — it handles auth automatically</p>
                                     <p className="text-xs text-slate-500 leading-relaxed">
-                                        Paste the config into a file called <strong className="text-slate-400">.mcp.json</strong> at the root of your project.
-                                        Add it to <strong className="text-slate-400">.gitignore</strong> to keep your key private.
-                                        Claude Code will detect it automatically on next launch.
+                                        When Claude Code starts, it detects the MCP server and opens your browser for Google Sign-In.
+                                        Use the <strong className="text-slate-400">same Google account</strong> you signed in with in Step 1.
+                                        The connection persists across sessions — you only sign in once.
                                     </p>
                                 </div>
+                            </div>
+
+                            <div className="mt-4 p-3 bg-amber-900/15 border border-amber-700/20 rounded-lg">
+                                <p className="text-xs text-amber-300/80">
+                                    <strong>Tip:</strong> Both Chat and Code share the same data store. Ideas, concepts, jobs — everything stays in sync regardless of which surface you're working from.
+                                </p>
                             </div>
 
                             {navButtons(3, 5, 'Next →')}
@@ -6364,8 +6341,8 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                     <span className="text-sm text-slate-300">MCP server — verify connection in your first chat</span>
                                 </div>
                                 <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
-                                    <span className={`text-sm ${apiKey ? 'text-green-400' : 'text-slate-500'}`}>{apiKey ? '✓' : '○'}</span>
-                                    <span className="text-sm text-slate-300">Claude Code {apiKey ? 'configured' : '— set up anytime from Settings'}</span>
+                                    <span className={`text-sm ${mcpConfigCopied ? 'text-green-400' : 'text-slate-500'}`}>{mcpConfigCopied ? '✓' : '○'}</span>
+                                    <span className="text-sm text-slate-300">Claude Code {mcpConfigCopied ? '— .mcp.json ready, sign in on first launch' : '— set up anytime from Settings'}</span>
                                 </div>
                             </div>
 
