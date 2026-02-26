@@ -6276,9 +6276,9 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                 <button onClick={() => setStep(3)} className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">
                                     ← Back
                                 </button>
-                                <button onClick={handleComplete}
+                                <button onClick={() => { handleComplete(); window.open('https://claude.ai/projects', '_blank'); }}
                                     className="px-6 py-3 rounded-lg bg-green-600 hover:bg-green-500 text-white font-bold transition-colors">
-                                    🚀 Launch Command Center
+                                    🚀 Start First Session
                                 </button>
                             </div>
                         </div>
