@@ -5263,6 +5263,8 @@
     // SETUP WIZARD (v8.70.0 Multi-User)
     // Guided onboarding for new users. Gates main UI until GitHub token is set.
     // v8.70.8: Redesigned as a full-screen modal wizard with welcome page, one step at a time.
+    // v8.73.0: Step 3 "Integrations" → "Connectors", updated tool permissions mock.
+    //          Step 4 replaced API key flow with OAuth (persistent server-side tokens).
     // Steps: Welcome → GitHub Token → Create Claude.ai Project + Instructions → Connect MCP → Connect Claude Code
     // =========================================================================
     function SetupWizard({ firebaseUser, onComplete }) {
