@@ -1,6 +1,6 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-02-25 (v8.72.0)
+> **Last updated:** 2026-02-27 (v8.75.0)
 >
 > **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 27).
 
@@ -37,11 +37,12 @@
 
 | Item | Value |
 |------|-------|
-| **CC app** | `/Users/davidstewart/Downloads/command-center/index.html` (single-file, v8.72.0) |
+| **CC app (source)** | `/Users/davidstewart/Downloads/command-center/index.html` (single-file, v8.75.0) |
+| **Landing page (source)** | `/Users/davidstewart/Downloads/command-center/landing-page.html` |
 | **MCP server** | `/Users/davidstewart/Downloads/command-center/mcp-server/src/` |
 | **Firebase Functions** | `/Users/davidstewart/Downloads/firebase-functions/functions/index.js` |
 | **Firebase Rules** | `/Users/davidstewart/Downloads/firebase-functions/database.rules.json` |
-| **GH Pages site** | `/Users/davidstewart/Downloads/command-center-test/` → `stewartdavidp-ship-it.github.io/command-center-test/` |
+| **GH Pages site** | `/Users/davidstewart/Developer/command-center-test/` → `stewartdavidp-ship-it.github.io/command-center-test/` |
 | **Firebase project** | `word-boxing` |
 | **Firebase UID** | `oUt4ba0dYVRBfPREqoJ1yIsJKjr1` |
 | **MCP server (prod)** | `https://cc-mcp-server-300155036194.us-central1.run.app` |
@@ -50,8 +51,14 @@
 ### Deploy Commands
 
 ```bash
-# CC browser app → GitHub Pages
-cp index.html ../command-center-test/ && cd ../command-center-test && git add index.html && git commit -m "v8.x.x" && git push
+# CC browser app + landing page → GitHub Pages
+# Test repo structure: / = landing page, /app/ = CC admin app
+TEST_REPO=/Users/davidstewart/Developer/command-center-test
+cp landing-page.html "$TEST_REPO/index.html"
+cp index.html "$TEST_REPO/app/index.html"
+cp favicon.svg "$TEST_REPO/favicon.svg"
+cp favicon.svg "$TEST_REPO/app/favicon.svg"
+cd "$TEST_REPO" && git add -A && git commit -m "v8.x.x" && git push
 
 # MCP server → Cloud Run (test by default, --prod for production)
 cd mcp-server && bash deploy.sh          # deploys to cc-mcp-server-test
@@ -85,6 +92,17 @@ Command Center (CC) is an **AI ideation rigor platform** — a structured system
 
 CC is a single-file React application deployed via GitHub Pages. It uses React 18 via CDN, Tailwind CSS via CDN, and Firebase Realtime Database for persistence.
 
+### Site Structure (GitHub Pages)
+
+The deploy repo (`command-center-test`) serves two pages:
+
+| Path | File | Purpose |
+|------|------|---------|
+| `/` (root) | `index.html` (from `landing-page.html`) | Public landing page — product overview, CTAs |
+| `/app/` | `app/index.html` (from `index.html`) | CC admin app — full SPA |
+
+The landing page links to `/app/?setup` for new user onboarding (wizard-only mode) and `/app/` for existing users. The CC app detects the `?setup` URL parameter and shows only the SetupWizard, hiding the main UI until setup completes.
+
 ### Design Principle: Data Layer / Decision Layer
 
 CC is the data and persistence layer. Claude is the reasoning and decision layer. The MCP server is the interface between them.
@@ -103,7 +121,9 @@ CC is the data and persistence layer. Claude is the reasoning and decision layer
 │                                                                          │
 │  ┌─────────────┐    Firebase RTDB     ┌──────────────────────┐          │
 │  │  CC Browser  │◄──────────────────►│  word-boxing          │          │
-│  │  App (SPA)   │   push listeners    │  default-rtdb         │          │
+│  │  App (/app/) │   push listeners    │  default-rtdb         │          │
+│  │  + Landing   │                     │                       │          │
+│  │  Page (root) │                     │                       │          │
 │  │  GitHub Pages│                     │                       │          │
 │  └─────────────┘                     │  command-center/{uid}/ │          │
 │                                       └──────────┬───────────┘          │
@@ -127,7 +147,8 @@ CC is the data and persistence layer. Claude is the reasoning and decision layer
 
 | Service | Where It Runs | Purpose |
 |---------|--------------|---------|
-| CC Browser App | GitHub Pages | UI for ODRC management, jobs, sessions, settings |
+| Landing Page | GitHub Pages (root `/`) | Product overview, onboarding CTAs, launch button |
+| CC Browser App | GitHub Pages (`/app/`) | UI for ODRC management, jobs, sessions, settings |
 | CC MCP Server (prod) | Cloud Run (`cc-mcp-server`, `us-central1`) | Tools + skills for all users |
 | CC MCP Server (test) | Cloud Run (`cc-mcp-server-test`, `us-central1`) | Validates MCP changes before prod promotion |
 | Firebase Cloud Functions | GCP (`word-boxing`) | CC: DNS proxy + doc cleanup. Game Shelf: 22 functions (separate codebase) |
@@ -440,8 +461,8 @@ Game Shelf functions (22 functions) are deployed from a separate codebase at `/D
 
 | Repo | Visibility | Content |
 |------|-----------|---------|
-| `stewartdavidp-ship-it/command-center` | Public | CC app, MCP server source, ARCHITECTURE.md, CLAUDE.md |
-| `stewartdavidp-ship-it/command-center-test` | Public | GitHub Pages deploy target |
+| `stewartdavidp-ship-it/command-center` | Public | CC app (`index.html`), landing page (`landing-page.html`), MCP server source, ARCHITECTURE.md, CLAUDE.md |
+| `stewartdavidp-ship-it/command-center-test` | Public | GitHub Pages deploy target — root: landing page, `/app/`: CC admin app |
 | `stewartdavidp-ship-it/firebase-functions` | **Private** | domainProxy, documentCleanup, database.rules.json |
 
 ---
@@ -519,7 +540,7 @@ All source code is in GitHub. Updated 2026-02-25.
 
 | Service | Platform | Recovery Path |
 |---------|----------|---------------|
-| CC browser app | GitHub Pages | Push to `command-center-test` repo |
+| CC browser app + landing page | GitHub Pages | Copy to `command-center-test` repo (landing page → root, CC app → `/app/`), commit, push |
 | MCP server (prod) | Cloud Run (`cc-mcp-server`) | `cd mcp-server && bash deploy.sh --prod` |
 | MCP server (test) | Cloud Run (`cc-mcp-server-test`) | `cd mcp-server && bash deploy.sh` |
 | Cloud Functions | Firebase | See deploy commands in Quick Reference |
