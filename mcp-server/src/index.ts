@@ -273,10 +273,18 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
           // Track connected surfaces — fire-and-forget write for wizard real-time status.
           // Excludes "user" (admin surface, not a Claude connector).
           if (surface !== "user") {
-            getDb()
-              .ref(`command-center/${firebaseUid}/connectedSurfaces/${surface}`)
-              .update({ lastSeen: new Date().toISOString() })
-              .catch(() => {});
+            const now = new Date().toISOString();
+            const updates: Record<string, unknown> = {
+              [`command-center/${firebaseUid}/connectedSurfaces/${surface}/lastSeen`]: now,
+            };
+            // Chat and Cowork share the same Claude.ai connector —
+            // if one works, the other does too.
+            if (surface === "claude-chat") {
+              updates[`command-center/${firebaseUid}/connectedSurfaces/claude-cowork/lastSeen`] = now;
+            } else if (surface === "claude-cowork") {
+              updates[`command-center/${firebaseUid}/connectedSurfaces/claude-chat/lastSeen`] = now;
+            }
+            getDb().ref().update(updates).catch(() => {});
           }
         }
 
