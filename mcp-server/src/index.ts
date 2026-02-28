@@ -9,7 +9,7 @@ import { requestContext, setContextEstimate, setContextPerSurface, setSurfaceCon
 import { computeSignals } from "./signal-computation.js";
 import { parseSurface } from "./surfaces.js";
 import { getActiveSessionId, getPendingContextAccumulation, getPendingContextPerSurface } from "./tools/sessions.js";
-import { getSessionRef, getDocumentsRef } from "./firebase.js";
+import { getSessionRef, getDocumentsRef, getDb } from "./firebase.js";
 import { ensureSession } from "./session-lifecycle.js";
 
 // Initialize Firebase before anything else
@@ -269,6 +269,15 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         const surface = parseSurface(initiatorArg);
         if (surface) {
           setInitiator(surface);
+
+          // Track connected surfaces — fire-and-forget write for wizard real-time status.
+          // Excludes "user" (admin surface, not a Claude connector).
+          if (surface !== "user") {
+            getDb()
+              .ref(`command-center/${firebaseUid}/connectedSurfaces/${surface}`)
+              .update({ lastSeen: new Date().toISOString() })
+              .catch(() => {});
+          }
         }
 
         const ce = req.body.params?.arguments?.contextEstimate;

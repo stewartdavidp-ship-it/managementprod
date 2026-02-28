@@ -5365,8 +5365,17 @@
             }
         }, []);
         const [selectedMcpSurface, setSelectedMcpSurface] = React.useState('claude-chat');
+        const [connectedSurfaces, setConnectedSurfaces] = React.useState({});
         const [initPromptCopied, setInitPromptCopied] = React.useState(false);
         const [mcpConfigCopied, setMcpConfigCopied] = React.useState(false);
+
+        // Real-time tracking of which Claude surfaces have connected via MCP
+        React.useEffect(() => {
+            if (!firebaseUser) return;
+            const ref = firebaseDb.ref(`command-center/${firebaseUser.uid}/connectedSurfaces`);
+            const handler = ref.on('value', snap => setConnectedSurfaces(snap.val() || {}));
+            return () => ref.off('value', handler);
+        }, [firebaseUser]);
 
         // Tutorial state
         const [showTutorial, setShowTutorial] = React.useState(false);
@@ -5973,16 +5982,21 @@
                                     { key: 'claude-cowork', icon: '🤝', label: 'Cowork' },
                                     { key: 'claude-powerpoint', icon: '📊', label: 'PowerPoint' },
                                     { key: 'claude-excel', icon: '📗', label: 'Excel' },
-                                ].map(s => (
-                                    <button key={s.key} onClick={() => setSelectedMcpSurface(s.key)}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                                            selectedMcpSurface === s.key
-                                                ? 'bg-indigo-600 text-white border border-indigo-500'
-                                                : 'bg-slate-700/50 text-slate-400 border border-slate-600/40 hover:border-slate-500 hover:text-slate-300'
-                                        }`}>
-                                        {s.icon} {s.label}
-                                    </button>
-                                ))}
+                                ].map(s => {
+                                    const isConnected = !!connectedSurfaces[s.key];
+                                    return (
+                                        <button key={s.key} onClick={() => setSelectedMcpSurface(s.key)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                                                selectedMcpSurface === s.key
+                                                    ? 'bg-indigo-600 text-white border border-indigo-500'
+                                                    : isConnected
+                                                        ? 'bg-slate-700/50 text-green-400 border border-green-600/40 hover:border-green-500'
+                                                        : 'bg-slate-700/50 text-slate-400 border border-slate-600/40 hover:border-slate-500 hover:text-slate-300'
+                                            }`}>
+                                            {s.icon} {s.label} {isConnected && '✓'}
+                                        </button>
+                                    );
+                                })}
                             </div>
 
                             {/* ── Claude.ai Chat ── */}
@@ -6228,10 +6242,21 @@
                                     <span className={`text-sm ${validated ? 'text-green-400' : 'text-slate-500'}`}>{validated ? '✓' : '○'}</span>
                                     <span className="text-sm text-slate-300">{validated ? `GitHub: ${validated.login} (${validated.repos} repos)${validated.oauth ? ' • OAuth' : ''}` : 'GitHub — skipped (connect later in Settings)'}</span>
                                 </div>
-                                <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
-                                    <span className={`text-sm ${mcpConfigCopied ? 'text-green-400' : 'text-slate-500'}`}>{mcpConfigCopied ? '✓' : '○'}</span>
-                                    <span className="text-sm text-slate-300">MCP server {mcpConfigCopied ? '— URL copied, add to Chat and/or Code' : '— verify connection in your first chat'}</span>
-                                </div>
+                                {[
+                                    { key: 'claude-chat', label: 'Chat' },
+                                    { key: 'claude-code', label: 'Code' },
+                                    { key: 'claude-cowork', label: 'Cowork' },
+                                    { key: 'claude-powerpoint', label: 'PowerPoint' },
+                                    { key: 'claude-excel', label: 'Excel' },
+                                ].map(s => {
+                                    const connected = !!connectedSurfaces[s.key];
+                                    return (
+                                        <div key={s.key} className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
+                                            <span className={`text-sm ${connected ? 'text-green-400' : 'text-slate-500'}`}>{connected ? '✓' : '○'}</span>
+                                            <span className="text-sm text-slate-300">{s.label} {connected ? '— connected' : '— not connected yet'}</span>
+                                        </div>
+                                    );
+                                })}
                                 <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
                                     <span className={`text-sm ${initPromptCopied ? 'text-green-400' : 'text-slate-500'}`}>{initPromptCopied ? '✓' : '○'}</span>
                                     <span className="text-sm text-slate-300">Init prompt {initPromptCopied ? 'copied — paste into Claude to activate' : '— paste into Claude to activate'}</span>
