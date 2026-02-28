@@ -149,11 +149,14 @@ export async function handleInit(
 
   // Surface-appropriate memory boot loader lines
   const memoryLines = getMemoryLines(surface);
+  const writeInstructions = getWriteInstructions(surface);
 
   const payload = {
     memoryLines,
-    confirmation:
-      "Memory boot loader ready. Write these lines to your Claude Memory, then call session(bootstrap) to start.",
+    writeInstructions,
+    nextStep: `After writing memory, immediately call session(bootstrap, initiator='${surface}') to complete setup. Do this in the same conversation.`,
+    userMessage:
+      "Command Center initialized! Memory boot lines saved — future conversations will auto-bootstrap.",
   };
 
   return withResponseSize({
@@ -361,4 +364,20 @@ function getMemoryLines(surface: Surface): string[] {
     `On conversation start: call skill(get, skillName='${routerSkillName}') then follow its bootstrap instructions.`,
     "Budget tracking: report [est]K / [zone] / [headroom] every turn. Zones: Green <360K, Yellow 360-480K, Red 480-580K, Imminent 580K+.",
   ];
+}
+
+function getWriteInstructions(surface: Surface): string {
+  switch (surface) {
+    case "claude-code":
+      return "Write these lines to your MEMORY.md file using your Write tool. Append them under a '# Command Center' heading. If the file doesn't exist, create it with these lines.";
+    case "claude-chat":
+      return "Save each of these lines to your memory so they persist across all future conversations.";
+    case "claude-cowork":
+    case "claude-chrome":
+    case "claude-powerpoint":
+    case "claude-excel":
+      return "Save these lines to your memory so they persist across sessions.";
+    default:
+      return "Save these lines to your persistent memory. For Claude Code, write them to your MEMORY.md file. For Claude Chat, save them as memory entries.";
+  }
 }
