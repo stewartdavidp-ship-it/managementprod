@@ -5,7 +5,7 @@
 >
 > **Keep current:** Update this file whenever architecture changes are made.
 >
-> **Last updated:** 2026-02-23 — Revision 28
+> **Last updated:** 2026-02-28 — Revision 30
 
 ---
 
@@ -30,7 +30,7 @@ Both agents share the same Firebase Realtime Database namespace and communicate 
 └──────────────┘
 ```
 
-**Key numbers:** 13 tools, 27 skills, 2 built-in prompts, 1 resource, 357 E2E tests.
+**Key numbers:** 13 tools, 33 skills, 2 built-in prompts, 1 resource, 447 E2E tests.
 
 ---
 
@@ -215,6 +215,12 @@ command-center/
     │       ├── consensusNotes
     │       └── crossRefs: [{nodeId, treeId, relationship, addedAt}]
     │
+    ├── skills/{skillName}/              # Skill storage (Firebase-backed since v8.76)
+    │   ├── name, description, content
+    │   ├── category, triggers[], version
+    │   ├── updatedAt, updatedBy, createdAt
+    │   └── (cached in-memory with 5-min TTL)
+    │
     └── apiKeyHash                       # SHA-256 of CC API key
 ```
 
@@ -257,6 +263,8 @@ These `.indexOn` rules are required for server-side query filtering. Without the
 | `getTreeIndexRef(uid, tid)` | `command-center/{uid}/knowledge/trees/{tid}/index` |
 | `getNodesRef(uid)` | `command-center/{uid}/knowledge/nodes` |
 | `getNodeContentRef(uid, nid)` | `command-center/{uid}/knowledge/nodes/{nid}` |
+| `getSkillsRef(uid)` | `command-center/{uid}/skills` |
+| `getSkillRef(uid, name)` | `command-center/{uid}/skills/{name}` |
 
 ---
 
@@ -300,7 +308,7 @@ Concept statuses: `active`, `superseded`, `resolved`, `transitioned`, `built`
 | `knowledge_tree` | list_forests, get_forest, create_forest, update_forest, delete_forest, list_trees, get_tree, create_tree, update_tree, delete_tree, get_index, add_search, search_tags, generate_summary, get_forest_summary | Both |
 | `knowledge_node` | create, update, delete, load, load_batch, move, add_cross_ref, remove_cross_ref, bulk_verify | Both |
 | `repo_file` | _(single read action: repo, path, branch)_ | Both |
-| `skill` | list, get | Chat |
+| `skill` | list, get, create, update, delete | Both |
 
 ### Job Event Types
 
@@ -338,7 +346,7 @@ Jobs serve as the universal handoff between Claude Chat and Claude Code:
 
 ## 8. Skills Reference
 
-### 27 Registered Skills
+### 33 Registered Skills
 
 | # | Skill Name | Agent | Purpose |
 |---|-----------|-------|---------|
@@ -369,8 +377,20 @@ Jobs serve as the universal handoff between Claude Chat and Claude Code:
 | 25 | `cc-skill-router` | Chat | Routes user intent to appropriate skill |
 | 26 | `cc-job-creation-protocol` | Chat | Protocol for creating well-formed draft jobs |
 | 27 | `cc-retro-journal` | Chat | Retrospective journaling for session reflection |
+| 28 | `cc-startup-checklist` | Chat | General startup checklist for new sessions |
+| 29 | `cc-tutorial` | Chat | Interactive tutorial for new users |
+| 30 | `cc-code-startup-checklist` | Code | Code agent startup checklist |
+| 31 | `cc-acc-video` | Chat | ACC video production guidelines |
+| 32 | `cc-skill-creation` | Chat | Protocol for creating new skills |
+| 33 | `cc-cowork-startup-checklist` | Code | Cowork agent startup checklist |
 
-Skills are registered both as MCP prompts (for Claude Code) and accessible via the `skill` tool (for Claude Chat, which uses tools not prompts).
+### Skill Storage
+
+Skills are stored in Firebase RTDB at `command-center/{uid}/skills/{skillName}` and cached in-memory with a 5-minute TTL. The `skill` tool supports full CRUD (create, update, delete) with write-through to both Firebase and cache. Skills are also registered as MCP prompts (for Claude Code) from the cache at server creation time.
+
+**Fallback chain:** Firebase → compiled constants in `skills.ts`. On first deploy (or if Firebase is empty), the compiled constants are served. Use `migrate-skills.sh` to seed Firebase from compiled constants.
+
+**Cache lifecycle:** `skill-cache.ts` initializes lazily on first authenticated request. The `initSkillCache(uid)` function is idempotent — subsequent calls are no-ops. Cache entries have a 5-min TTL but write-through operations keep them fresh.
 
 ---
 
@@ -516,9 +536,10 @@ mcp-server/
 │   ├── index.ts                   # Express app, CORS, auth middleware, MCP endpoints
 │   ├── server.ts                  # MCP server creation, tool/prompt/resource registration
 │   ├── context.ts                 # AsyncLocalStorage<RequestContext>, getCurrentUid()
-│   ├── firebase.ts                # Firebase Admin init, 23 reference factory functions
+│   ├── firebase.ts                # Firebase Admin init, 25 reference factory functions
 │   ├── github.ts                  # GitHub Contents API client (auto-delivery)
-│   ├── skills.ts                  # 27 skill prompt constants, registerSkillPrompts()
+│   ├── skills.ts                  # 33 skill prompt constants, registerSkillPrompts(), getCompiledSkillRegistry()
+│   ├── skill-cache.ts             # In-memory skill cache (Firebase-backed, 5-min TTL, write-through)
 │   ├── auth/
 │   │   ├── oauth.ts               # OAuth 2.1 router (5 endpoints + sign-in page)
 │   │   └── store.ts               # In-memory OAuth state + API key validation
@@ -533,9 +554,10 @@ mcp-server/
 │       ├── knowledge-tree.ts      # knowledge_tree tool (forest/tree CRUD, index, search, 15 actions)
 │       ├── knowledge-node.ts      # knowledge_node tool (node CRUD, cross-refs, bulk_verify, 9 actions)
 │       ├── repo.ts                # repo_file tool (read files from GitHub repos)
-│       └── skills.ts              # skill tool (list/get bridge for Chat)
+│       └── skills.ts              # skill tool (list/get/create/update/delete — full CRUD)
 ├── deploy.sh                      # Build + deploy to Cloud Run + OAuth verification
-├── e2e-test.sh                    # 303 E2E tests against live service
+├── e2e-test.sh                    # 467 E2E tests against live service
+├── migrate-skills.sh              # Seed Firebase skills from compiled constants (idempotent)
 ├── Dockerfile                     # Two-stage: build TypeScript, run production
 ├── package.json                   # Dependencies and scripts
 ├── tsconfig.json                  # TypeScript config (ES2022, NodeNext, strict)

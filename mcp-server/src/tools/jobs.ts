@@ -48,7 +48,7 @@ Actions:
   - "update": Update job fields. Requires jobId. instructions and attachments can only be updated on draft jobs. externalRefs can be updated on any non-terminal job.
   - "add_event": Append event to job log. Requires jobId, eventType, detail. Optional: refId.
   - "complete": Finalize job. Requires jobId, status (completed/failed/abandoned), summary. Optional: filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId.
-  - "get": Get job by ID. Requires jobId.
+  - "get": Get job by ID. Requires jobId. Returns lean response by default (instructions and attachments excluded). Use includeInstructions=true to include full content.
   - "list": List jobs. Optional filters: appId, ideaId, status, createdBy, jobType, limit.
   - "delete": Delete a job. Requires jobId. Use for test cleanup only.`,
     {
@@ -94,8 +94,9 @@ Actions:
         syncStatus: z.enum(["current", "stale", "conflict"]).optional().describe("Current sync status"),
       })).max(50).optional().describe("External system references (optional for update). Max 50 entries."),
       includeSnapshot: z.boolean().optional().describe("For 'get': include claudeMdSnapshot in response (default: false — saves context window)"),
+      includeInstructions: z.boolean().optional().describe("For 'get': include instructions and attachments in response (default: false — saves context window)"),
     },
-    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, externalRefs, limit, offset, includeSnapshot }) => {
+    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, externalRefs, limit, offset, includeSnapshot, includeInstructions }) => {
       resolveInitiator({ initiator, createdBy });
       const uid = getCurrentUid();
 
@@ -241,7 +242,25 @@ Actions:
           startedAt: now,
         };
         await ref.update(updates);
-        return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
+
+        // Lean response: confirmation fields only
+        const claimConfirmation = {
+          id: job.id,
+          title: job.title,
+          status: "active",
+          appId: job.appId,
+          ideaId: job.ideaId,
+          jobType: job.jobType || "build",
+          claimedAt: updates.claimedAt,
+          claimedBy: updates.claimedBy,
+          startedAt: updates.startedAt,
+          instructions: job.instructions || null,
+          attachments: job.attachments || [],
+          conceptSnapshot: job.conceptSnapshot || null,
+          preConditions: job.preConditions || null,
+          exceptionsNoted: job.exceptionsNoted || [],
+        };
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(claimConfirmation, null, 2) }] });
       }
 
       // ─── REVISE ───
@@ -522,10 +541,21 @@ Actions:
           }
         }
 
-        const completed: any = { ...job, ...updates, outcome: { ...job.outcome, testsRun, testsPassed, testsFailed, buildSuccess, deployId }, metadata: { ...job.metadata, linesAdded, linesRemoved } };
-        if (conceptsBuilt.length > 0) completed.conceptsBuilt = conceptsBuilt;
-        if (ideaSignal) completed.ideaSignal = ideaSignal;
-        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(completed, null, 2) }] });
+        // Lean response: confirmation fields only
+        const completionConfirmation: any = {
+          id: job.id,
+          title: job.title,
+          status,
+          completedAt: now,
+          duration,
+          summary,
+          conceptsAddressed: mergedConceptsAddressed,
+          filesChanged: mergedFilesChanged,
+          outcome: { testsRun: testsRun ?? null, testsPassed: testsPassed ?? null, testsFailed: testsFailed ?? null, buildSuccess: buildSuccess ?? null, deployId: deployId ?? null },
+        };
+        if (conceptsBuilt.length > 0) completionConfirmation.conceptsBuilt = conceptsBuilt;
+        if (ideaSignal) completionConfirmation.ideaSignal = ideaSignal;
+        return withResponseSize({ content: [{ type: "text", text: JSON.stringify(completionConfirmation, null, 2) }] });
       }
 
       // ─── GET ───
@@ -543,6 +573,26 @@ Actions:
           const snapshotLen = job.claudeMdSnapshot.length;
           delete job.claudeMdSnapshot;
           job._snapshotExcluded = `claudeMdSnapshot (${snapshotLen} chars) excluded. Use includeSnapshot=true to include.`;
+        }
+
+        // Strip instructions and attachments by default to save context window
+        if (!includeInstructions) {
+          if (job.instructions) {
+            const instrLen = job.instructions.length;
+            delete job.instructions;
+            job._instructionsExcluded = `instructions (${instrLen} chars) excluded. Use includeInstructions=true to include.`;
+          }
+          if (job.attachments && Array.isArray(job.attachments) && job.attachments.length > 0) {
+            const attachLen = JSON.stringify(job.attachments).length;
+            const attachCount = job.attachments.length;
+            delete job.attachments;
+            job._attachmentsExcluded = `${attachCount} attachments (${attachLen} chars) excluded. Use includeInstructions=true to include.`;
+          }
+          if (job.conceptSnapshot) {
+            const snapLen = JSON.stringify(job.conceptSnapshot).length;
+            delete job.conceptSnapshot;
+            job._conceptSnapshotExcluded = `conceptSnapshot (${snapLen} chars) excluded. Use includeInstructions=true to include.`;
+          }
         }
 
         // Cap events to last 20 to save context window

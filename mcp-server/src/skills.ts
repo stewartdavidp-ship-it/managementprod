@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getAllCachedSkills, type SkillRecord } from "./skill-cache.js";
 
 /**
  * CC skills registered as MCP prompts.
- * 28 skills:
+ * 33 skills:
  *   1. cc-odrc-framework — ODRC type definitions, state machine, writeback protocol
  *   2. cc-session-structure — Live session lifecycle with Firebase-backed tracking
  *   3. cc-session-protocol — Master "how to run a session" skill (Claude Chat)
@@ -31,8 +32,41 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
  *  26. cc-job-creation-protocol — How Chat creates well-formed build jobs for Code
  *  27. cc-retro-journal — Shared learning journal for Chat and Code
  *  28. cc-startup-checklist — Mandatory cold start sequence for Chat
+ *  29. cc-tutorial — Guided onboarding tutorial, builds a grocery list app
+ *  30. cc-code-startup-checklist — Cold start sequence for Code
+ *  31. cc-acc-video — ACC video production pipeline, HTML animations to MP4
+ *  32. cc-skill-creation — How to create CC MCP skills, the 6-step flow
+ *  33. cc-cowork-startup-checklist — Cold start sequence for Cowork
  */
 export function registerSkillPrompts(server: McpServer): void {
+  // Register prompts from in-memory cache (Firebase-backed).
+  // Each request creates a new McpServer, so this runs per-request.
+  // The cache is a module-level singleton populated at startup.
+  const cachedSkills = getAllCachedSkills();
+
+  if (cachedSkills.length > 0) {
+    for (const skill of cachedSkills) {
+      server.prompt(
+        skill.name,
+        skill.description,
+        {},
+        async () => ({
+          messages: [{
+            role: "user",
+            content: {
+              type: "text",
+              text: skill.content,
+            },
+          }],
+        })
+      );
+    }
+    return;
+  }
+
+  // Fallback: register from compiled constants if cache is empty
+  // (should only happen if cache init failed)
+  console.warn("[skills] Cache empty, falling back to compiled prompt registration");
 
   // ─── 1. ODRC Framework ───────────────────────────────────────────────
   server.prompt(
@@ -461,6 +495,54 @@ export function registerSkillPrompts(server: McpServer): void {
         content: {
           type: "text",
           text: SKILL_CODE_STARTUP_CHECKLIST,
+        },
+      }],
+    })
+  );
+
+  // ─── 31. ACC Video Production ─────────────────────────────────
+  server.prompt(
+    "cc-acc-video",
+    "ACC video production pipeline — HTML animations to MP4 for landing page episodes. Use for episode creation, HTML animation building, HTML-to-MP4 conversion, or ACC landing page video content.",
+    {},
+    async () => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: SKILL_ACC_VIDEO,
+        },
+      }],
+    })
+  );
+
+  // ─── 32. Skill Creation & Router Registration ────────────────────
+  server.prompt(
+    "cc-skill-creation",
+    "How to create CC MCP skills — the 6-step flow from trigger recognition to Code deployment. Use when building new skills or updating the skill router.",
+    {},
+    async () => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: SKILL_SKILL_CREATION,
+        },
+      }],
+    })
+  );
+
+  // ─── 33. Cowork Startup Checklist ──────────────────────────────────
+  server.prompt(
+    "cc-cowork-startup-checklist",
+    "Cold start sequence for Cowork — router load, message check, opt-in session capture, budget tracking. Load at conversation start for claude-cowork surface.",
+    {},
+    async () => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: SKILL_COWORK_STARTUP_CHECKLIST,
         },
       }],
     })
@@ -1281,15 +1363,32 @@ Call: concept
 
 ### Step 6a: Mark Concepts Built
 
-Before completing the job, mark all concepts listed in the "Concepts Addressed" section of the job instructions as built. Also include any concepts you logged as \`concept_addressed\` events during the build.
+Before completing the job, review ALL active concepts for the idea — not just the ones listed in "Concepts Addressed."
 
+1. **Fetch active concepts for the idea:**
+\`\`\`
+Call: list_concepts
+  ideaId: [the idea ID]
+  grouped: true
+\`\`\`
+
+2. **For each active DECISION:** Was it implemented in this build? If yes, mark it built:
 \`\`\`
 Call: concept
   action: "mark_built"
-  conceptId: [each concept ID from the job's "Concepts Addressed" section]
+  conceptId: [concept ID]
 \`\`\`
 
-Work through every concept ID. This is how CC tracks which decisions were actually implemented — skipping this creates orphaned "active" decisions that are already built, making idea lifecycle tracking inaccurate.
+3. **For each active OPEN:** Was it encountered or answered? If yes, resolve it:
+\`\`\`
+Call: concept
+  action: "resolve"
+  conceptId: [concept ID]
+\`\`\`
+
+4. **For RULEs and CONSTRAINTs:** These stay active (they're ongoing). Only transition them if the build revealed they're wrong.
+
+Work through every concept. This is how CC tracks which decisions were actually implemented — skipping this creates orphaned "active" decisions that are already built, making idea lifecycle tracking inaccurate. Jobs that complete with an empty \`conceptsAddressed\` array are a red flag.
 
 ### Step 6b: Complete the Job
 
@@ -1346,7 +1445,13 @@ If you have a genuine entry, create a skill-update job to append it to cc-retro-
 - **Don't forget to complete the job** — even failed builds need a completion record
 - **Don't skip mark_built** — every concept in "Concepts Addressed" must be marked. This is a RULE, not a suggestion. Orphaned active concepts poison idea lifecycle tracking.
 - **Use the consolidated tool names** — \`job\` (not start_job), \`concept\` (not create_concept), \`document\` (not push_document)
-- **Don't forget architecture docs** — If you added or changed Firebase listeners, query patterns, indexes, or background processes, update SYSTEM-CONTEXT.md Section 17 (Operational Safeguards) and ARCHITECTURE.md's listener tables`;
+- **Don't forget architecture docs** — Review what changed and update the relevant docs:
+  - **Added/removed skills?** Update skill count in: skills.ts header comment, ARCHITECTURE.md (ecosystem map + data flow), SYSTEM-CONTEXT.md (key numbers)
+  - **Added/removed MCP tools?** Update tool count in the same three places
+  - **Changed Firebase listeners, query patterns, indexes, or background processes?** Update SYSTEM-CONTEXT.md Section 17 (Operational Safeguards) and ARCHITECTURE.md's listener tables
+  - **Changed deploy workflows, auth model, or data paths?** Update ARCHITECTURE.md's relevant section
+  - **Changed e2e test count?** Update SYSTEM-CONTEXT.md key numbers
+  - Rule of thumb: if the build changed something described in ARCHITECTURE.md or SYSTEM-CONTEXT.md, update it before completing the job`;
 
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -3316,87 +3421,210 @@ Then load specific sections via \`section="## Section Name"\`.
 | skill | Skill content retrieval |
 | repo_file | Fetch files from GitHub repos (read-only) |
 
-## Chat Routing
+## Skill Catalog — Keyword + Intent Routing
 
-| Trigger | Skill(s) to Read |
+Each entry has keywords for matching and an intent statement describing when to load it.
+
+### Onboarding
+
+**cc-startup-checklist**
+Keywords: startup, cold start, new conversation, profile, onboarding
+Intent: Chat agent starting a new conversation — run mandatory cold start sequence
+Surface: Chat
+
+**cc-code-startup-checklist**
+Keywords: startup, cold start, messages, jobs, documents
+Intent: Code agent starting a new session — check messages, documents, draft jobs
+Surface: Code
+
+**cc-cowork-startup-checklist**
+Keywords: startup, cold start, messages, router, cowork
+Intent: Cowork agent starting a new session — load router, check messages, opt-in session capture
+Surface: Cowork
+
+**cc-tutorial**
+Keywords: tutorial, onboard, learn, teach, getting started, walkthrough
+Intent: User wants guided onboarding through a hands-on CC tutorial
+Surface: Chat
+
+### Ideation
+
+**cc-odrc-framework**
+Keywords: ODRC, concept, open, decision, rule, constraint, capture
+Intent: User wants to create, classify, or transition ODRC concepts during ideation
+Surface: Chat
+
+**cc-session-structure**
+Keywords: session, ideation, start session, wrap up, done, close
+Intent: User wants to start, manage, or close an ideation session
+Surface: Chat
+
+**cc-session-protocol**
+Keywords: session, protocol, enrichment, mismatch, flush, auto-created
+Intent: Master session protocol — how to run a session end-to-end (Chat)
+Surface: Chat
+
+**cc-mode-exploration**
+Keywords: explore, discovery, brainstorm, diverge, what if, open-ended
+Intent: User wants open-ended exploration to surface OPENs and early decisions
+Surface: Chat
+
+**cc-lens-technical**
+Keywords: technical, architecture, feasibility, implementation, dependencies, risk
+Intent: Run technical lens — probe feasibility, architecture, and implementation risk
+Surface: Chat
+
+**cc-lens-stress-test**
+Keywords: stress, break, edge case, failure, what breaks, pressure
+Intent: Run stress test lens — find what breaks in existing decisions
+Surface: Chat
+
+**cc-lens-voice-of-customer**
+Keywords: user, persona, journey, retention, customer, audience
+Intent: Run voice-of-customer lens — persona analysis, journey mapping, retention
+Surface: Chat
+
+**cc-lens-competitive**
+Keywords: competitive, competitor, differentiation, positioning, market
+Intent: Run competitive lens — competitive analysis and positioning
+Surface: Chat
+
+**cc-lens-economics**
+Keywords: cost, economics, effort, ROI, budget, maintenance, pricing
+Intent: Run economics lens — cost analysis, effort estimation, ROI
+Surface: Chat
+
+**cc-lens-integration**
+Keywords: integration, ecosystem, coupling, dependency, contract, cross-app
+Intent: Run integration lens — cross-app data coupling and ecosystem impact
+Surface: Chat
+
+**cc-lens-ux-deep-dive**
+Keywords: UX, user flow, navigation, interaction, loading, transition, mobile
+Intent: Run UX deep-dive lens — screen-by-screen walkthrough and user flows
+Surface: Chat
+
+**cc-lens-content**
+Keywords: content, information architecture, editorial, quality, lifecycle
+Intent: Run content lens — content strategy and information architecture
+Surface: Chat
+
+**cc-lens-growth**
+Keywords: growth, distribution, acquisition, SEO, social, viral, sharing
+Intent: Run growth lens — distribution strategy and measurement
+Surface: Chat
+
+**cc-lens-accessibility**
+Keywords: accessibility, WCAG, keyboard, screen reader, contrast, cognitive
+Intent: Run accessibility lens — compliance audit and inclusive design
+Surface: Chat
+
+**cc-lens-operations**
+Keywords: operations, monitoring, analytics, health check, deployment, incident
+Intent: Run operations lens — post-launch observability and verification
+Surface: Chat
+
+**cc-lens-security**
+Keywords: security, privacy, auth, attack, Firebase rules, vulnerability, XSS
+Intent: Run security lens — attack surfaces, authorization, data protection
+Surface: Chat
+
+### Handoff
+
+**cc-spec-generation**
+Keywords: CLAUDE.md, spec, generate, push, specification, document
+Intent: User wants to generate and optionally push a CLAUDE.md to a repo
+Surface: Chat
+
+**cc-job-creation-protocol**
+Keywords: job, build, spec, code, handoff, submit, draft job
+Intent: User wants to package decisions into a build job for Code
+Surface: Chat
+
+### Build
+
+**cc-build-protocol**
+Keywords: build, implement, code, claim, execute, deploy, job
+Intent: Code agent has a job to execute — master build protocol
+Surface: Code
+
+**cc-build-hygiene**
+Keywords: hygiene, cleanup, post-build, graduation, complete, close job
+Intent: Build is done — run post-build concept cleanup and idea graduation
+Surface: Code
+
+**cc-mcp-workflow**
+Keywords: workflow, lifecycle, end-to-end, Chat Code, interaction, pipeline
+Intent: Understand the full Chat → Code lifecycle and how agents interact via MCP
+Surface: Both
+
+### Coordination
+
+**cc-protocol-messaging**
+Keywords: message, send, receive, inter-agent, Chat Code, notification
+Intent: Agent needs to send/receive messages between surfaces
+Surface: Both
+
+**cc-skill-creation**
+Keywords: skill, create skill, new skill, add skill, router entry, naming
+Intent: User wants to define a new CC skill — content, format, router entry, build job
+Surface: Chat
+
+### Recovery
+
+**cc-session-resume**
+Keywords: resume, compaction, recovery, lost context, session restore, orphan
+Intent: Chat session hit compaction or needs to recover from context loss
+Surface: Chat
+
+**cc-build-resume**
+Keywords: resume, compaction, recovery, lost context, build restore
+Intent: Code build hit compaction — recover job state and continue
+Surface: Code
+
+**cc-session-continuity**
+Keywords: continue, pick up, left off, existing idea, resume work
+Intent: New conversation continuing work on an existing idea
+Surface: Chat
+
+### Meta
+
+**cc-skill-router**
+Keywords: router, skill list, which skill, routing, catalog, prompt
+Intent: Determine which skill to load for a given trigger or user request
+Surface: Both
+
+**cc-retro-journal**
+Keywords: retro, journal, learning, discovery, reflection, insight
+Intent: Record or read genuine discoveries that change future behavior
+Surface: Both
+
+### Other
+
+**cc-acc-video**
+Keywords: episode, video, animation, HTML to MP4, landing page, Descript, segment
+Intent: User wants to create ACC landing page video episodes — HTML animations to MP4
+Surface: Code
+
+## System-Level Triggers (No User Action Required)
+
+These triggers are detected automatically by the agent, not triggered by user keywords:
+
+| Trigger | Skill(s) to Load |
 |---|---|
-| Cold start (new conversation) | cc-startup-checklist |
-| "start tutorial" | cc-tutorial |
-| "start ideation [idea/app]" | cc-odrc-framework, cc-session-structure |
-| "run [name] lens" | cc-lens-{name} (see inventory below) |
-| "start exploration" | cc-mode-exploration |
-| "create draft job" / "build spec and submit" | cc-job-creation-protocol |
-| "generate CLAUDE.md" | cc-spec-generation |
-| "wrap up" / "done" | cc-session-structure (close section) |
-| "continue where we left off" | cc-session-continuity |
-| "capture [concept]" | cc-odrc-framework (if not already loaded) |
-| "prompt" | (uses this router already in context) |
-| "what state am I in" | (direct session read — no skill needed) |
-| "check job status" | (direct MCP call — no skill needed) |
-| Compaction detected | cc-session-resume + cc-skill-router |
-| _session.autoCreated in tool response | cc-session-protocol (session enrichment section) |
-| _session.mismatch in tool response | cc-session-protocol (mismatch handling section) |
-| Session close with pendingFlush | cc-session-protocol (document flush section) |
-| needsAttention > 0 from profile | (direct profile read — no skill needed) |
-| projectInstructionsDirty from profile | cc-session-protocol (Step 0: Project Instructions Dirty Flag Check) |
+| Cold start (Chat) | cc-startup-checklist |
+| Cold start (Code) | cc-code-startup-checklist |
+| Cold start (Cowork) | cc-cowork-startup-checklist |
+| Compaction detected (Chat) | cc-session-resume + cc-skill-router |
+| Compaction detected (Code) | cc-build-resume + cc-skill-router |
+| _session.autoCreated in tool response | cc-session-protocol |
+| _session.mismatch in tool response | cc-session-protocol |
+| Session close with pendingFlush | cc-session-protocol |
+| projectInstructionsDirty from profile | cc-session-protocol |
 | Stale/orphan session at startup | cc-session-resume |
-
-### Cold Start Sequence
-
-On cold start, project instructions trigger \`cc-startup-checklist\`. The checklist handles the full startup flow including profile checks, job status, message pickup, session orientation, and context loading.
-
-## Code Routing
-
-| Trigger | Skill(s) to Read |
-|---|---|
-| Fresh start / claim job | cc-build-protocol, cc-skill-router, cc-retro-journal |
-| Infra / maintenance task | cc-build-protocol, cc-skill-router + repo_file(ARCHITECTURE.md) |
-| Compaction detected | cc-build-resume + cc-skill-router |
-| Job complete | cc-build-hygiene |
-
-## Available Skills Inventory
-
-### Core Protocol Skills
-| # | Skill | Purpose |
-|---|---|---|
-| 1 | cc-odrc-framework | ODRC type definitions, state machine, writeback protocol |
-| 2 | cc-session-structure | Live session lifecycle with Firebase-backed tracking |
-| 3 | cc-session-protocol | Master "how to run a session" skill (Claude Chat) |
-| 4 | cc-mode-exploration | Exploration posture and flow |
-| 5 | cc-lens-technical | Technical probing framework |
-| 6 | cc-build-protocol | Master "how to run a build" skill (Claude Code) |
-| 7 | cc-build-resume | Compaction recovery for Claude Code mid-build (CRITICAL) |
-| 8 | cc-session-resume | Compaction recovery for Claude Chat mid-session (CRITICAL) |
-| 9 | cc-session-continuity | New conversation continuing an existing idea |
-| 10 | cc-spec-generation | When and how to generate and push CLAUDE.md |
-| 11 | cc-build-hygiene | Post-build concept cleanup and idea graduation |
-| 12 | cc-mcp-workflow | End-to-end lifecycle: how Chat and Code interact via MCP |
-
-### Lens Skills (for focused analysis)
-| # | Skill | Purpose |
-|---|---|---|
-| 13 | cc-lens-stress-test | Find what breaks in existing decisions |
-| 14 | cc-lens-voice-of-customer | User persona analysis, journey mapping, retention |
-| 15 | cc-lens-competitive | Competitive analysis, differentiation, positioning |
-| 16 | cc-lens-economics | Cost analysis, effort estimation, maintenance, ROI |
-| 17 | cc-lens-integration | Cross-app integration, data coupling, ecosystem impact |
-| 18 | cc-lens-ux-deep-dive | Screen-by-screen UX walkthrough, user flows, transitions |
-| 19 | cc-lens-content | Content strategy, information architecture, quality gates |
-| 20 | cc-lens-growth | Distribution strategy, SEO, social sharing, measurement |
-| 21 | cc-lens-accessibility | WCAG compliance, keyboard nav, screen readers, cognitive load |
-| 22 | cc-lens-operations | Post-launch ops: analytics, monitoring, deployment verification |
-| 23 | cc-lens-security | Security and privacy audit: attack surfaces, auth, Firebase rules |
-
-### Infrastructure Skills
-| # | Skill | Purpose |
-|---|---|---|
-| 24 | cc-protocol-messaging | Inter-agent message types and conversation loop protocol |
-| 25 | cc-skill-router | This skill — routing table for all skill loading |
-| 26 | cc-job-creation-protocol | How Chat creates well-formed build jobs for Code |
-| 27 | cc-retro-journal | Shared learning journal — read on startup, write on genuine discovery |
-| 28 | cc-startup-checklist | Mandatory cold start sequence for Chat — profile, jobs, messages, session, context |
-| 29 | cc-tutorial | Guided onboarding tutorial — builds a grocery list app through 9 steps |
-| 30 | cc-code-startup-checklist | Cold start sequence for Code — messages, jobs, documents, session |`;
+| Fresh start / claim job (Code) | cc-build-protocol + cc-skill-router + cc-retro-journal |
+| Infra / maintenance task (Code) | cc-build-protocol + cc-skill-router + repo_file(ARCHITECTURE.md) |
+| Job complete (Code) | cc-build-hygiene |`;
 
 
 const SKILL_JOB_CREATION_PROTOCOL = `# Job Creation Protocol — How Chat Creates Jobs for Code
@@ -3453,13 +3681,20 @@ Use this standard format:
 These concept IDs should be marked as addressed on completion:
 - \\\`-conceptId1\\\` (description)
 - \\\`-conceptId2\\\` (description)
+
+## App-Specific Artifacts to Update
+- [List any files that need updating as a side effect of this build]
+- Examples: ARCHITECTURE.md (if adding skills/changing structure), README (if setup steps change), config files (if new env vars needed)
 \\\`\\\`\\\`
+
+**Note on artifacts:** Generic build steps (concept updates, running tests, deploying) are handled by Code's standard process and should NOT be restated in instructions. Only list app-specific side effects that Code wouldn't know to do on its own.
 
 ### Instructions Quality Checklist
 - [ ] Build objective is specific and testable
 - [ ] Each deliverable has enough detail to implement without guessing
 - [ ] "What NOT to Build" prevents scope creep
 - [ ] Concept IDs listed for Code to pass at completion time
+- [ ] App-specific artifacts listed (e.g., ARCHITECTURE.md if adding a skill)
 
 ## Step 4: Build the Concept Snapshot
 
@@ -3519,7 +3754,8 @@ This queues a fresh CLAUDE.md for Code to pick up via the document workflow.
 - **Don't skip conceptSnapshot** — Code needs decision context
 - **Don't forget "What NOT to Build"** — explicit exclusions prevent drift
 - **Don't put concept IDs only in instructions text** — list them in conceptsAddressed array so the auto-transition system works at completion time (workaround: if not supported on start, Code can pass them at completion)
-- **Don't create jobs without an ideaId** — jobs must be linked to the idea they serve`;
+- **Don't create jobs without an ideaId** — jobs must be linked to the idea they serve
+- **Don't restate generic build steps in instructions** — concept updates, tests, and deploys are Code's standard process. DO explicitly list app-specific artifacts that need updating (ARCHITECTURE.md, README, config files) since Code won't know these automatically`;
 
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -4213,8 +4449,1060 @@ If no work is pending, let the user know you're ready for instructions.`;
 
 
 // ═══════════════════════════════════════════════════════════════════════
+// Skill 31: ACC Video Production Pipeline
+// ═══════════════════════════════════════════════════════════════════════
+
+const SKILL_ACC_VIDEO = `# ACC Video Production Pipeline
+
+## What This Is
+
+A repeatable workflow for producing AI Command Center (ACC) landing page episode videos. Each episode follows a 5-segment structure and moves through a pipeline: Script → HTML animations → MP4 → Descript (AI images + voiceover) → YouTube → Landing page embed.
+
+Claude builds the HTML animations and converts them to MP4. The user handles Descript, YouTube upload, and provides the YouTube URL for landing page integration.
+
+## Current Build Objective
+
+Given a script for an episode (containing narration text and visual descriptions for 5 segments), produce:
+
+1. **5 animated HTML files** — self-contained 1280×720 HTML pages with CSS animations
+2. **5 MP4 files** — screen-captured from the HTML at 30fps using Playwright + ffmpeg
+
+## Architecture Rules (DO NOT VIOLATE)
+
+1. **Canvas is always 1280×720.** Every HTML segment sets \\\`body { width: 1280px; height: 720px; overflow: hidden; }\\\`. No exceptions.
+
+2. **Single-file HTML.** Each segment is one self-contained \\\`.html\\\` file. CSS is inline in \\\`<style>\\\`. No external CSS/JS files. Google Fonts loaded via CDN \\\`<link>\\\` tag.
+
+3. **ACC design system is law.** All colors, fonts, and visual patterns follow the design system spec below. Do not deviate.
+
+4. **Animations are CSS-only with staggered delays.** Use \\\`@keyframes\\\` with \\\`animation-delay\\\` for sequential reveals. No JavaScript animation libraries.
+
+5. **MP4 conversion uses Playwright, not Puppeteer.** Puppeteer downloads x86 Chrome which fails on ARM VMs. Playwright correctly resolves ARM-compatible Chromium.
+
+6. **Marketing images are NOT our job.** The photorealistic conceptual illustrations (glowing trees, sci-fi monitors, etc.) are AI-generated by Descript. Do NOT attempt to create marketing images with HTML/CSS — they will look like static screenshots, which is wrong.
+
+7. **Brand footer on every segment.** \\\`aicommandcenter.dev\\\` in amber monospace text, positioned bottom-right.
+
+## Constraints
+
+- VM may be ARM architecture — Puppeteer will fail, Playwright works
+- Google Fonts CDN must be accessible (the HTML loads 3 font families)
+- ffmpeg must be installed (typically pre-installed on the VM)
+- Playwright + Chromium must be installed per session: \\\`npm install playwright && npx playwright install chromium\\\`
+- Each MP4 encode takes ~2-3 minutes per segment (frame capture is the bottleneck)
+
+## Implementation Plan
+
+### Phase 1: Create HTML Animation Segments
+
+For each of the 5 segments, create an HTML file following this template structure:
+
+\\\`\\\`\\\`html
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box }
+body { width: 1280px; height: 720px; overflow: hidden; background: #0c0c14;
+       font-family: 'DM Sans', system-ui, sans-serif; position: relative }
+
+/* Background pattern — radial gradients + grid lines */
+/* Content layout — typically .left + .right flex panels */
+/* Component styles — chat panels, stat blocks, badges, etc. */
+/* Animation keyframes + staggered delays */
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300..700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+</head><body>
+<!-- Content here -->
+<div class="brand">aicommandcenter.dev</div>
+</body></html>
+\\\`\\\`\\\`
+
+**File naming:** \\\`ep{N}_01_hook.html\\\` through \\\`ep{N}_05_teaser.html\\\`
+
+**Output location:** User's Downloads folder
+
+### Phase 2: Convert HTML to MP4
+
+**Step 1: Install dependencies (once per session)**
+\\\`\\\`\\\`bash
+npm install playwright
+npx playwright install chromium
+\\\`\\\`\\\`
+
+**Step 2: Copy or create the conversion script**
+
+The script (\\\`html2mp4.js\\\`) is bundled at \\\`scripts/html2mp4.js\\\` relative to this skill. It:
+- Launches headless Chromium via Playwright
+- Opens the HTML at 1280×720 viewport
+- Waits 1.5s for fonts to load
+- Captures PNG frames at 30fps for the specified duration
+- Encodes to MP4 using ffmpeg (libx264, CRF 18, yuv420p)
+- Cleans up temporary frames
+
+**Step 3: Run conversion for each segment**
+\\\`\\\`\\\`bash
+node html2mp4.js ep{N}_01_hook.html ep{N}_01_hook.mp4 10
+node html2mp4.js ep{N}_02_pain.html ep{N}_02_pain.mp4 10
+node html2mp4.js ep{N}_03_solution.html ep{N}_03_solution.mp4 8
+node html2mp4.js ep{N}_04_evidence.html ep{N}_04_evidence.mp4 10
+node html2mp4.js ep{N}_05_teaser.html ep{N}_05_teaser.mp4 7
+\\\`\\\`\\\`
+
+**Duration rule:** Set duration to the last \\\`animation-delay\\\` value in the CSS + 2 seconds.
+
+### Phase 3: Landing Page Integration (After User Provides YouTube URL)
+
+Add a new video card to the grid in \\\`command-center/landing-page.html\\\`:
+
+\\\`\\\`\\\`html
+<div class="video-card">
+  <div class="video-wrapper">
+    <iframe src="https://www.youtube.com/embed/{VIDEO_ID}"
+            title="Episode {N}: {Title}"
+            frameborder="0" allow="accelerometer; autoplay; clipboard-write;
+            encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen></iframe>
+  </div>
+  <h3>Episode {N}: {Title}</h3>
+  <p>{Description}</p>
+</div>
+\\\`\\\`\\\`
+
+Update grid columns if needed (e.g., \\\`repeat(2,1fr)\\\` for 4 videos, \\\`repeat(3,1fr)\\\` for 3 or 6).
+
+## Design System Spec
+
+### Colors
+| Token | Hex | Usage |
+|-------|-----|-------|
+| bg-dark | \\\`#080810\\\` to \\\`#0f1118\\\` | Page backgrounds |
+| amber | \\\`#e8a838\\\` | Brand accent, labels, badges |
+| teal | \\\`#2dd4bf\\\` | Positive/solution, AI avatar, trust:authoritative |
+| blue | \\\`#4d7cff\\\` | User/chat, trust:credible |
+| purple | \\\`#8b5cf6\\\` | Hierarchy/structure, forests |
+| rose | \\\`#f43f5e\\\` | Warning/conflict, trust:questionable |
+
+All colors at low opacity (0.03-0.08) for backgrounds, medium (0.5-0.9) for text/borders.
+
+### Fonts
+| Font | Role | Sizes |
+|------|------|-------|
+| DM Sans | Body, descriptions, taglines | 10-15px |
+| Instrument Serif | Display headings | 36-64px, with italic gradient for emphasis |
+| JetBrains Mono | Code, labels, badges, technical | 8-14px |
+
+### Gradient Text (Emphasis Words in Headings)
+\\\`\\\`\\\`css
+em {
+  font-style: italic;
+  background: linear-gradient(135deg, #8b5cf6, #f43f5e);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+\\\`\\\`\\\`
+Gradient color pairs vary by theme: purple→rose, teal→blue, blue→teal.
+
+### Background Pattern
+Every segment uses subtle radial gradients + grid lines:
+\\\`\\\`\\\`css
+.bg {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse at 30% 50%, rgba(ACCENT1, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 45%, rgba(ACCENT2, 0.04) 0%, transparent 50%),
+    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px;
+}
+\\\`\\\`\\\`
+
+### Common UI Components
+
+**Chat panels:** Dark panel (rgba(15,18,28,0.95)), 1px border rgba(255,255,255,0.07), rounded corners. Top bar with traffic light dots + session label + badge. User bubble: blue border/bg. AI bubble: teal border/bg.
+
+**Stat blocks:** Large monospace numbers (44px) in accent colors, small muted labels underneath.
+
+**Trust badges:** Authoritative=teal, Credible=blue, Unverified=amber, Questionable=rose. Pill shape, monospace font.
+
+**Brand footer:** \\\`position: absolute; bottom: 20px; right: 40px; font: 400 13px/1 'JetBrains Mono', monospace; color: rgba(232,168,56,0.4);\\\`
+
+### Animation Pattern
+\\\`\\\`\\\`css
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.element {
+  opacity: 0;
+  animation: fadeSlideUp 0.5s ease forwards;
+  animation-delay: 600ms;
+}
+\\\`\\\`\\\`
+- First element: 600ms delay
+- Stagger subsequent elements by 400-800ms
+- All animations complete before segment duration ends
+
+## Episode Segment Patterns
+
+### 01_hook — Show the Problem
+- Typically: two chat panels side-by-side showing contradictory AI responses
+- Or: a "before" scenario that reveals the core issue
+- Layout: left panel(s) + right editorial (episode number, title, tagline, stats)
+- Stats show the damage (e.g., "0 context carried", "2 conflicting recommendations")
+- Include a quote from the script
+
+### 02_pain — Why It Hurts
+- Typically: a timeline or progression showing degradation
+- Steps go from green (good) → amber (uncertain) → red (broken) → ghost (lost)
+- Show decisions decaying, evidence disappearing, trust eroding
+- Bottom insight quote summarizing the core pain
+
+### 03_solution — ACC's Answer
+- Typically: a visual diagram of the feature (tree hierarchy, graph, flow)
+- SVG or CSS-based visualization of the data structure
+- Right-side info cards explaining the levels/components
+- Trust ratings, categorization system, or structural overview
+
+### 04_evidence — Feature in Action
+- Typically: a query panel ("Why did we choose X?") + linked evidence nodes
+- Shows the traceability chain from decision → evidence sources
+- Includes a drift/staleness warning showing the system catching issues
+- Bottom quote about the transformation
+
+### 05_teaser — Next Episode Preview
+- Two-part layout: left visual (agent diagram, feature preview) + right info
+- ACC branding (logo SVG, tagline, URL)
+- "Next Episode" badge + episode title with gradient emphasis
+- 3 bullet points previewing the next episode's content
+- "Episode N — Coming Soon" footer
+
+## Episode History
+
+| Ep | Title | YouTube ID | Status |
+|----|-------|-----------|--------|
+| 1 | — | m3pkJz_ny2Y | Live |
+| 2 | Research Amnesia | ciPLCeNmrak | Live |
+| 3 | — | LLwZ87OUTl8 | Live |
+| 4 | Knowledge Trees | (pending) | MP4s delivered |
+
+## Troubleshooting
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Puppeteer fails with "ELF: not found" | ARM architecture, x86 binary | Use Playwright instead |
+| Fonts not rendering in MP4 | Insufficient wait time | Increase wait to 2000ms+ |
+| Animations not captured | Duration too short | Set duration = last delay + 2s |
+| ffmpeg not found | Not installed | Should be pre-installed; check \\\`which ffmpeg\\\` |
+| npm install fails | No sudo | Use \\\`--break-system-packages\\\` for pip; npm should work without sudo |
+
+## OPENs (Non-blocking)
+
+- Should we batch all 5 conversions into a single script run to reduce browser startup overhead?
+- Should the teaser segment for each episode be templated (since the structure is always: branding + next ep preview)?
+- Landing page grid layout strategy as episode count grows (currently 3-col, needs rethinking at 6+ episodes)
+
+---
+
+## REFERENCE: Design System
+
+### Canvas
+
+\\\`\\\`\\\`css
+body {
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  background: #080810;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  position: relative;
+}
+\\\`\\\`\\\`
+
+Always \\\`#080810\\\` or \\\`#0f1118\\\` for body background. Never lighter.
+
+### Color Palette
+
+| Token | Hex | RGB for rgba() | Usage |
+|-------|-----|-----------------|-------|
+| amber | \\\`#e8a838\\\` | \\\`232,168,56\\\` | Brand accent, grid lines, labels, badges, brand footer |
+| teal | \\\`#2dd4bf\\\` | \\\`45,212,191\\\` | Positive/solution, AI avatar, trust:authoritative |
+| blue | \\\`#4d7cff\\\` | \\\`77,124,255\\\` | User/chat, trust:credible |
+| purple | \\\`#8b5cf6\\\` | \\\`139,92,246\\\` | Hierarchy/structure, forests |
+| rose | \\\`#f43f5e\\\` | \\\`244,63,94\\\` | Warning/conflict, trust:questionable |
+| indigo | \\\`#6366f1\\\` | \\\`99,102,241\\\` | Secondary reference items |
+
+#### Opacity conventions
+
+- **Backgrounds**: 0.02–0.08 (very subtle tints)
+- **Borders**: 0.1–0.25
+- **Text (accent)**: 0.5–0.9
+- **Text (muted body)**: white at 0.3–0.5
+- **Text (main body)**: white at 0.45–0.7 or specific muted color like \\\`#8a8a8e\\\`
+
+### Fonts
+
+\\\`\\\`\\\`html
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300..700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+\\\`\\\`\\\`
+
+| Font | Role | Typical sizes |
+|------|------|--------------|
+| \\\`'DM Sans', system-ui, sans-serif\\\` | Body text, descriptions, taglines | 10–16px |
+| \\\`'Instrument Serif', Georgia, serif\\\` | Display headings, titles | 28–64px, always with \\\`font-weight:400\\\` |
+| \\\`'JetBrains Mono', monospace\\\` | Code, labels, badges, technical, counters | 7–14px |
+
+For short monospace labels, you can just use \\\`monospace\\\` (the panels use this).
+
+### Gradient Text for Emphasis
+
+Headings use \\\`<em>\\\` tags with gradient fill:
+
+\\\`\\\`\\\`css
+em {
+  font-style: italic;
+  background: linear-gradient(135deg, COLOR1, COLOR2);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+\\\`\\\`\\\`
+
+Common gradient pairs:
+- Purple → Rose: \\\`#8b5cf6, #f43f5e\\\` (conflict, dramatic)
+- Blue → Teal: \\\`#4d7cff, #2dd4bf\\\` (solution, positive)
+- Teal → Blue: \\\`#2dd4bf, #4d7cff\\\` (alternate positive)
+- Amber → Rose: \\\`#e8a838, #f43f5e\\\` (impact, multiplier)
+
+### Background Pattern
+
+Every segment has a \\\`.bg\\\` div with radial gradients and grid lines:
+
+\\\`\\\`\\\`css
+.bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 30% 60%, rgba(ACCENT1, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 40%, rgba(ACCENT2, 0.04) 0%, transparent 50%),
+    linear-gradient(rgba(232,168,56, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(232,168,56, 0.015) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
+}
+\\\`\\\`\\\`
+
+- Vary ACCENT1 and ACCENT2 based on segment theme (purple/teal for knowledge, blue/amber for comparison, etc.)
+- Grid line opacity: 0.012–0.02 (barely visible)
+- Grid size: 28–40px (32px is most common)
+
+### Panel / Card Component
+
+The dark panel used for chat sessions, code windows, and info areas:
+
+\\\`\\\`\\\`css
+.panel {
+  border: 1px solid rgba(232,168,56, 0.15);
+  border-radius: 12px;
+  background: rgba(10,10,20, 0.8);
+  overflow: hidden;
+}
+
+.panel-header {
+  height: 32px;
+  background: rgba(232,168,56, 0.06);
+  border-bottom: 1px solid rgba(232,168,56, 0.1);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 6px;
+}
+
+/* Traffic light dots */
+.dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(232,168,56, 0.25); }
+
+.panel-title {
+  font-size: 10px;
+  color: rgba(232,168,56, 0.4);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-left: 8px;
+  font-family: monospace;
+}
+\\\`\\\`\\\`
+
+### Chat Message Component
+
+\\\`\\\`\\\`css
+.msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.msg-avatar {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.msg-avatar.user { background: rgba(77,124,255,0.15); border: 1px solid rgba(77,124,255,0.25); }
+.msg-avatar.ai   { background: rgba(45,212,191,0.15); border: 1px solid rgba(45,212,191,0.25); }
+
+.msg-bubble {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  font-family: monospace;
+  max-width: 420px;
+}
+.msg-bubble.user { background: rgba(77,124,255,0.08); border: 1px solid rgba(77,124,255,0.15); color: rgba(77,124,255,0.85); }
+.msg-bubble.ai   { background: rgba(45,212,191,0.08); border: 1px solid rgba(45,212,191,0.15); color: rgba(45,212,191,0.85); }
+\\\`\\\`\\\`
+
+User avatar shows initial letter (e.g., "D"), AI avatar shows "C".
+
+### Trust Badges
+
+\\\`\\\`\\\`css
+.trust-pill {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.trust-pill.auth  { background: rgba(45,212,191,0.12); color: rgba(45,212,191,0.8); border: 1px solid rgba(45,212,191,0.2); }
+.trust-pill.cred  { background: rgba(77,124,255,0.12); color: rgba(77,124,255,0.8); border: 1px solid rgba(77,124,255,0.2); }
+.trust-pill.unver { background: rgba(232,168,56,0.12); color: rgba(232,168,56,0.8); border: 1px solid rgba(232,168,56,0.2); }
+.trust-pill.quest { background: rgba(244,63,94,0.12); color: rgba(244,63,94,0.8); border: 1px solid rgba(244,63,94,0.2); }
+\\\`\\\`\\\`
+
+### Info Cards
+
+Used on the right side of solution/evidence segments:
+
+\\\`\\\`\\\`css
+.info-card {
+  padding: 16px 20px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.02);
+}
+.info-card.active {
+  border-color: rgba(45,212,191,0.2);
+  background: rgba(45,212,191,0.04);
+}
+.info-label {
+  font-size: 11px;
+  font-family: monospace;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.info-text {
+  font-size: 12px;
+  color: rgba(255,255,255,0.45);
+  line-height: 1.6;
+  font-family: monospace;
+}
+\\\`\\\`\\\`
+
+### Stat Blocks
+
+Large numbers with labels:
+
+\\\`\\\`\\\`css
+.stat-number {
+  font-size: 44px;
+  font-weight: 300;
+  font-family: monospace;
+}
+.stat-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  font-family: monospace;
+  letter-spacing: 0.5px;
+}
+\\\`\\\`\\\`
+
+### Brand Bars (Teaser Segments Only)
+
+Top branding bar with ACC logo + name:
+
+\\\`\\\`\\\`css
+.brand-bar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 0 36px;
+  z-index: 10;
+}
+.brand-name {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.7);
+  margin-left: 12px;
+}
+.brand-accent { color: #e8a838; }
+.brand-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(232,168,56,0.2), transparent 80%);
+  margin-left: 20px;
+}
+\\\`\\\`\\\`
+
+Bottom bar with tagline and URL:
+
+\\\`\\\`\\\`css
+.bottom-bar {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 36px;
+}
+.bottom-tagline {
+  font-size: 12px;
+  color: rgba(255,255,255,0.3);
+}
+.bottom-tagline em {
+  font-style: italic;
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 14px;
+  color: rgba(255,255,255,0.45);
+}
+.bottom-url {
+  font-size: 14px;
+  font-family: monospace;
+  color: rgba(232,168,56,0.55);
+}
+\\\`\\\`\\\`
+
+The ACC logo SVG (hexagonal cluster):
+
+\\\`\\\`\\\`html
+<svg class="brand-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" fill="none" width="32" height="32">
+  <polygon points="72,5 94,20 94,50 72,65 50,50 50,20" fill="#e8a838" fill-opacity=".45"/>
+  <polygon points="72,5 94,20 94,50 72,65 50,50 50,20" fill="none" stroke="#e8a838" stroke-opacity=".65" stroke-width="3"/>
+  <g transform="translate(5.5,3.75)">
+    <polygon points="28,5 50,20 50,50 28,65 6,50 6,20" fill="#e8a838" fill-opacity=".2"/>
+    <polygon points="28,5 50,20 50,50 28,65 6,50 6,20" fill="none" stroke="#e8a838" stroke-opacity=".25" stroke-width="3"/>
+  </g>
+  <g transform="translate(0,-15)">
+    <polygon points="50,50 72,65 72,95 50,110 28,95 28,65" fill="#e8a838" fill-opacity=".3"/>
+    <polygon points="50,50 72,65 72,95 50,110 28,95 28,65" fill="none" stroke="#e8a838" stroke-opacity=".4" stroke-width="3"/>
+  </g>
+  <polygon points="50,20 72,35 72,65 50,80 28,65 28,35" fill="#e8a838"/>
+</svg>
+\\\`\\\`\\\`
+
+### Animation Pattern
+
+All animations use the same approach: elements start hidden, JavaScript \\\`setTimeout\\\` adds a \\\`.show\\\` class at staggered intervals.
+
+\\\`\\\`\\\`css
+/* Base hidden state */
+.element {
+  opacity: 0;
+  transform: translateY(15px);
+}
+
+/* Revealed state */
+.element.show {
+  opacity: 1;
+  transform: translateY(0);
+  transition: all 0.7s ease;
+}
+\\\`\\\`\\\`
+
+\\\`\\\`\\\`javascript
+// Timing pattern
+setTimeout(() => { document.getElementById('el1').classList.add('show') }, 600);
+setTimeout(() => { document.getElementById('el2').classList.add('show') }, 1200);
+setTimeout(() => { document.getElementById('el3').classList.add('show') }, 1800);
+// ... stagger by 400–800ms
+\\\`\\\`\\\`
+
+Common keyframe animations used alongside:
+
+\\\`\\\`\\\`css
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+\\\`\\\`\\\`
+
+For SVG branch lines, use stroke-dasharray/offset for draw-on effect:
+
+\\\`\\\`\\\`css
+.branch {
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+}
+.branch.show {
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.8s ease;
+}
+\\\`\\\`\\\`
+
+#### Timing Guidelines
+
+- First element appears at **600ms** (gives fonts time to load)
+- Stagger by **400–800ms** between elements
+- Total animation should end **2s before** the MP4 duration
+- Teaser segments are shortest (~5.5s of animation in 7s MP4)
+- Hook/pain/evidence are longest (~7–8.5s of animation in 10s MP4)
+
+---
+
+## REFERENCE: Segment Patterns
+
+### 01_hook — Show the Problem
+
+**Purpose:** Visually demonstrate the problem the episode addresses. Make the viewer feel it.
+
+**Typical layout:** Two-column flex. Left side has the "evidence" (chat panels, code windows, timelines). Right side has editorial narrative (episode number, title with gradient \\\`<em>\\\`, body text, stats).
+
+**Common patterns:**
+- Two chat session panels stacked vertically, showing contradictory AI responses to similar questions
+- A single large window showing something filling up or breaking (context window overloading)
+- Session panels have: header with 3 dots + session label, body with user/AI message bubbles
+- Right narrative has: small monospace phase label ("THE HOOK"), large Instrument Serif title with gradient emphasis word, body paragraph in DM Sans
+
+**Animation timing:** ~7-8s total. Panels appear first (600ms), messages stagger in (1400-5600ms), conflict/punchline last (6800-7400ms).
+
+### 02_pain — Why It Hurts
+
+**Purpose:** Show the consequences of the problem. Make the cost tangible.
+
+**Typical layout:** Centered vertical content. A timeline, progression, or comparison that degrades visually.
+
+**Common patterns:**
+- Vertical timeline with steps that go from green (good) → amber (uncertain) → red (broken) → ghost/faded (lost)
+- Bar chart comparison showing dramatic difference (23× multiplier reveal)
+- Each step has an icon, label, description, and visual indicator of health/trust
+- Source tags or evidence labels that fade/disappear as the timeline progresses
+- Bottom insight quote summarizing the core pain
+
+**Animation timing:** ~8s total. Progressive reveals that mirror the degradation story.
+
+### 03_solution — ACC's Answer
+
+**Purpose:** Show the data structure or feature that solves the problem. Make it feel elegant and organized.
+
+**Typical layout:** Two-column. Left has an SVG or CSS visualization (tree, graph, hierarchy). Right has info cards explaining the levels.
+
+**Common patterns:**
+- SVG tree visualization with animated branch growth (stroke-dashoffset) and node reveals
+- Capacity bar or block diagram showing organized structure
+- Right-side info cards with emoji icon, monospace label in accent color, monospace description
+- Trust rating legend at the bottom (colored pills: Authoritative, Credible, Unverified, Questionable)
+- Nodes have trust badges — small colored rectangles with abbreviated text
+
+**Animation timing:** ~6-7s total. Tree grows bottom-up: root → branches → forests → trees → leaves. Info cards appear alongside their corresponding tree level.
+
+### 04_evidence — Feature in Action
+
+**Purpose:** Demonstrate the feature working on a real scenario. Show traceability and the "aha moment."
+
+**Typical layout:** Varies more than other segments. Could be:
+- A query panel + linked evidence nodes ("Why did we choose Firebase?")
+- A bar chart comparison with animated counters (context cost comparison)
+- A before/after with data flowing through the system
+
+**Common patterns:**
+- Query/question panel at top with a decision being traced
+- Evidence nodes showing source attribution, trust ratings, and linked reasoning
+- A warning/alert bar showing drift detection or staleness
+- Animated counters that tick up to final values
+- Bottom quote about the transformation ("From an oracle... to a research partner")
+
+**Animation timing:** ~8s total. Query appears first, evidence nodes populate, then the insight/warning reveals.
+
+### 05_teaser — Next Episode Preview
+
+**Purpose:** Brand the series and tease the next episode. This is the most templated segment.
+
+**Typical layout:** Two-column. Left has a visual representing the next episode's concept (agent diagram, feature preview). Right has episode info.
+
+**Required elements (every teaser has these):**
+- **Top brand bar:** ACC logo SVG + "AI Command Center" text + gradient line
+- **Bottom brand bar:** Tagline ("Stop moving faster. Start thinking *better*.") + aicommandcenter.dev URL
+- **"Next Episode" badge:** Amber dot + monospace text
+- **Episode title:** Large Instrument Serif with gradient \\\`<em>\\\` emphasis
+- **Description paragraph:** 1-2 sentences about the next episode
+- **3 detail rows:** Icon + monospace text describing what the next episode covers
+
+**Left visual examples:**
+- Two agent circles (Chat + Code) with animated connection arrows
+- A feature diagram relevant to the next episode
+
+**Animation timing:** ~5.5s total. Brand bar first (300ms), agents/visual (800-2200ms), info panel (1200-4200ms), bottom bar last (5500ms). This is the shortest segment.
+
+---
+
+## REFERENCE: Conversion Script (html2mp4.js)
+
+Embed this as the html2mp4.js file when setting up a new session:
+
+\\\`\\\`\\\`javascript
+const { chromium } = require('playwright');
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const args = process.argv.slice(2);
+if (args.length < 2) {
+  console.log('Usage: node html2mp4.js <input.html> <output.mp4> [duration_seconds]');
+  process.exit(1);
+}
+
+const inputHtml = path.resolve(args[0]);
+const outputMp4 = path.resolve(args[1]);
+const duration = parseInt(args[2] || '12');
+const fps = 30;
+const totalFrames = duration * fps;
+const width = 1280;
+const height = 720;
+
+const framesDir = path.join(path.dirname(outputMp4), '.frames-tmp');
+
+async function run() {
+  if (fs.existsSync(framesDir)) execSync(\\\`rm -rf \\\${framesDir}\\\`);
+  fs.mkdirSync(framesDir, { recursive: true });
+
+  console.log(\\\`Recording \\\${inputHtml} → \\\${outputMp4}\\\`);
+  console.log(\\\`Duration: \\\${duration}s, FPS: \\\${fps}, Frames: \\\${totalFrames}\\\`);
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  });
+
+  const page = await browser.newPage();
+  await page.setViewportSize({ width, height });
+
+  await page.goto(\\\`file://\\\${inputHtml}\\\`, { waitUntil: 'networkidle', timeout: 30000 });
+
+  // Wait for fonts to load
+  await page.waitForTimeout(1500);
+
+  // Capture frames
+  const interval = 1000 / fps;
+  for (let i = 0; i < totalFrames; i++) {
+    const framePath = path.join(framesDir, \\\`frame_\\\${String(i).padStart(5, '0')}.png\\\`);
+    await page.screenshot({ path: framePath, type: 'png' });
+
+    if (i % fps === 0) {
+      console.log(\\\`  \\\${i / fps}s / \\\${duration}s captured...\\\`);
+    }
+
+    await page.waitForTimeout(interval);
+  }
+
+  await browser.close();
+  console.log(\\\`Captured \\\${totalFrames} frames. Encoding MP4...\\\`);
+
+  execSync(\\\`ffmpeg -y -framerate \\\${fps} -i \\\${framesDir}/frame_%05d.png -c:v libx264 -pix_fmt yuv420p -crf 18 -preset medium -movflags +faststart "\\\${outputMp4}" 2>&1\\\`);
+
+  execSync(\\\`rm -rf \\\${framesDir}\\\`);
+  console.log(\\\`Done: \\\${outputMp4}\\\`);
+}
+
+run().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+\\\`\\\`\\\``;
+
+
+// ═══════════════════════════════════════════════════════════════════════
 // Skill Registry — maps skill names to content for the \`skill\` tool
 // ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════
+// Skill 32: Skill Creation & Router Registration
+// ═══════════════════════════════════════════════════════════════════════
+
+const SKILL_SKILL_CREATION = `# Skill Creation & Router Registration
+
+## When to Create a Skill
+
+Create a new skill when:
+- A workflow is being repeated across sessions and the instructions are always the same
+- A protocol has been finalized and needs consistent execution
+- A lens/mode/process has been validated and should be available on-demand
+- A new capability needs a persistent, loadable reference
+
+Do NOT create a skill for:
+- One-off instructions that won't recur
+- Content that changes frequently (use knowledge trees instead)
+- Things that are better as ODRC concepts (rules, constraints, decisions)
+
+## What a CC MCP Skill Is
+
+A skill is a **single string constant** in \`skills.ts\` that gets registered as an MCP prompt. That's it.
+
+- No file trees, no .skill packages, no YAML manifests
+- One TypeScript constant → one registry entry → one prompt registration
+- The MCP SDK serves it to Claude Chat or Claude Code on demand
+- Skills are loaded into context only when triggered — they are NOT always-on
+
+### Anatomy of a Skill in skills.ts
+
+\`\`\`typescript
+// 1. String constant (the actual content)
+const SKILL_MY_SKILL = \`# My Skill Title
+... skill content in markdown ...
+... can be hundreds of lines ...\`;
+
+// 2. Registry entry (in SKILL_REGISTRY array)
+{ name: "cc-my-skill", description: "One-line description", content: SKILL_MY_SKILL },
+
+// 3. Prompt registration (in registerSkillPrompts function)
+server.prompt(
+  "cc-my-skill",
+  "Longer description for MCP prompt listing",
+  {},
+  async () => ({
+    messages: [{ role: "user", content: { type: "text", text: SKILL_MY_SKILL } }],
+  })
+);
+\`\`\`
+
+### Where Things Live in skills.ts
+
+1. **Top**: \`registerSkillPrompts()\` function — all prompt registrations
+2. **Middle**: Skill constants as template literals (\`const SKILL_X = ...\`)
+3. **Bottom**: \`SKILL_REGISTRY\` array, then \`getSkillNames()\` and \`getSkillContent()\`
+
+## The 6-Step Flow
+
+### Step 1: Recognize the Trigger
+Something in the session signals a skill is needed:
+- A workflow keeps being explained manually
+- A protocol doc exists but isn't loadable
+- Dave says "this should be a skill"
+- A new capability has stabilized enough to codify
+
+### Step 2: Gather the Workflow
+Collect everything the skill needs to teach:
+- What is this? (1-2 sentence purpose)
+- When to use it (trigger conditions)
+- When NOT to use it (anti-patterns)
+- The actual procedure/protocol/framework
+- Examples if helpful
+- Common mistakes to avoid
+
+Write it as markdown. The content should be self-contained — Claude should be able to follow it without needing other context.
+
+### Step 3: Write the Skill Content
+Format as a markdown document with clear sections:
+
+\`\`\`markdown
+# Skill Name
+
+## What This Is
+Brief description of purpose
+
+## When to Use This
+- Trigger condition 1
+- Trigger condition 2
+
+## The Process
+### Sub-section 1
+...
+### Sub-section 2
+...
+
+## Anti-Patterns
+- Don't do X
+- Don't do Y
+\`\`\`
+
+Keep it focused. A skill should teach ONE thing well. If it's growing beyond ~500 lines, consider splitting into multiple skills.
+
+### Step 4: Write Router Entries
+Each skill needs an entry in the \`cc-skill-router\` skill content. The router uses keyword + intent format:
+
+\`\`\`markdown
+**cc-my-skill**
+Keywords: keyword1, keyword2, keyword3, keyword4
+Intent: One sentence describing when to load this skill
+Surface: Chat | Code | Both
+\`\`\`
+
+Choose the right category from the router's 9 categories:
+1. **Onboarding** — First-time and cold-start flows
+2. **Ideation** — ODRC framework, session modes, lenses
+3. **Handoff** — Spec generation, job creation
+4. **Build** — Build protocol, hygiene, resume
+5. **Coordination** — Messaging, workflow, inter-agent
+6. **Recovery** — Session/build resume, continuity
+7. **Meta** — Router itself, retro journal, tutorials
+8. **Production** — Video, content creation, media pipelines
+9. **Other** — Domain-specific skills that don't fit above
+
+#### Writing Good Keywords
+- Pick 4-6 words that a user or system would naturally use
+- Include both the noun and the action: "skill, create, new, router, add"
+- Don't repeat the skill name — it's already searchable
+- Think: "what would someone type or say when they need this?"
+
+### Step 5: Submit as a Job
+Create a skill-update job via CC MCP:
+
+\`\`\`
+job(start):
+  appId: command-center
+  title: "Add cc-my-skill skill"
+  jobType: skill-update
+  createdBy: claude-chat
+  instructions: [what to add and where]
+  attachments: [{ type: "skill-content", content: "the full skill text" }]
+\`\`\`
+
+The job should include:
+- The full skill content as an attachment
+- The router entry to add
+- Which category it belongs to
+- Updated skill count for the header comment
+
+### Step 6: Notify Code
+Send a message to claude-code about the pending job:
+
+\`\`\`
+document(send):
+  to: claude-code
+  content: "New skill-update job ready: cc-my-skill. [brief description]"
+\`\`\`
+
+Code will:
+1. Claim the job
+2. Add the constant to skills.ts
+3. Add the registry entry
+4. Add the prompt registration
+5. Update router entries
+6. Deploy to test, verify, deploy to prod
+7. Complete the job and notify back
+
+## Anti-Patterns
+
+### Don't Follow Anthropic's Built-In Skill Creator
+Claude has a built-in \`/skill\` slash command and skill-creator behavior. That system creates files, uses YAML frontmatter, and follows a completely different architecture. **Ignore it entirely for CC skills.** CC skills are MCP prompts served from a Cloud Run server, not local files.
+
+### Don't Create Skills for Volatile Content  
+If the content will change every week, it shouldn't be a skill. Use knowledge trees for evolving research, and ODRC concepts for project-level decisions. Skills are for stable protocols.
+
+### Don't Stuff Multiple Concerns Into One Skill
+A skill about "how to run builds AND how to create skills AND how to write tests" is three skills. Keep each skill should focused on one teachable workflow.
+
+### Don't Skip the Router Entry
+A skill without a router entry is invisible. Even if you add the constant, registry, and prompt — Claude won't know when to load it unless the router has matching keywords and intent.
+
+## Skill Naming Convention
+
+Format: \`cc-[category]-[purpose]\`
+
+Examples by category:
+- Onboarding: \`cc-startup-checklist\`, \`cc-tutorial\`
+- Ideation: \`cc-mode-exploration\`, \`cc-lens-technical\`
+- Handoff: \`cc-spec-generation\`, \`cc-job-creation-protocol\`
+- Build: \`cc-build-protocol\`, \`cc-build-hygiene\`
+- Coordination: \`cc-protocol-messaging\`, \`cc-mcp-workflow\`
+- Recovery: \`cc-build-resume\`, \`cc-session-resume\`
+- Meta: \`cc-skill-router\`, \`cc-retro-journal\`
+- Production: \`cc-acc-video\`
+- Other: \`cc-[domain]-[purpose]\` (e.g., \`cc-firebase-patterns\`)`;
+
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Skill 33: Cowork Startup Checklist
+// ═══════════════════════════════════════════════════════════════════════
+
+const SKILL_COWORK_STARTUP_CHECKLIST = `# Cowork Startup Checklist
+
+**Your surface identity: \`claude-cowork\`**
+Use this as your \`createdBy\` when calling \`document(action="send")\` or \`job(action="start")\`. Use it as \`to\` when calling \`document(action="receive")\`.
+
+**Piggyback message notifications:** Every MCP tool response may include \`_pendingMessages\` metadata listing unread messages for all surfaces. Each message has \`to\`, \`from\`, and \`subject\` fields. If you see messages where \`to: "claude-cowork"\`, call \`document(action="receive", to="claude-cowork", summary=true)\` to get envelopes first (saves tokens). Then use \`document(action="get", docId=...)\` to read full content only for messages you need.
+
+## Step 1: Load Skill Router
+
+\`\`\`
+Call: skill(action="get", skillName="cc-skill-router")
+\`\`\`
+
+This gives you the routing table for on-demand skill loading. Do not load other skills speculatively — only load when triggered by user actions.
+
+## Step 2: Check Messages
+
+\`\`\`
+Call: document(action="receive", to="claude-cowork", summary=true)
+\`\`\`
+
+Pick up any pending messages from Chat or Code. Present relevant ones to the user.
+
+---
+
+## Session Capture (Opt-In)
+
+Cowork does NOT create sessions on startup. Most interactions are short tasks that don't need session tracking.
+
+**Turn threshold rule:** After 5–6 turns with no active session, offer to capture:
+
+> "We've been at this for a bit — want me to capture this as a session so we track what we've done?"
+
+- **Yes** → Create session retroactively with title and goal inferred from the conversation so far. Use \`session(action="start", ...)\` with the relevant appId/ideaId if identifiable.
+- **No** → Continue without session tracking. Don't ask again this conversation.
+
+**Session close:** Explicit ("wrap up") or stale timeout. On close, write a \`closingSummary\` and \`nextSessionRecommendation\` — these are the high-value outputs that prevent starting from scratch next time.
+
+---
+
+## Budget Tracking Reference
+
+Track every turn: \`📊 Budget: [est total]K / [zone] / [headroom]\`
+
+**Zones:** Green <360K, Yellow 360–480K, Red 480–580K, Imminent 580K+
+**Compaction threshold:** 624K
+
+### Sources to Count
+
+| Source | Estimate |
+|--------|----------|
+| System overhead | ~85K fixed |
+| MCP tool responses | Sum \`_responseSize\` from each call |
+| Web search | ~10K per call |
+| Conversation history | All prior user + assistant messages |
+
+### Rules
+- \`_contextHealth.used\` and \`.ceiling\` from tool responses are authoritative — override estimates
+- Flag any single MCP response over 10K: \`⚠️ last call: [size]\`
+- Call out zone transitions explicitly
+- Write budget to memory every ~5 turns: \`"CC budget: [total]K / [zone]. Session: [sessionId]"\``;
 
 interface SkillEntry {
   name: string;
@@ -4253,6 +5541,9 @@ const SKILL_REGISTRY: SkillEntry[] = [
   { name: "cc-startup-checklist", description: "Mandatory cold start sequence for Chat — profile check, in-flight work, messages, session orientation, context loading", content: SKILL_STARTUP_CHECKLIST },
   { name: "cc-tutorial", description: "Guided onboarding tutorial — builds a grocery list app through 9 steps, teaching ODRC, knowledge trees, lenses, jobs, and messaging", content: SKILL_TUTORIAL },
   { name: "cc-code-startup-checklist", description: "Cold start sequence for Code — messages, documents, jobs, build protocol loading", content: SKILL_CODE_STARTUP_CHECKLIST },
+  { name: "cc-acc-video", description: "ACC video production pipeline — HTML animations to MP4 for landing page episodes", content: SKILL_ACC_VIDEO },
+  { name: "cc-skill-creation", description: "How to create CC MCP skills — the 6-step flow from trigger recognition to Code deployment", content: SKILL_SKILL_CREATION },
+  { name: "cc-cowork-startup-checklist", description: "Cold start sequence for Cowork — router load, message check, opt-in session capture, budget tracking", content: SKILL_COWORK_STARTUP_CHECKLIST },
 ];
 
 /** Get list of all skill names and descriptions */
@@ -4264,4 +5555,9 @@ export function getSkillNames(): { name: string; description: string }[] {
 export function getSkillContent(name: string): string | null {
   const entry = SKILL_REGISTRY.find(s => s.name === name);
   return entry ? entry.content : null;
+}
+
+/** Get compiled skill registry for cache fallback. */
+export function getCompiledSkillRegistry(): { name: string; description: string; content: string }[] {
+  return SKILL_REGISTRY.map(s => ({ name: s.name, description: s.description, content: s.content }));
 }

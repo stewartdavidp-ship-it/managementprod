@@ -1087,7 +1087,7 @@ TEXT=$(get_text "$RAW")
 ERR=$(is_error "$RAW")
 assert "skill(list) not error" "false" "$ERR"
 SKILL_COUNT=$(jq_field "$TEXT" "['count']")
-assert "skill(list) count is 26" "26" "$SKILL_COUNT"
+assert "skill(list) count is 33" "33" "$SKILL_COUNT"
 assert_contains "skill(list) has cc-odrc-framework" "cc-odrc-framework" "$TEXT"
 assert_contains "skill(list) has cc-session-protocol" "cc-session-protocol" "$TEXT"
 assert_contains "skill(list) has cc-build-protocol" "cc-build-protocol" "$TEXT"
@@ -1252,9 +1252,9 @@ TEXT=$(get_text "$RAW")
 ERR=$(is_error "$RAW")
 assert "skill(get cc-skill-router) not error" "false" "$ERR"
 assert_contains "skill(get cc-skill-router) has routing table" "Routing" "$TEXT"
-assert_contains "skill(get cc-skill-router) has chat routing" "Chat Routing" "$TEXT"
-assert_contains "skill(get cc-skill-router) has code routing" "Code Routing" "$TEXT"
-assert_contains "skill(get cc-skill-router) has inventory" "Available Skills Inventory" "$TEXT"
+assert_contains "skill(get cc-skill-router) has skill catalog" "Skill Catalog" "$TEXT"
+assert_contains "skill(get cc-skill-router) has system triggers" "System-Level Triggers" "$TEXT"
+assert_contains "skill(get cc-skill-router) has categories" "Onboarding" "$TEXT"
 
 RAW=$(call_tool "skill" '{"action":"get","skillName":"cc-job-creation-protocol"}')
 TEXT=$(get_text "$RAW")
@@ -1284,6 +1284,96 @@ assert "skill(get unknown) is error" "true" "$ERR"
 RAW=$(call_tool "skill" '{"action":"get"}')
 ERR=$(is_error "$RAW")
 assert "skill(get no name) is error" "true" "$ERR"
+
+# ── Phase 11b: Skill CRUD (create/update/delete) ──
+echo ""
+echo "── Phase 11b: Skill CRUD ──────────────────────────────────"
+
+# Test: skill create
+RAW=$(call_tool "skill" '{"action":"create","skillName":"e2e-test-skill","name":"E2E Test Skill","description":"Test skill for e2e","content":"# Test Skill\nThis is a test.","category":"custom","triggers":["test","e2e"]}')
+ERR=$(is_error "$RAW")
+TEXT=$(get_text "$RAW")
+CREATED_VERSION=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('version', ''))")
+assert "skill(create) not error" "false" "$ERR"
+assert "skill(create) version=1" "1" "$CREATED_VERSION"
+
+# Test: skill create duplicate returns error
+RAW=$(call_tool "skill" '{"action":"create","skillName":"e2e-test-skill","name":"Dup","description":"Dup","content":"Dup"}')
+ERR=$(is_error "$RAW")
+assert "skill(create) duplicate is error" "true" "$ERR"
+
+# Test: skill create missing required fields
+RAW=$(call_tool "skill" '{"action":"create","skillName":"missing-fields"}')
+ERR=$(is_error "$RAW")
+assert "skill(create) missing name is error" "true" "$ERR"
+
+RAW=$(call_tool "skill" '{"action":"create","skillName":"missing-fields","name":"X"}')
+ERR=$(is_error "$RAW")
+assert "skill(create) missing description is error" "true" "$ERR"
+
+RAW=$(call_tool "skill" '{"action":"create","skillName":"missing-fields","name":"X","description":"X"}')
+ERR=$(is_error "$RAW")
+assert "skill(create) missing content is error" "true" "$ERR"
+
+# Test: skill get — newly created skill
+RAW=$(call_tool "skill" '{"action":"get","skillName":"e2e-test-skill"}')
+ERR=$(is_error "$RAW")
+TEXT=$(get_text "$RAW")
+assert "skill(get created) not error" "false" "$ERR"
+assert_contains "skill(get created) has content" "Test Skill" "$TEXT"
+
+# Test: skill list includes new skill
+RAW=$(call_tool "skill" '{"action":"list"}')
+TEXT=$(get_text "$RAW")
+LIST_COUNT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('count', 0))")
+HAS_NEW=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('true' if any(s['name']=='e2e-test-skill' for s in d.get('skills',[])) else 'false')")
+assert "skill(list) includes created skill" "true" "$HAS_NEW"
+
+# Test: skill list has source field
+SOURCE=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('source', ''))")
+assert_not_empty "skill(list) has source" "$SOURCE"
+
+# Test: skill list has category field
+HAS_CAT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); skills=d.get('skills',[]); print('true' if skills and 'category' in skills[0] else 'false')")
+assert "skill(list) has category" "true" "$HAS_CAT"
+
+# Test: skill update
+RAW=$(call_tool "skill" '{"action":"update","skillName":"e2e-test-skill","content":"# Updated Test Skill\nThis was updated.","category":"Protocols"}')
+ERR=$(is_error "$RAW")
+TEXT=$(get_text "$RAW")
+UPDATED_VERSION=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('version', ''))")
+UPDATED_CAT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('category', ''))")
+assert "skill(update) not error" "false" "$ERR"
+assert "skill(update) version=2" "2" "$UPDATED_VERSION"
+assert "skill(update) category=Protocols" "Protocols" "$UPDATED_CAT"
+
+# Test: skill get — updated content
+RAW=$(call_tool "skill" '{"action":"get","skillName":"e2e-test-skill"}')
+TEXT=$(get_text "$RAW")
+assert_contains "skill(get updated) has new content" "Updated Test Skill" "$TEXT"
+
+# Test: skill update nonexistent returns error
+RAW=$(call_tool "skill" '{"action":"update","skillName":"nonexistent-skill","content":"x"}')
+ERR=$(is_error "$RAW")
+assert "skill(update) nonexistent is error" "true" "$ERR"
+
+# Test: skill delete
+RAW=$(call_tool "skill" '{"action":"delete","skillName":"e2e-test-skill"}')
+ERR=$(is_error "$RAW")
+TEXT=$(get_text "$RAW")
+DELETED=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('deleted', ''))")
+assert "skill(delete) not error" "false" "$ERR"
+assert "skill(delete) returns name" "e2e-test-skill" "$DELETED"
+
+# Test: skill get deleted returns error
+RAW=$(call_tool "skill" '{"action":"get","skillName":"e2e-test-skill"}')
+ERR=$(is_error "$RAW")
+assert "skill(get deleted) is error" "true" "$ERR"
+
+# Test: skill delete nonexistent returns error
+RAW=$(call_tool "skill" '{"action":"delete","skillName":"e2e-test-skill"}')
+ERR=$(is_error "$RAW")
+assert "skill(delete) nonexistent is error" "true" "$ERR"
 
 echo ""
 
@@ -1727,17 +1817,25 @@ FINAL_STATUS=$(jq_field "$TEXT" "['status']")
 assert "full lifecycle complete not error" "false" "$ERR"
 assert "full lifecycle status=completed" "completed" "$FINAL_STATUS"
 
-# Test 10b: Verify the completed job has all fields preserved
+# Test 10b: Verify the completed job has all fields preserved (lean get excludes instructions by default)
 RAW=$(call_tool "job" "{\"action\":\"get\",\"jobId\":\"$DRAFT_JOB_ID\"}")
 TEXT=$(get_text "$RAW")
-FINAL_INSTRUCTIONS=$(jq_field "$TEXT" "['instructions']")
 FINAL_CLAIMED_BY=$(jq_field "$TEXT" "['claimedBy']")
 FINAL_JOB_TYPE=$(jq_field "$TEXT" "['jobType']")
-FINAL_SNAPSHOT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('True' if d.get('conceptSnapshot') else 'False')")
-assert_contains "completed job preserved instructions" "REVISED" "$FINAL_INSTRUCTIONS"
+LEAN_INSTR_EXCLUDED=$(jq_field "$TEXT" "['_instructionsExcluded']")
+LEAN_SNAP_EXCLUDED=$(jq_field "$TEXT" "['_conceptSnapshotExcluded']")
 assert "completed job preserved claimedBy" "claude-code" "$FINAL_CLAIMED_BY"
 assert "completed job preserved jobType" "build" "$FINAL_JOB_TYPE"
-assert "completed job preserved conceptSnapshot" "True" "$FINAL_SNAPSHOT"
+assert_contains "lean get excludes instructions" "excluded" "$LEAN_INSTR_EXCLUDED"
+assert_contains "lean get excludes conceptSnapshot" "excluded" "$LEAN_SNAP_EXCLUDED"
+
+# Test 10c: Verify includeInstructions=true returns full content
+RAW=$(call_tool "job" "{\"action\":\"get\",\"jobId\":\"$DRAFT_JOB_ID\",\"includeInstructions\":true}")
+TEXT=$(get_text "$RAW")
+FULL_INSTRUCTIONS=$(jq_field "$TEXT" "['instructions']")
+FULL_SNAPSHOT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('True' if d.get('conceptSnapshot') else 'False')")
+assert_contains "includeInstructions returns instructions" "REVISED" "$FULL_INSTRUCTIONS"
+assert "includeInstructions returns conceptSnapshot" "True" "$FULL_SNAPSHOT"
 
 # Test: Invalid attachments JSON
 RAW=$(call_tool "job" '{"action":"start","appId":"command-center","title":"bad attach","createdBy":"claude-chat","attachments":"not-json"}')

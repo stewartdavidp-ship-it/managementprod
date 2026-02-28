@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { initFirebase } from "./firebase.js";
 import { createServer } from "./server.js";
+import { initSkillCache } from "./skill-cache.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
 import { requestContext, setContextEstimate, setContextPerSurface, setSurfaceContextEstimate, setPendingMessages, type PendingMessagesInfo } from "./context.js";
@@ -207,6 +208,16 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
 
   // Run the MCP handler within the user's context
   requestContext.run({ firebaseUid }, async () => {
+    // Lazy skill cache init — if not initialized at startup (e.g., no FIREBASE_UID env),
+    // initialize on first authenticated request. Non-blocking after first call.
+    if (firebaseUid) {
+      try {
+        await initSkillCache(firebaseUid);
+      } catch {
+        // Non-critical — will use compiled fallback
+      }
+    }
+
     // Load contextEstimate from Firebase once per request for _contextHealth
     // Uses active session cache + pending accumulation for accurate reading
     if (firebaseUid) {
@@ -336,11 +347,34 @@ app.head("/mcp", (_req: Request, res: Response) => {
   res.sendStatus(200);
 });
 
-app.listen(PORT, () => {
-  console.log(`CC MCP Server listening on :${PORT}`);
-  console.log(`Base URL: ${BASE_URL}`);
-  console.log(`MCP endpoint: ${BASE_URL}/mcp`);
-  console.log(`OAuth metadata: ${BASE_URL}/.well-known/oauth-authorization-server`);
-  console.log(`Auth: ${process.env.SKIP_AUTH === "true" || process.env.NODE_ENV === "development" ? "DISABLED (dev mode)" : "OAuth 2.1"}`);
-  console.log(`GitHub delivery: ${process.env.GITHUB_TOKEN ? "ENABLED" : "DISABLED (no GITHUB_TOKEN)"}`);
-});
+// Initialize skill cache from Firebase before accepting requests
+const STARTUP_UID = process.env.FIREBASE_UID;
+if (STARTUP_UID) {
+  initSkillCache(STARTUP_UID)
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`CC MCP Server listening on :${PORT}`);
+        console.log(`Base URL: ${BASE_URL}`);
+        console.log(`MCP endpoint: ${BASE_URL}/mcp`);
+        console.log(`OAuth metadata: ${BASE_URL}/.well-known/oauth-authorization-server`);
+        console.log(`Auth: ${process.env.SKIP_AUTH === "true" || process.env.NODE_ENV === "development" ? "DISABLED (dev mode)" : "OAuth 2.1"}`);
+        console.log(`GitHub delivery: ${process.env.GITHUB_TOKEN ? "ENABLED" : "DISABLED (no GITHUB_TOKEN)"}`);
+      });
+    })
+    .catch((err) => {
+      console.error("[startup] Skill cache init failed, starting without cache:", err);
+      app.listen(PORT, () => {
+        console.log(`CC MCP Server listening on :${PORT} (skill cache unavailable)`);
+      });
+    });
+} else {
+  console.warn("[startup] No FIREBASE_UID — skill cache not initialized (will use compiled fallback)");
+  app.listen(PORT, () => {
+    console.log(`CC MCP Server listening on :${PORT}`);
+    console.log(`Base URL: ${BASE_URL}`);
+    console.log(`MCP endpoint: ${BASE_URL}/mcp`);
+    console.log(`OAuth metadata: ${BASE_URL}/.well-known/oauth-authorization-server`);
+    console.log(`Auth: ${process.env.SKIP_AUTH === "true" || process.env.NODE_ENV === "development" ? "DISABLED (dev mode)" : "OAuth 2.1"}`);
+    console.log(`GitHub delivery: ${process.env.GITHUB_TOKEN ? "ENABLED" : "DISABLED (no GITHUB_TOKEN)"}`);
+  });
+}

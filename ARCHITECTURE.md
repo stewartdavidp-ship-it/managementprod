@@ -1,8 +1,8 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-02-27 (v8.75.0)
+> **Last updated:** 2026-02-28 (v8.76.0)
 >
-> **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 27).
+> **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 29).
 
 ---
 
@@ -131,7 +131,7 @@ CC is the data and persistence layer. Claude is the reasoning and decision layer
 │  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
 │  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
 │  └─────────────┘                  │  (Cloud Run)         │             │
-│                                    │  13 tools, 30 skills │             │
+│                                    │  13 tools, 33 skills │             │
 │  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
 │  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
 │  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
@@ -243,7 +243,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
     CC Browser    MCP Server    Cloud Functions
     (listeners)   (reads/writes) (triggers/scheduled)
     4 active      13 tools       domainProxy, documentCleanup
-                  30 skills
+                  33 skills
 ```
 
 ### Browser → Firebase

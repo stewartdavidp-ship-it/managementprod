@@ -107,6 +107,15 @@ export function getAttentionQueueRef(uid: string) {
   return db.ref(`command-center/${uid}/attentionQueue`);
 }
 
+// ─── Skill refs (Firebase-backed skill storage) ───
+export function getSkillsRef(uid: string) {
+  return db.ref(`command-center/${uid}/skills`);
+}
+
+export function getSkillRef(uid: string, skillName: string) {
+  return db.ref(`command-center/${uid}/skills/${skillName}`);
+}
+
 // ─── Knowledge Tree refs ───
 export function getForestsRef(uid: string) {
   return db.ref(`command-center/${uid}/knowledge/forests`);
