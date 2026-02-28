@@ -103,6 +103,11 @@ The deploy repo (`command-center-test`) serves two pages:
 
 The landing page links to `/app/?setup` for new user onboarding (wizard-only mode) and `/app/` for existing users. The CC app detects the `?setup` URL parameter and shows only the SetupWizard, hiding the main UI until setup completes.
 
+**Setup Wizard (4 steps):** GitHub Token → Connect MCP → Initialize Claude → All Done
+- **Step 2 (Connect MCP):** Tabbed surface selector (Chat, Code, Cowork, PowerPoint, Excel) with surface-specific configuration instructions. Real-time green checkmarks appear as each surface makes its first authenticated tool call — driven by Firebase listener on `connectedSurfaces/`.
+- **Step 3 (Initialize Claude):** Universal init prompt for all surfaces — Claude detects its surface via `initiator` and completes setup automatically.
+- **Connected surfaces tracking:** MCP server writes `connectedSurfaces/{surface}/lastSeen` on every authenticated tool call with a valid `initiator`. Chat and Cowork are auto-linked (shared Claude.ai connector).
+
 ### Design Principle: Data Layer / Decision Layer
 
 CC is the data and persistence layer. Claude is the reasoning and decision layer. The MCP server is the interface between them.
@@ -234,6 +239,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 │  └─────────┘  └─────────┘  prefs      │ forests/  │ │
 │                             apiKeyHash │ trees/    │ │
 │                             profile    │ nodes/    │ │
+│                          connectedSurfaces          │
 │                                        └───────────┘ │
 └─────────────────────┬────────────────────────────────┘
                       │
@@ -242,13 +248,13 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
           ▼           ▼           ▼
     CC Browser    MCP Server    Cloud Functions
     (listeners)   (reads/writes) (triggers/scheduled)
-    4 active      13 tools       domainProxy, documentCleanup
+    5 active      13 tools       domainProxy, documentCleanup
                   33 skills
 ```
 
 ### Browser → Firebase
 - **Auth:** Firebase Auth (Google Sign-In) → UID
-- **Read:** 4 persistent listeners (bounded by `limitToLast`)
+- **Read:** 5 persistent listeners (bounded by `limitToLast` or naturally bounded)
 - **Write:** App config updates, preferences only — all ODRC/job/session writes go through MCP server
 - **On-demand reads:** `JobService.loadBefore()` for historical jobs
 
