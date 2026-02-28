@@ -5439,8 +5439,8 @@
             <div className="flex items-center gap-2 mb-6">
                 {Array.from({ length: totalSteps }, (_, i) => (
                     <button key={i} onClick={() => {
-                        // Only allow navigation to token step or later if token is validated
-                        if (i === 0 || validated) setStep(i + 1);
+                        // Allow navigation to any visited step (GitHub is optional)
+                        if (i + 1 <= step || i === 0) setStep(i + 1);
                     }}
                         className={`w-3 h-3 rounded-full transition-colors ${
                             i + 1 === step ? 'bg-indigo-400 ring-2 ring-indigo-400/30' :
@@ -5947,7 +5947,12 @@
                                 </div>
                             )}
 
-                            {navButtons(0, 2, validated ? 'Next →' : null, !validated)}
+                            {navButtons(0, 2, validated ? 'Next →' : 'Skip for now →', false)}
+                            {!validated && (
+                                <p className="text-xs text-slate-500 text-center mt-2">
+                                    GitHub is optional — you can use CC for ideation without it. Connect later in Settings.
+                                </p>
+                            )}
                         </div>
                     )}
 
@@ -6135,8 +6140,8 @@
                                     <span className="text-sm text-slate-300">Signed in as {firebaseUser?.displayName || firebaseUser?.email}</span>
                                 </div>
                                 <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
-                                    <span className="text-green-400 text-sm">✓</span>
-                                    <span className="text-sm text-slate-300">GitHub: {validated?.login || 'connected'} ({validated?.repos || '?'} repos){validated?.oauth ? ' • OAuth — no expiration' : ''}</span>
+                                    <span className={`text-sm ${validated ? 'text-green-400' : 'text-slate-500'}`}>{validated ? '✓' : '○'}</span>
+                                    <span className="text-sm text-slate-300">{validated ? `GitHub: ${validated.login} (${validated.repos} repos)${validated.oauth ? ' • OAuth' : ''}` : 'GitHub — skipped (connect later in Settings)'}</span>
                                 </div>
                                 <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
                                     <span className={`text-sm ${mcpConfigCopied ? 'text-green-400' : 'text-slate-500'}`}>{mcpConfigCopied ? '✓' : '○'}</span>
