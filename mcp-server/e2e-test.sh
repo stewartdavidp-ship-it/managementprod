@@ -1087,7 +1087,7 @@ TEXT=$(get_text "$RAW")
 ERR=$(is_error "$RAW")
 assert "skill(list) not error" "false" "$ERR"
 SKILL_COUNT=$(jq_field "$TEXT" "['count']")
-assert "skill(list) count is 33" "33" "$SKILL_COUNT"
+assert "skill(list) count is 35" "35" "$SKILL_COUNT"
 assert_contains "skill(list) has cc-odrc-framework" "cc-odrc-framework" "$TEXT"
 assert_contains "skill(list) has cc-session-protocol" "cc-session-protocol" "$TEXT"
 assert_contains "skill(list) has cc-build-protocol" "cc-build-protocol" "$TEXT"
@@ -2432,7 +2432,182 @@ assert "_signals piggybacked on non-session tools (app list)" "true" "$APP_HAS_M
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
-echo "── Phase 20: Teardown — Delete All Test Data ─────────────"
+echo "── Phase 20: Bootstrap & Init — Single-call startup ──────"
+# ═══════════════════════════════════════════════════════════════
+echo ""
+
+# Bootstrap replaces multi-step startup ceremony with a single call.
+# Init is one-time onboarding that returns memory boot loader lines.
+
+# -- Bootstrap returns correct structure for chat --
+RAW=$(call_tool "session" "{\"action\":\"bootstrap\",\"initiator\":\"claude-chat\"}")
+BOOTSTRAP_STRUCTURE=$(echo "$RAW" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='false'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        has_instructions = 'instructions' in payload and isinstance(payload['instructions'], str) and len(payload['instructions']) > 50
+        has_profile = 'profile' in payload and isinstance(payload['profile'], dict)
+        has_jobs = 'jobs' in payload and isinstance(payload['jobs'], dict)
+        has_signals = 'signalDefinitions' in payload and isinstance(payload['signalDefinitions'], dict)
+        if has_instructions and has_profile and has_jobs and has_signals:
+            result='true'
+            break
+    except Exception: pass
+print(result)
+")
+assert "bootstrap returns correct structure (instructions, profile, jobs, signalDefinitions)" "true" "$BOOTSTRAP_STRUCTURE"
+
+# -- Bootstrap includes signal definitions from registry --
+RAW=$(call_tool "session" "{\"action\":\"bootstrap\",\"initiator\":\"claude-code\"}")
+BOOTSTRAP_SIGNALS=$(echo "$RAW" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='false'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        sigs = payload.get('signalDefinitions', {})
+        if len(sigs) > 0 and all('description' in v and 'action' in v for v in sigs.values()):
+            result='true'
+            break
+    except Exception: pass
+print(result)
+")
+assert "bootstrap includes signal definitions with description+action" "true" "$BOOTSTRAP_SIGNALS"
+
+# -- Bootstrap handles session gracefully (returns activeSession) --
+BOOTSTRAP_SESSION=$(echo "$RAW" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='false'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        if 'activeSession' in payload:
+            sess = payload['activeSession']
+            if sess is None or (isinstance(sess, dict) and 'id' in sess):
+                result='true'
+                break
+    except Exception: pass
+print(result)
+")
+assert "bootstrap returns activeSession (null or object with id)" "true" "$BOOTSTRAP_SESSION"
+
+# -- Bootstrap returns surface-specific instructions --
+# Extract instruction lengths for chat vs code and compare
+RAW_CHAT_BS=$(call_tool "session" "{\"action\":\"bootstrap\",\"initiator\":\"claude-chat\"}")
+CHAT_INSTR_LEN=$(echo "$RAW_CHAT_BS" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='0'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        if 'instructions' in payload:
+            result=str(len(payload['instructions']))
+            break
+    except Exception: pass
+print(result)
+")
+RAW_CODE_BS=$(call_tool "session" "{\"action\":\"bootstrap\",\"initiator\":\"claude-code\"}")
+CODE_INSTR_LEN=$(echo "$RAW_CODE_BS" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='0'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        if 'instructions' in payload:
+            result=str(len(payload['instructions']))
+            break
+    except Exception: pass
+print(result)
+")
+# Both should be non-zero and different (surface-specific content)
+if [ "$CHAT_INSTR_LEN" != "0" ] && [ "$CODE_INSTR_LEN" != "0" ] && [ "$CHAT_INSTR_LEN" != "$CODE_INSTR_LEN" ]; then
+  SURFACE_SPECIFIC="true"
+else
+  SURFACE_SPECIFIC="false"
+fi
+assert "bootstrap returns surface-specific instructions (chat != code)" "true" "$SURFACE_SPECIFIC"
+
+# -- Bootstrap requires surface (initiator) --
+RAW=$(call_tool "session" "{\"action\":\"bootstrap\"}")
+BOOTSTRAP_ERR=$(echo "$RAW" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='false'
+for c in d.get('result',{}).get('content',[]):
+    text=c.get('text','')
+    if 'requires a surface' in text.lower() or 'initiator' in text.lower():
+        result='true'
+        break
+print(result)
+")
+assert "bootstrap requires initiator parameter" "true" "$BOOTSTRAP_ERR"
+
+# -- Init returns memory lines --
+RAW=$(call_tool "session" "{\"action\":\"init\",\"initiator\":\"claude-chat\"}")
+INIT_LINES=$(echo "$RAW" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='false'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        lines = payload.get('memoryLines', [])
+        conf = payload.get('confirmation', '')
+        if isinstance(lines, list) and len(lines) >= 2 and len(conf) > 0:
+            result='true'
+            break
+    except Exception: pass
+print(result)
+")
+assert "init returns memoryLines array and confirmation" "true" "$INIT_LINES"
+
+# -- Init is idempotent (calling twice doesn't error) --
+RAW2=$(call_tool "session" "{\"action\":\"init\",\"initiator\":\"claude-chat\"}")
+INIT_IDEMPOTENT=$(echo "$RAW2" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+is_error = d.get('result',{}).get('isError', False)
+result='false'
+if not is_error:
+    for c in d.get('result',{}).get('content',[]):
+        try:
+            payload=json.loads(c['text'])
+            if 'memoryLines' in payload:
+                result='true'
+                break
+        except Exception: pass
+print(result)
+")
+assert "init is idempotent (second call succeeds)" "true" "$INIT_IDEMPOTENT"
+
+# -- Init writes initialized flag to profile --
+RAW=$(call_tool "session" "{\"action\":\"profile\",\"initiator\":\"claude-chat\"}")
+INIT_FLAG=$(echo "$RAW" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+result='false'
+for c in d.get('result',{}).get('content',[]):
+    try:
+        payload=json.loads(c['text'])
+        if payload.get('initialized') == True:
+            result='true'
+            break
+    except Exception: pass
+print(result)
+")
+assert "init sets initialized flag in profile" "true" "$INIT_FLAG"
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════════
+echo "── Phase 21: Teardown — Delete All Test Data ─────────────"
 # ═══════════════════════════════════════════════════════════════
 echo ""
 

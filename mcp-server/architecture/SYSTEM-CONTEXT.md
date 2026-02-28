@@ -5,7 +5,7 @@
 >
 > **Keep current:** Update this file whenever architecture changes are made.
 >
-> **Last updated:** 2026-02-28 — Revision 31
+> **Last updated:** 2026-02-28 — Revision 32
 
 ---
 
@@ -412,6 +412,26 @@ Signal codes are computed per-request by `signal-computation.ts` and piggybacked
 
 Signals are surface-aware: some signals only fire for specific surfaces (e.g., cold-start signals target `claude-chat` or `claude-code` independently). The signal registry is stored in Firebase at `command-center/{uid}/signals/{codeName}` and seeded via `migrate-signals.sh`.
 
+### Bootstrap & Init Actions
+
+Two new session actions provide single-call startup replacement:
+
+**`session(action="bootstrap", initiator="claude-chat|claude-code")`** — Fan-out reads across Firebase via `Promise.all()`, returns orientation payload in one call:
+- `instructions` — Surface-specific behavioral baseline from `cc-bootstrap-instructions-{surface}` skill
+- `profile` — User profile flags (initialized, projectInstructionsDirty, showTutorial, needsAttention)
+- `activeSession` — Current session info (id, title, mode, goal, ideaId, appId)
+- `activeIdea` — Active idea with concept counts (rules, constraints, decisions, opens)
+- `priorSession` — Most recent completed session's closingSummary and nextSessionRecommendation
+- `jobs` — Active, draft, and review jobs
+- `signalDefinitions` — Signal registry filtered to this surface (description + action)
+
+**`session(action="init", initiator="claude-chat|claude-code")`** — One-time onboarding entry point:
+- Sets `initialized: true` in user's Firebase profile (idempotent)
+- Returns `memoryLines` array for Claude to write to Memory (3-line boot loader)
+- Returns `confirmation` message with next steps
+
+Implementation lives in `session-bootstrap.ts` — extracted from the main session handler to keep the 735-line handler manageable.
+
 ---
 
 ## 9. Inter-Agent Messaging
@@ -558,9 +578,10 @@ mcp-server/
 │   ├── context.ts                 # AsyncLocalStorage<RequestContext>, getCurrentUid()
 │   ├── firebase.ts                # Firebase Admin init, 27 reference factory functions
 │   ├── github.ts                  # GitHub Contents API client (auto-delivery)
-│   ├── skills.ts                  # 33 skill prompt constants, registerSkillPrompts(), getCompiledSkillRegistry()
+│   ├── skills.ts                  # 33+ skill prompt constants, registerSkillPrompts(), getCompiledSkillRegistry()
 │   ├── skill-cache.ts             # In-memory skill cache (Firebase-backed, 5-min TTL, write-through)
 │   ├── signal-computation.ts      # Per-request signal computation. Evaluates 10 signal codes based on context (profile flags, job state, session meta, pending messages).
+│   ├── session-bootstrap.ts       # handleBootstrap() fan-out reads + handleInit() onboarding. Single-call startup replacement.
 │   ├── response-metadata.ts       # Piggybacks metadata onto every MCP tool response: _pendingMessages, _session, _contextHealth, _signals
 │   ├── auth/
 │   │   ├── oauth.ts               # OAuth 2.1 router (5 endpoints + sign-in page)
@@ -569,7 +590,7 @@ mcp-server/
 │       ├── apps.ts                # app tool (list/get/create/update/archive)
 │       ├── concepts.ts            # concept (12 actions), list_concepts, get_active_concepts
 │       ├── ideas.ts               # idea tool (9 actions: CRUD + graduate/archive/list_ranked)
-│       ├── sessions.ts            # session tool (lifecycle + events + preferences + profile)
+│       ├── sessions.ts            # session tool (lifecycle + events + preferences + profile + bootstrap + init)
 │       ├── jobs.ts                # job tool (lifecycle + events + outcomes)
 │       ├── generate.ts            # generate_claude_md tool (generate/push/get)
 │       ├── documents.ts           # document tool (queue + delivery + messaging, 13 actions)
@@ -578,7 +599,7 @@ mcp-server/
 │       ├── repo.ts                # repo_file tool (read files from GitHub repos)
 │       └── skills.ts              # skill tool (list/get/create/update/delete — full CRUD)
 ├── deploy.sh                      # Build + deploy to Cloud Run + OAuth verification
-├── e2e-test.sh                    # 474 E2E tests against live service
+├── e2e-test.sh                    # 482+ E2E tests against live service
 ├── migrate-skills.sh              # Seed Firebase skills from compiled constants (idempotent)
 ├── migrate-signals.sh             # Seed Firebase signal registry with 10 signal definitions
 ├── Dockerfile                     # Two-stage: build TypeScript, run production

@@ -5,8 +5,9 @@ import { isGitHubConfigured, resolveTargetRepo, resolveFilePath, deliverToGitHub
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
-import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
+import { INITIATOR_PARAM, resolveInitiator, parseSurface } from "../surfaces.js";
 import { computeIdeaHealth, updateAppTriageFlags } from "../idea-health.js";
+import { handleBootstrap, handleInit } from "../session-bootstrap.js";
 
 const SESSION_STATUSES = ["active", "completed", "abandoned"] as const;
 
@@ -46,10 +47,12 @@ export function registerSessionTools(server: McpServer): void {
   - "list": List sessions with optional filters. Optional: ideaId, appId, status, limit.
   - "delete": Delete a session. Requires sessionId. Use for test cleanup only.
   - "preferences": Read or update user preferences. Optional: presentationMode (to set).
-  - "profile": Read or update user profile. Optional fields to set: presentationMode, clearInstructionsDirty, clearShowTutorial. Returns consolidated profile with projectInstructionsDirty flag and showTutorial flag. When clearInstructionsDirty is true, clears the dirty flag. When clearShowTutorial is true, sets showTutorial to false (call after user dismisses or completes the tutorial).`,
+  - "profile": Read or update user profile. Optional fields to set: presentationMode, clearInstructionsDirty, clearShowTutorial. Returns consolidated profile with projectInstructionsDirty flag and showTutorial flag. When clearInstructionsDirty is true, clears the dirty flag. When clearShowTutorial is true, sets showTutorial to false (call after user dismisses or completes the tutorial).
+  - "bootstrap": Single-call startup replacement. Returns orientation payload with instructions, active session, active idea, jobs, and signal definitions. Requires surface parameter (e.g. initiator="claude-chat"). Call this on conversation start instead of multi-step startup checklist.
+  - "init": One-time onboarding. Returns memory boot loader lines to write to Claude Memory. Sets initialized flag in profile. Idempotent. Requires surface parameter (e.g. initiator="claude-chat").`,
     {
       ...INITIATOR_PARAM,
-      action: z.enum(["start", "update", "add_event", "complete", "get", "list", "delete", "preferences", "profile"]).describe("Action to perform"),
+      action: z.enum(["start", "update", "add_event", "complete", "get", "list", "delete", "preferences", "profile", "bootstrap", "init"]).describe("Action to perform"),
       sessionId: z.string().optional().describe("Session ID (required for update/add_event/complete/get)"),
       ideaId: z.string().optional().describe("Idea ID (required for start, optional filter for list)"),
       appId: z.string().optional().describe("App ID (optional for start, optional filter for list)"),
@@ -88,6 +91,30 @@ export function registerSessionTools(server: McpServer): void {
       resolveInitiator({ initiator: (args as any).initiator });
 
       const uid = getCurrentUid();
+
+      // ─── BOOTSTRAP ───
+      if (action === "bootstrap") {
+        const surface = parseSurface((args as any).initiator);
+        if (!surface) {
+          return withResponseSize({
+            content: [{ type: "text" as const, text: "bootstrap requires a surface. Pass initiator parameter (e.g. initiator='claude-chat')." }],
+            isError: true,
+          });
+        }
+        return await handleBootstrap(uid, surface);
+      }
+
+      // ─── INIT ───
+      if (action === "init") {
+        const surface = parseSurface((args as any).initiator);
+        if (!surface) {
+          return withResponseSize({
+            content: [{ type: "text" as const, text: "init requires a surface. Pass initiator parameter (e.g. initiator='claude-chat')." }],
+            isError: true,
+          });
+        }
+        return await handleInit(uid, surface);
+      }
 
       // ─── PREFERENCES ───
       if (action === "preferences") {
