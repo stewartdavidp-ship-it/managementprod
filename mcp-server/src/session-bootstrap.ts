@@ -367,17 +367,31 @@ function getMemoryLines(surface: Surface): string[] {
 }
 
 function getWriteInstructions(surface: Surface): string {
+  const readBack =
+    " After writing, tell the user exactly which lines you saved and where — confirm each one so they can verify.";
   switch (surface) {
     case "claude-code":
-      return "Write these lines to your MEMORY.md file using your Write tool. Append them under a '# Command Center' heading. If the file doesn't exist, create it with these lines.";
+      return (
+        "Write these lines to your MEMORY.md file using your Write tool. Append them under a '# Command Center' heading. If the file doesn't exist, create it with these lines." +
+        readBack
+      );
     case "claude-chat":
-      return "Save each of these lines to your memory so they persist across all future conversations.";
+      return (
+        "Save each of these lines to your memory so they persist across all future conversations." +
+        readBack
+      );
     case "claude-cowork":
     case "claude-chrome":
     case "claude-powerpoint":
     case "claude-excel":
-      return "Save these lines to your memory so they persist across sessions.";
+      return (
+        "Save these lines to your memory so they persist across sessions." +
+        readBack
+      );
     default:
-      return "Save these lines to your persistent memory. For Claude Code, write them to your MEMORY.md file. For Claude Chat, save them as memory entries.";
+      return (
+        "Save these lines to your persistent memory. For Claude Code, write them to your MEMORY.md file. For Claude Chat, save them as memory entries." +
+        readBack
+      );
   }
 }
