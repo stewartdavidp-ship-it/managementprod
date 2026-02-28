@@ -10,7 +10,7 @@
 // tool handler.
 // ═══════════════════════════════════════════════════════════════
 
-import { getContextEstimate, getContextPerSurface, getSurfaceContextEstimate, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator } from "./context.js";
+import { getContextEstimate, getContextPerSurface, getSurfaceContextEstimate, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator, getSignals } from "./context.js";
 import { incrementContextEstimate } from "./tools/sessions.js";
 
 interface TextContent {
@@ -155,6 +155,13 @@ export function withResponseSize(
     if (pendingMessages && pendingMessages.count > 0) {
       meta._pendingMessages = pendingMessages;
     }
+  }
+
+  // Include _signals if any signal codes are active for this request.
+  // Computed once per request in index.ts and cached in AsyncLocalStorage.
+  const signals = getSignals();
+  if (signals && signals.length > 0) {
+    meta._signals = signals;
   }
 
   result.content.push({

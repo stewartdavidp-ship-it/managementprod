@@ -107,6 +107,15 @@ export function getAttentionQueueRef(uid: string) {
   return db.ref(`command-center/${uid}/attentionQueue`);
 }
 
+// ─── Signal refs (signal registry for _signals piggybacking) ───
+export function getSignalsRef(uid: string) {
+  return db.ref(`command-center/${uid}/signals`);
+}
+
+export function getSignalRef(uid: string, codeName: string) {
+  return db.ref(`command-center/${uid}/signals/${codeName}`);
+}
+
 // ─── Skill refs (Firebase-backed skill storage) ───
 export function getSkillsRef(uid: string) {
   return db.ref(`command-center/${uid}/skills`);

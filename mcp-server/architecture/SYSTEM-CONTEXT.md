@@ -5,7 +5,7 @@
 >
 > **Keep current:** Update this file whenever architecture changes are made.
 >
-> **Last updated:** 2026-02-28 — Revision 30
+> **Last updated:** 2026-02-28 — Revision 31
 
 ---
 
@@ -30,7 +30,7 @@ Both agents share the same Firebase Realtime Database namespace and communicate 
 └──────────────┘
 ```
 
-**Key numbers:** 13 tools, 33 skills, 2 built-in prompts, 1 resource, 447 E2E tests.
+**Key numbers:** 13 tools, 33 skills, 2 built-in prompts, 1 resource, 474 E2E tests.
 
 ---
 
@@ -221,6 +221,12 @@ command-center/
     │   ├── updatedAt, updatedBy, createdAt
     │   └── (cached in-memory with 5-min TTL)
     │
+    ├── signals/{codeName}/              # Signal registry (10 signal definitions)
+    │   ├── name, description
+    │   ├── surfaces[]                   # Which surfaces this signal applies to
+    │   ├── computation                  # How the signal is evaluated
+    │   └── action                       # What the signal means for the consumer
+    │
     └── apiKeyHash                       # SHA-256 of CC API key
 ```
 
@@ -265,6 +271,8 @@ These `.indexOn` rules are required for server-side query filtering. Without the
 | `getNodeContentRef(uid, nid)` | `command-center/{uid}/knowledge/nodes/{nid}` |
 | `getSkillsRef(uid)` | `command-center/{uid}/skills` |
 | `getSkillRef(uid, name)` | `command-center/{uid}/skills/{name}` |
+| `getSignalsRef(uid)` | `command-center/{uid}/signals` |
+| `getSignalRef(uid, name)` | `command-center/{uid}/signals/{name}` |
 
 ---
 
@@ -391,6 +399,18 @@ Skills are stored in Firebase RTDB at `command-center/{uid}/skills/{skillName}` 
 **Fallback chain:** Firebase → compiled constants in `skills.ts`. On first deploy (or if Firebase is empty), the compiled constants are served. Use `migrate-skills.sh` to seed Firebase from compiled constants.
 
 **Cache lifecycle:** `skill-cache.ts` initializes lazily on first authenticated request. The `initSkillCache(uid)` function is idempotent — subsequent calls are no-ops. Cache entries have a 5-min TTL but write-through operations keep them fresh.
+
+### Signal Infrastructure
+
+Signal codes are computed per-request by `signal-computation.ts` and piggybacked on every MCP tool response as `_signals` (an array of active signal code strings). This coexists with the existing `_pendingMessages` and `_session` metadata already injected by `response-metadata.ts`.
+
+10 initial signals cover four categories:
+- **Profile flags** — e.g., projectInstructionsDirty, showTutorial
+- **Job state** — e.g., active build in progress, draft jobs awaiting claim
+- **Session state** — e.g., active session detected, session nearing context limit
+- **Cold-start detection** — first request from a surface with no prior session
+
+Signals are surface-aware: some signals only fire for specific surfaces (e.g., cold-start signals target `claude-chat` or `claude-code` independently). The signal registry is stored in Firebase at `command-center/{uid}/signals/{codeName}` and seeded via `migrate-signals.sh`.
 
 ---
 
@@ -536,10 +556,12 @@ mcp-server/
 │   ├── index.ts                   # Express app, CORS, auth middleware, MCP endpoints
 │   ├── server.ts                  # MCP server creation, tool/prompt/resource registration
 │   ├── context.ts                 # AsyncLocalStorage<RequestContext>, getCurrentUid()
-│   ├── firebase.ts                # Firebase Admin init, 25 reference factory functions
+│   ├── firebase.ts                # Firebase Admin init, 27 reference factory functions
 │   ├── github.ts                  # GitHub Contents API client (auto-delivery)
 │   ├── skills.ts                  # 33 skill prompt constants, registerSkillPrompts(), getCompiledSkillRegistry()
 │   ├── skill-cache.ts             # In-memory skill cache (Firebase-backed, 5-min TTL, write-through)
+│   ├── signal-computation.ts      # Per-request signal computation. Evaluates 10 signal codes based on context (profile flags, job state, session meta, pending messages).
+│   ├── response-metadata.ts       # Piggybacks metadata onto every MCP tool response: _pendingMessages, _session, _contextHealth, _signals
 │   ├── auth/
 │   │   ├── oauth.ts               # OAuth 2.1 router (5 endpoints + sign-in page)
 │   │   └── store.ts               # In-memory OAuth state + API key validation
@@ -556,8 +578,9 @@ mcp-server/
 │       ├── repo.ts                # repo_file tool (read files from GitHub repos)
 │       └── skills.ts              # skill tool (list/get/create/update/delete — full CRUD)
 ├── deploy.sh                      # Build + deploy to Cloud Run + OAuth verification
-├── e2e-test.sh                    # 467 E2E tests against live service
+├── e2e-test.sh                    # 474 E2E tests against live service
 ├── migrate-skills.sh              # Seed Firebase skills from compiled constants (idempotent)
+├── migrate-signals.sh             # Seed Firebase signal registry with 10 signal definitions
 ├── Dockerfile                     # Two-stage: build TypeScript, run production
 ├── package.json                   # Dependencies and scripts
 ├── tsconfig.json                  # TypeScript config (ES2022, NodeNext, strict)

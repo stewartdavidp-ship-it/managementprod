@@ -5,7 +5,9 @@ import { createServer } from "./server.js";
 import { initSkillCache } from "./skill-cache.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
-import { requestContext, setContextEstimate, setContextPerSurface, setSurfaceContextEstimate, setPendingMessages, type PendingMessagesInfo } from "./context.js";
+import { requestContext, setContextEstimate, setContextPerSurface, setSurfaceContextEstimate, setPendingMessages, setSignals, setInitiator, getSessionMeta, getPendingMessages as getCtxPendingMessages, type PendingMessagesInfo } from "./context.js";
+import { computeSignals } from "./signal-computation.js";
+import { parseSurface } from "./surfaces.js";
 import { getActiveSessionId, getPendingContextAccumulation, getPendingContextPerSurface } from "./tools/sessions.js";
 import { getSessionRef, getDocumentsRef } from "./firebase.js";
 import { ensureSession } from "./session-lifecycle.js";
@@ -256,10 +258,19 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         console.error("Session lifecycle error:", err);
       }
 
-      // Extract surface-reported contextEstimate from tool call arguments (if present).
+      // Extract initiator + surface-reported contextEstimate from tool call arguments.
       // This is the "base handler" approach — parsed at middleware level, not per-tool.
       // The parameter is accepted by Zod via INITIATOR_PARAM on every tool.
       if (!Array.isArray(req.body) && req.body?.method === "tools/call") {
+        // Extract initiator at middleware level for signal computation.
+        // resolveInitiator() in tool handlers still runs but is effectively a no-op
+        // when we've already set it here (setInitiator is idempotent).
+        const initiatorArg = req.body.params?.arguments?.initiator;
+        const surface = parseSurface(initiatorArg);
+        if (surface) {
+          setInitiator(surface);
+        }
+
         const ce = req.body.params?.arguments?.contextEstimate;
         if (typeof ce === "number" && ce >= 0) {
           setSurfaceContextEstimate(ce);
@@ -281,6 +292,23 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         await checkPendingMessages(firebaseUid);
       } catch {
         // Non-critical — _pendingMessages will be omitted if this fails
+      }
+
+      // Compute active signal codes once per request.
+      // Uses initiator, session meta, and pending messages already loaded above.
+      // Result is cached in AsyncLocalStorage and piggybacked on every tool response.
+      try {
+        const signals = await computeSignals({
+          uid: firebaseUid,
+          surface: parseSurface(
+            !Array.isArray(req.body) ? req.body?.params?.arguments?.initiator : undefined
+          ) || undefined,
+          sessionMeta: getSessionMeta(),
+          pendingMessages: getCtxPendingMessages(),
+        });
+        setSignals(signals.length > 0 ? signals : null);
+      } catch {
+        // Non-critical — _signals will be omitted if this fails
       }
     }
 

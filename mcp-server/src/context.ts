@@ -26,6 +26,7 @@ export interface RequestContext {
   surfaceContextEstimate?: number; // Surface-reported context usage (from contextEstimate tool param)
   pendingMessages?: PendingMessagesInfo | null; // Cached per-request for piggyback notifications (null = checked, none found)
   suppressPiggyback?: boolean; // Set by document(receive) to avoid redundant info
+  signals?: string[] | null; // Cached per-request computed signal codes (null = computed, none active)
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -135,5 +136,18 @@ export function setSurfaceContextEstimate(estimate: number): void {
   const ctx = requestContext.getStore();
   if (ctx) {
     ctx.surfaceContextEstimate = estimate;
+  }
+}
+
+// Get cached signal codes for this request
+export function getSignals(): string[] | null | undefined {
+  return requestContext.getStore()?.signals;
+}
+
+// Set computed signal codes for this request (called once per request in index.ts)
+export function setSignals(signals: string[] | null): void {
+  const ctx = requestContext.getStore();
+  if (ctx) {
+    ctx.signals = signals;
   }
 }
