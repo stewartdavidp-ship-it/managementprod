@@ -131,7 +131,7 @@ CC is the data and persistence layer. Claude is the reasoning and decision layer
 │  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
 │  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
 │  └─────────────┘                  │  (Cloud Run)         │             │
-│                                    │  13 tools, 33 skills │             │
+│                                    │  13 tools, 39 skills │             │
 │  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
 │  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
 │  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
@@ -262,6 +262,18 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 - **External integration refs:** Concepts, ideas, and jobs support optional `externalRefs[]` arrays for linking to Jira, Linear, etc. Ideas also support `externalProjectKey`
 - **Test/Prod split:** Both environments share same Firebase RTDB — same data, different code versions
 - **Express body limit:** 10MB (raised from 1MB to support large document pushes)
+
+### Onboarding Init Flow
+- **Universal prompt:** `Initialize AI Command Center. Call the session tool with action "init" to get started.` — same text for all surfaces
+- **`session(init)`** sets `initialized: true` on the user's profile and returns a self-executing payload:
+  - `memoryLines` — 3 boot lines (surface-specific router skill name)
+  - `writeInstructions` — surface-specific HOW (Code: "Write to MEMORY.md", Chat: "Save to memory")
+  - `nextStep` — explicit bootstrap call with correct initiator
+  - `userMessage` — confirmation text for Claude to relay to user
+- **Post-init:** Claude writes memory, then calls `session(bootstrap)` which returns full orientation (instructions, active session, active idea, jobs, signal definitions)
+- **Subsequent sessions:** Memory boot lines trigger router skill load → `session(bootstrap)` → ready
+- **Router skills:** `cc-router-{chat|code|cowork}` — surface-specific entry points loaded from memory on every conversation start
+- **Source:** `session-bootstrap.ts` → `handleInit()`, `getMemoryLines()`, `getWriteInstructions()`
 
 ### Cloud Functions → Firebase
 - **domainProxy:** Authenticated CORS proxy for Porkbun/GoDaddy APIs (requires Firebase ID token)
