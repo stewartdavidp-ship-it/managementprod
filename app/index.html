@@ -5264,8 +5264,9 @@
     // v8.73.0: Step 3 "Integrations" → "Connectors", updated tool permissions mock.
     //          Step 4 replaced API key flow with OAuth (persistent server-side tokens).
     // v8.74.0: Merged Steps 3+4 into single "Connect the MCP Server" step with Part A (Chat) / Part B (Code).
-    //          Wizard is now 4 steps (was 5). One URL, two connection methods.
-    // Steps: Welcome → GitHub Token → Create Claude.ai Project + Instructions → Connect MCP → Connect Claude Code
+    // v8.79.0: Replaced "Create Claude.ai Project" step with "Initialize Claude" (memory boot loader).
+    //          Wizard is now 4 steps. Reordered: MCP connection before init (init requires MCP).
+    // Steps: Welcome → GitHub Token → Connect MCP → Initialize Claude → All Done
     // =========================================================================
     function SetupWizard({ firebaseUser, onComplete }) {
         const [step, setStep] = React.useState(0); // 0 = welcome, 1-5 = wizard steps
@@ -5363,9 +5364,8 @@
                 })();
             }
         }, []);
-        const [instructionsCopied, setInstructionsCopied] = React.useState(false);
-        const [instructionsText, setInstructionsText] = React.useState('');
-        const [instructionsLoading, setInstructionsLoading] = React.useState(false);
+        const [selectedSurface, setSelectedSurface] = React.useState('claude-chat');
+        const [initPromptCopied, setInitPromptCopied] = React.useState(false);
         const [mcpConfigCopied, setMcpConfigCopied] = React.useState(false);
 
         // Tutorial state
@@ -5375,7 +5375,7 @@
         const totalTutorialSteps = 6;
 
         const totalSteps = 4;
-        const stepLabels = ['GitHub Token', 'Claude.ai Project', 'Connect MCP', 'Connect Claude Code', 'All Done'];
+        const stepLabels = ['GitHub Token', 'Connect MCP', 'Initialize Claude', 'All Done'];
 
         const validateToken = async () => {
             if (!token.trim()) return;
@@ -5397,156 +5397,8 @@
             }
         };
 
-        const fetchInstructions = async () => {
-            if (instructionsText) return instructionsText;
-            setInstructionsLoading(true);
-            try {
-                if (firebaseDb && firebaseUser) {
-                    const snap = await firebaseDb.ref(`command-center/${firebaseUser.uid}/documents`)
-                        .orderByChild('type').equalTo('project-instructions').limitToLast(1).once('value');
-                    const data = snap.val();
-                    if (data) {
-                        const doc = Object.values(data)[0];
-                        if (doc && doc.content) {
-                            setInstructionsText(doc.content);
-                            setInstructionsLoading(false);
-                            return doc.content;
-                        }
-                    }
-                }
-            } catch (e) { /* fall through to default */ }
-            // Default CC project instructions — canonical version
-            const defaultInstructions = `# Command Center — Project Instructions
-
-You are operating in Command Center (CC) mode. CC is an AI-powered ideation and development platform that tracks ideas, concepts, sessions, jobs, and deployments across a portfolio of web apps.
-
-## Setup & Onboarding
-
-These instructions are the canonical project configuration for Command Center. They are stored as a permanent document in Firebase and downloaded once during initial setup:
-
-1. User configures MCP connection to CC
-2. User downloads this instructions file from Firebase
-3. User loads these instructions into their Claude project settings
-4. All conversations in the project inherit these instructions automatically
-
-To check for updated instructions: \\\`document(action="list", type="project-instructions")\\\`
-
-## On Every Conversation Start
-
-1. **Load the router** — the only skill read at startup:
-   - \\\`skill(action="get", skillName="cc-skill-router")\\\` — the routing table that tells you which skills to load for any action
-
-2. **Check for active work:**
-   - \\\`session(action="list", status="active")\\\` — any active ideation sessions?
-   - \\\`job(action="list", status="review")\\\` — any jobs needing review/approval?
-   - \\\`job(action="list", status="draft")\\\` — any draft jobs queued?
-
-3. **Route based on what you find:**
-   - Active session found → read \\\`cc-session-resume\\\`, present status, ask to resume or start fresh
-   - Jobs in review → surface them — Code may be waiting for a decision
-   - Nothing active → present the \\\`prompt\\\` widgets — ready for whatever the user needs
-
-**Do NOT preload skills speculatively.** The router tells you exactly which skills to read for any trigger. Load them at the moment they're needed, not before.
-
-## ODRC Vocabulary
-
-All ideation work is organized through four concept types:
-
-| Type | What It Is | Example |
-|------|-----------|---------|
-| **OPEN** | A question or uncertainty needing resolution | "How does the system handle concurrent edits?" |
-| **DECISION** | A resolved position — WHAT was decided AND WHY | "Use WebSocket for real-time sync because polling creates unacceptable latency at scale" |
-| **RULE** | A repeatable behavioral principle governing future work | "All API responses must include pagination metadata even if the result set is small" |
-| **CONSTRAINT** | A hard boundary that exists whether you like it or not | "Firebase free tier limits to 1GB storage" |
-
-### Concept State Machine
-\\\`\\\`\\\`
-OPEN → DECISION, RULE, or CONSTRAINT
-DECISION → RULE (pattern hardening)
-CONSTRAINT → DECISION or RULE (external reality changed)
-RULE → OPEN (destabilized, needs rethinking)
-\\\`\\\`\\\`
-
-### Conversational Markers
-When surfacing concepts in conversation, announce them clearly before writing to Firebase:
-\\\`\\\`\\\`
-NEW OPEN: "specific actionable question"
-NEW DECISION: "what was decided AND why"
-NEW RULE: "behavioral principle governing future work"
-NEW CONSTRAINT: "hard boundary"
-RESOLVE OPEN: "original open" → resolution with rationale
-\\\`\\\`\\\`
-
-### Phase Signals
-Concept distribution signals idea maturity:
-- Many OPENs, few Decisions → early exploration
-- Decisions outnumber OPENs, Rules emerging → converging
-- OPENs near zero, strong Rules and Constraints → spec-ready
-
-## Lifecycle
-\\\`\\\`\\\`
-IDEATE ──→ SPECIFY ──→ DELIVER ──→ BUILD ──→ COMPLETE ──→ NEXT PHASE
- Chat       Chat       Queue       Code       Code         Chat
-\\\`\\\`\\\`
-
-- **Ideate** — Chat runs ODRC sessions, surfacing and resolving concepts
-- **Specify** — Chat generates CLAUDE.md from active concepts, pushes to queue
-- **Deliver** — Code picks up pending documents, writes to local filesystem
-- **Build** — Code claims job, reviews spec, implements, logs events
-- **Complete** — Code resolves OPENs from build, Chat reviews outcomes
-- **Next Phase** — Graduated idea's Rules/Constraints carry forward, new addon idea begins
-
-## State Machines
-**Session:** \\\`active\\\` → \\\`completed\\\` | \\\`abandoned\\\`
-**Session Modes:** \\\`base\\\` ↔ \\\`ideation\\\` ↔ \\\`build-review\\\` ↔ \\\`debrief\\\` (any-to-any)
-**Job:** \\\`draft\\\` → \\\`active\\\` → \\\`review\\\` → \\\`approved\\\` → \\\`completed\\\`/\\\`failed\\\`/\\\`abandoned\\\`
-**Idea:** \\\`active\\\` → \\\`graduated\\\` | \\\`archived\\\`
-**Concept:** \\\`active\\\` → \\\`resolved\\\` | \\\`superseded\\\` | \\\`transitioned\\\`
-**Document:** \\\`pending\\\` → \\\`delivered\\\` | \\\`failed\\\`
-
-## Command Reference
-When the user says "prompt", present commands as interactive \\\`ask_user_input\\\` widgets.
-
-## Skill Loading Philosophy
-The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loading:
-1. **Startup:** Load only the router.
-2. **On trigger:** Consult the router and load the indicated skill(s).
-3. **On compaction:** Re-read the router + \\\`cc-session-resume\\\`.
-
-## Tool Quick Reference
-| Tool | Purpose |
-|------|---------|
-| \\\`app\\\` | List/get/update apps |
-| \\\`idea\\\` | Create, update, graduate, archive ideas |
-| \\\`concept\\\` | Create, transition, supersede, resolve ODRC concepts |
-| \\\`session\\\` | Start, update, complete ideation sessions |
-| \\\`job\\\` | Create draft jobs for Code, track build lifecycle |
-| \\\`document\\\` | Queue documents for delivery, inter-agent messaging |
-| \\\`generate_claude_md\\\` | Generate CLAUDE.md from active concepts |
-| \\\`get_active_concepts\\\` | Current truth view — all active concepts for an app |
-| \\\`list_concepts\\\` | Filter concepts by idea, app, type, status |
-| \\\`skill\\\` | Read skill content for behavioral guidance |
-
-## Rules
-- Never hold state in the conversation — write to Firebase immediately via MCP tools
-- OPENs are captured at moment of discovery, not deferred
-- Jobs are the universal handoff to Code — not messages, not documents
-- Concepts must be self-contained — readable without session context
-- Read relevant skills BEFORE starting any structured activity
-- The router is the only skill that gets loaded unconditionally
-- Firebase is truth. Conversations are ephemeral.
-- When presenting options or choices, use \\\`ask_user_input\\\` widgets`;
-            setInstructionsText(defaultInstructions);
-            setInstructionsLoading(false);
-            return defaultInstructions;
-        };
-
-        const copyInstructions = async () => {
-            const text = await fetchInstructions();
-            if (text) {
-                navigator.clipboard.writeText(text);
-                setInstructionsCopied(true);
-            }
+        const getInitPrompt = (surface) => {
+            return `I'd like to set up AI Command Center. Please call the session tool with action "init" and initiator "${surface}" to get started.`;
         };
 
         const MCP_SERVER_URL = 'https://cc-mcp-server-300155036194.us-central1.run.app/mcp';
@@ -5677,8 +5529,8 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                             <div className="text-left space-y-3 mb-6">
                                 {[
                                     { icon: '🔗', label: 'Connect GitHub', desc: 'One-click authorization — no tokens to create' },
-                                    { icon: '📂', label: 'Create a Claude.ai Project', desc: 'A dedicated workspace with project instructions loaded' },
                                     { icon: '🧩', label: 'Connect the MCP Server', desc: 'Bridges Claude to Command Center — Chat and Code' },
+                                    { icon: '🧠', label: 'Initialize Claude', desc: 'One prompt writes memory boot lines — Claude remembers CC' },
                                 ].map((item, i) => (
                                     <div key={i} className="flex items-center gap-3 p-3 bg-slate-700/30 rounded-lg">
                                         <span className="text-xl flex-shrink-0">{item.icon}</span>
@@ -6099,66 +5951,8 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                         </div>
                     )}
 
-                    {/* ── Step 2: Create Claude.ai Project + Paste Instructions ── */}
+                    {/* ── Step 2: Connect the MCP Server ── */}
                     {step === 2 && (
-                        <div>
-                            {progressDots}
-                            <h3 className="text-lg font-semibold mb-2">Create a Claude.ai Project</h3>
-                            <p className="text-sm text-slate-400 mb-4 leading-relaxed">
-                                Create a dedicated project in Claude.ai and load it with project instructions. This gives Claude context about CC's tools and workflow.
-                            </p>
-
-                            {/* Sub-step A: Copy Instructions */}
-                            <div className="mb-4">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <span className={`text-sm font-semibold ${instructionsCopied ? 'text-green-400' : 'text-indigo-300'}`}>
-                                        {instructionsCopied ? '✓' : 'A.'}
-                                    </span>
-                                    <span className="text-sm text-slate-300 font-medium">Copy project instructions to your clipboard</span>
-                                </div>
-                                <button onClick={copyInstructions} disabled={instructionsLoading}
-                                    className={`w-full px-4 py-2.5 border rounded-lg text-sm font-medium transition-colors ${
-                                        instructionsCopied
-                                            ? 'bg-green-900/20 border-green-800/30 text-green-300'
-                                            : 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500 text-white'
-                                    }`}>
-                                    {instructionsLoading ? '⏳ Loading...' : instructionsCopied ? '✓ Instructions Copied' : 'Copy Instructions to Clipboard'}
-                                </button>
-                            </div>
-
-                            {/* Sub-step B: Create project and paste */}
-                            <div className="mb-3">
-                                <div className="flex items-center gap-2 mb-2">
-                                    <span className="text-sm font-semibold text-indigo-300">B.</span>
-                                    <span className="text-sm text-slate-300 font-medium">Create the project and paste instructions</span>
-                                </div>
-                                <ol className="text-xs text-slate-400 space-y-1.5 ml-6 mb-3 list-decimal">
-                                    <li>Click <strong className="text-slate-300">Projects</strong> in the left sidebar, then <strong className="text-slate-300">Create Project</strong></li>
-                                    <li>Name it <strong className="text-slate-300">"Command Center"</strong> (or whatever you like)</li>
-                                    <li>Look for the <strong className="text-slate-300">Instructions</strong> section — click the <strong className="text-slate-300">+</strong> button next to it</li>
-                                    <li>Paste the instructions you just copied</li>
-                                </ol>
-
-                                {/* Visual hint — text only, no interactive-looking elements */}
-                                <div className="mb-3 p-2.5 bg-amber-900/15 border border-amber-700/20 rounded-lg">
-                                    <p className="text-xs text-amber-300/80">
-                                        <strong>Tip:</strong> On the project page, look for the word <strong>"Instructions"</strong> with a small <strong>+</strong> button next to it — that's where you paste.
-                                    </p>
-                                </div>
-
-                                <a href="https://claude.ai/projects" target="_blank" rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600/50 rounded-lg text-sm font-medium text-slate-300 transition-colors">
-                                    Open Claude.ai Projects
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                                </a>
-                            </div>
-
-                            {navButtons(1, 3, 'Next →')}
-                        </div>
-                    )}
-
-                    {/* ── Step 3: Connect the MCP Server ── */}
-                    {step === 3 && (
                         <div>
                             {progressDots}
                             <h3 className="text-lg font-semibold mb-2">Connect the MCP Server</h3>
@@ -6235,6 +6029,94 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                 </p>
                             </div>
 
+                            {navButtons(1, 3, 'Next →')}
+                        </div>
+                    )}
+
+                    {/* ── Step 3: Initialize Claude ── */}
+                    {step === 3 && (
+                        <div>
+                            {progressDots}
+                            <h3 className="text-lg font-semibold mb-2">Initialize Claude</h3>
+                            <p className="text-sm text-slate-400 mb-4 leading-relaxed">
+                                Tell Claude to connect to Command Center. Select which surface you're setting up, copy the prompt, and paste it into a new conversation.
+                            </p>
+
+                            {/* Surface selection */}
+                            <div className="mb-4">
+                                <p className="text-xs font-medium text-slate-300 mb-2">1. Select your Claude surface</p>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {[
+                                        { key: 'claude-chat', icon: '💬', label: 'Chat', desc: 'Claude.ai web' },
+                                        { key: 'claude-code', icon: '💻', label: 'Code', desc: 'Claude Code CLI' },
+                                        { key: 'claude-cowork', icon: '🤝', label: 'Cowork', desc: 'Collaborative' },
+                                    ].map(s => (
+                                        <button key={s.key} onClick={() => { setSelectedSurface(s.key); setInitPromptCopied(false); }}
+                                            className={`text-left p-3 rounded-lg border transition-colors ${
+                                                selectedSurface === s.key
+                                                    ? 'border-indigo-500 bg-indigo-900/30'
+                                                    : 'border-slate-600/50 bg-slate-700/30 hover:border-slate-500'
+                                            }`}>
+                                            <div className="text-lg mb-1">{s.icon}</div>
+                                            <div className="text-xs font-bold text-white">{s.label}</div>
+                                            <div className="text-[10px] text-slate-400 mt-0.5">{s.desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Init prompt */}
+                            <div className="mb-4">
+                                <p className="text-xs font-medium text-slate-300 mb-2">2. Copy this prompt and paste it into Claude</p>
+                                <div className="p-3 bg-slate-900/80 border border-slate-600/50 rounded-lg mb-2">
+                                    <p className="text-sm text-indigo-300 font-mono leading-relaxed select-all">
+                                        {getInitPrompt(selectedSurface)}
+                                    </p>
+                                </div>
+                                <button onClick={() => { navigator.clipboard.writeText(getInitPrompt(selectedSurface)); setInitPromptCopied(true); }}
+                                    className={`w-full px-4 py-2.5 border rounded-lg text-sm font-medium transition-colors ${
+                                        initPromptCopied
+                                            ? 'bg-green-900/20 border-green-800/30 text-green-300'
+                                            : 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500 text-white'
+                                    }`}>
+                                    {initPromptCopied ? '✓ Prompt Copied' : 'Copy Init Prompt'}
+                                </button>
+                            </div>
+
+                            {/* Where to paste */}
+                            <div className="mb-3">
+                                <p className="text-xs font-medium text-slate-300 mb-2">3. Paste into a new conversation</p>
+                                {selectedSurface === 'claude-chat' && (
+                                    <div className="space-y-2">
+                                        <p className="text-xs text-slate-500 leading-relaxed">
+                                            Open Claude.ai and start a new conversation. Paste the prompt — Claude will write memory boot lines that persist across all future conversations.
+                                        </p>
+                                        <a href="https://claude.ai" target="_blank" rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-600/50 rounded-lg text-sm font-medium text-slate-300 transition-colors">
+                                            Open Claude.ai
+                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                        </a>
+                                    </div>
+                                )}
+                                {selectedSurface === 'claude-code' && (
+                                    <p className="text-xs text-slate-500 leading-relaxed">
+                                        Open Claude Code in your terminal and paste the prompt. Claude will write memory boot lines that persist across sessions.
+                                    </p>
+                                )}
+                                {selectedSurface === 'claude-cowork' && (
+                                    <p className="text-xs text-slate-500 leading-relaxed">
+                                        Start a new Cowork session and paste the prompt. Claude will configure itself for collaborative work.
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* Reconnect hint */}
+                            <div className="mt-4 p-3 bg-amber-900/15 border border-amber-700/20 rounded-lg">
+                                <p className="text-xs text-amber-300/80">
+                                    <strong>Lost your memory lines?</strong> Just paste this prompt again in any conversation — it's safe to re-run and will restore your boot loader.
+                                </p>
+                            </div>
+
                             {navButtons(2, 4, 'Next →')}
                         </div>
                     )}
@@ -6257,24 +6139,24 @@ The router (\\\`cc-skill-router\\\`) is the single source of truth for skill loa
                                     <span className="text-sm text-slate-300">GitHub: {validated?.login || 'connected'} ({validated?.repos || '?'} repos){validated?.oauth ? ' • OAuth — no expiration' : ''}</span>
                                 </div>
                                 <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
-                                    <span className={`text-sm ${instructionsCopied ? 'text-green-400' : 'text-slate-500'}`}>{instructionsCopied ? '✓' : '○'}</span>
-                                    <span className="text-sm text-slate-300">Claude.ai project {instructionsCopied ? 'with instructions' : '— do this from Settings later'}</span>
-                                </div>
-                                <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
                                     <span className={`text-sm ${mcpConfigCopied ? 'text-green-400' : 'text-slate-500'}`}>{mcpConfigCopied ? '✓' : '○'}</span>
                                     <span className="text-sm text-slate-300">MCP server {mcpConfigCopied ? '— URL copied, add to Chat and/or Code' : '— verify connection in your first chat'}</span>
+                                </div>
+                                <div className="flex items-center gap-2 p-2.5 bg-slate-700/30 rounded-lg">
+                                    <span className={`text-sm ${initPromptCopied ? 'text-green-400' : 'text-slate-500'}`}>{initPromptCopied ? '✓' : '○'}</span>
+                                    <span className="text-sm text-slate-300">Init prompt {initPromptCopied ? `copied for ${selectedSurface.replace('claude-', '')}` : '— paste into Claude to activate'}</span>
                                 </div>
                             </div>
 
                             <div className="bg-slate-700/30 rounded-lg p-3 text-xs text-slate-400 mb-6">
-                                <strong className="text-slate-300">What's next?</strong> Open your Claude.ai project and start a conversation — Claude will walk you through your first ideation session.
+                                <strong className="text-slate-300">What's next?</strong> Paste the init prompt into a new Claude conversation — Claude will write memory boot lines and you're ready for your first ideation session.
                             </div>
 
                             <div className="flex items-center justify-between">
                                 <button onClick={() => setStep(3)} className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">
                                     ← Back
                                 </button>
-                                <button onClick={() => { handleComplete(); window.open('https://claude.ai/projects', '_blank'); }}
+                                <button onClick={() => { handleComplete(); window.open('https://claude.ai', '_blank'); }}
                                     className="px-6 py-3 rounded-lg bg-green-600 hover:bg-green-500 text-white font-bold transition-colors">
                                     🚀 Start First Session
                                 </button>

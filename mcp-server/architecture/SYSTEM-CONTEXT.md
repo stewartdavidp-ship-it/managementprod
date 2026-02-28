@@ -5,7 +5,7 @@
 >
 > **Keep current:** Update this file whenever architecture changes are made.
 >
-> **Last updated:** 2026-02-28 — Revision 32
+> **Last updated:** 2026-02-28 — Revision 33
 
 ---
 
@@ -30,7 +30,7 @@ Both agents share the same Firebase Realtime Database namespace and communicate 
 └──────────────┘
 ```
 
-**Key numbers:** 13 tools, 33 skills, 2 built-in prompts, 1 resource, 474 E2E tests.
+**Key numbers:** 13 tools, 39 skills, 2 built-in prompts, 1 resource, 474 E2E tests.
 
 ---
 
@@ -416,7 +416,7 @@ Signals are surface-aware: some signals only fire for specific surfaces (e.g., c
 
 Two new session actions provide single-call startup replacement:
 
-**`session(action="bootstrap", initiator="claude-chat|claude-code")`** — Fan-out reads across Firebase via `Promise.all()`, returns orientation payload in one call:
+**`session(action="bootstrap", initiator="claude-chat|claude-code|claude-cowork")`** — Fan-out reads across Firebase via `Promise.all()`, returns orientation payload in one call:
 - `instructions` — Surface-specific behavioral baseline from `cc-bootstrap-instructions-{surface}` skill
 - `profile` — User profile flags (initialized, projectInstructionsDirty, showTutorial, needsAttention)
 - `activeSession` — Current session info (id, title, mode, goal, ideaId, appId)
@@ -425,10 +425,16 @@ Two new session actions provide single-call startup replacement:
 - `jobs` — Active, draft, and review jobs
 - `signalDefinitions` — Signal registry filtered to this surface (description + action)
 
-**`session(action="init", initiator="claude-chat|claude-code")`** — One-time onboarding entry point:
+**`session(action="init", initiator="claude-chat|claude-code|claude-cowork")`** — One-time onboarding entry point:
 - Sets `initialized: true` in user's Firebase profile (idempotent)
 - Returns `memoryLines` array for Claude to write to Memory (3-line boot loader)
+- Memory boot loader references surface-specific `cc-router-{surface}` skill
 - Returns `confirmation` message with next steps
+
+**Router Skills** — Entry-point skills referenced by memory boot loader, loaded on conversation start:
+- `cc-router-chat` — Bootstrap trigger, signal table, skill loading triggers, budget tracking
+- `cc-router-code` — Bootstrap trigger, signal table, job workflow, skill loading
+- `cc-router-cowork` — Bootstrap trigger, signal table, capabilities, messaging
 
 Implementation lives in `session-bootstrap.ts` — extracted from the main session handler to keep the 735-line handler manageable.
 

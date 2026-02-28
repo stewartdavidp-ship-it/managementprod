@@ -64,6 +64,7 @@ interface JobSummary {
 const INSTRUCTION_SKILLS: Record<string, string> = {
   "claude-chat": "cc-bootstrap-instructions-chat",
   "claude-code": "cc-bootstrap-instructions-code",
+  "claude-cowork": "cc-bootstrap-instructions-cowork",
 };
 
 // ─── handleBootstrap ───

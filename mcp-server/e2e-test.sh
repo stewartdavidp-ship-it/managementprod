@@ -1087,7 +1087,7 @@ TEXT=$(get_text "$RAW")
 ERR=$(is_error "$RAW")
 assert "skill(list) not error" "false" "$ERR"
 SKILL_COUNT=$(jq_field "$TEXT" "['count']")
-assert "skill(list) count is 35" "35" "$SKILL_COUNT"
+assert "skill(list) count is 39" "39" "$SKILL_COUNT"
 assert_contains "skill(list) has cc-odrc-framework" "cc-odrc-framework" "$TEXT"
 assert_contains "skill(list) has cc-session-protocol" "cc-session-protocol" "$TEXT"
 assert_contains "skill(list) has cc-build-protocol" "cc-build-protocol" "$TEXT"
