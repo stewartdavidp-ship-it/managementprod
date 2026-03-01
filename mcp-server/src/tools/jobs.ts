@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getJobsRef, getJobRef, getConceptsRef, getIdeasRef, getAppIdeasRef } from "../firebase.js";
+import { getJobsRef, getJobRef, getConceptsRef, getIdeasRef, getAppIdeasRef, getDocumentsRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
@@ -40,13 +40,13 @@ State machine: draft → active → review → approved → completed/failed/aba
 Chat creates draft jobs with instructions, attachments, and concept snapshots. Code discovers drafts via list(status="draft"), claims them (draft→active), and executes.
 
 Actions:
-  - "start": Create a new job. Requires appId, title. Optional: ideaId, claudeMdSnapshot, preConditions, exceptionsNoted, instructions, attachments (JSON string), conceptSnapshot (JSON string), jobType, createdBy. If createdBy="claude-chat", initial status is "draft". Otherwise "active" (backward compat).
+  - "start": Create a new job. Requires appId, title. Optional: ideaId, claudeMdSnapshot, preConditions, exceptionsNoted, instructions, attachments (JSON string), conceptSnapshot (JSON string), jobType, createdBy, reviewTier, reviewLenses. If createdBy="claude-chat", initial status is "draft". Otherwise "active" (backward compat).
   - "claim": Code claims a draft job to start work. Requires jobId. Validates status=draft. For build jobs, rejects if another active build exists for the same appId. Sets status=active, claimedAt, claimedBy.
   - "revise": Send a reviewed job back to draft for Chat revision. Requires jobId. Validates status=review. Sets status=draft.
   - "review": Flag spec concerns. Requires jobId, concerns. Validates status=active. Sets status=review.
   - "approve": Approve a reviewed job. Requires jobId. Optional: resolutions. Validates status=review. Sets status=approved.
   - "update": Update job fields. Requires jobId. instructions and attachments can only be updated on draft jobs. externalRefs can be updated on any non-terminal job.
-  - "add_event": Append event to job log. Requires jobId, eventType, detail. Optional: refId.
+  - "add_event": Append event to job log. Requires jobId, eventType, detail. Optional: refId, lens.
   - "complete": Finalize job. Requires jobId, status (completed/failed/abandoned), summary. Optional: filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId.
   - "get": Get job by ID. Requires jobId. Returns lean response by default (instructions and attachments excluded). Use includeInstructions=true to include full content.
   - "list": List jobs. Optional filters: appId, ideaId, status, createdBy, jobType, limit.
@@ -71,6 +71,9 @@ Actions:
       eventType: z.enum(JOB_EVENT_TYPES).optional().describe("Event type (required for add_event)"),
       detail: z.string().optional().describe("Event description (required for add_event)"),
       refId: z.string().optional().describe("Related concept/file ID (optional for add_event)"),
+      lens: z.string().optional().describe("Review lens that produced this event (e.g., 'technical', 'security', 'economics'). For lens-based reviews. Optional for add_event."),
+      reviewTier: z.enum(["basic", "intermediate", "full"]).optional().describe("Review depth: basic (1 lens), intermediate (3 lenses), full (all 6 review lenses). Optional for start/update."),
+      reviewLenses: z.array(z.string()).optional().describe("Specific review lenses to apply (e.g., ['technical', 'security', 'economics']). Overrides tier defaults. Optional for start/update."),
       status: z.enum(JOB_STATUSES).optional().describe("Final status (required for complete: completed/failed/abandoned, optional filter for list: any status including draft)"),
       summary: z.string().optional().describe("Final summary (required for complete)"),
       conceptsAddressed: z.array(z.string()).optional().describe("Concept IDs addressed (optional for complete)"),
@@ -96,7 +99,7 @@ Actions:
       includeSnapshot: z.boolean().optional().describe("For 'get': include claudeMdSnapshot in response (default: false — saves context window)"),
       includeInstructions: z.boolean().optional().describe("For 'get': include instructions and attachments in response (default: false — saves context window)"),
     },
-    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, externalRefs, limit, offset, includeSnapshot, includeInstructions }) => {
+    async ({ initiator, action, jobId, appId, ideaId, title, instructions, attachments, conceptSnapshot, jobType, createdBy, claudeMdSnapshot, preConditions, exceptionsNoted, concerns, resolutions, eventType, detail, refId, lens, reviewTier, reviewLenses, status, summary, conceptsAddressed, filesChanged, testsRun, testsPassed, testsFailed, buildSuccess, linesAdded, linesRemoved, deployId, externalRefs, limit, offset, includeSnapshot, includeInstructions }) => {
       resolveInitiator({ initiator, createdBy });
       const uid = getCurrentUid();
 
@@ -159,6 +162,8 @@ Actions:
           conceptsModified: [],
           filesChanged: [],
           concerns: [],
+          reviewTier: reviewTier || null,
+          reviewLenses: reviewLenses || [],
           reviewedAt: null,
           approvedAt: null,
           resolutions: null,
@@ -304,6 +309,24 @@ Actions:
           reviewedAt: now,
         };
         await ref.update(updates);
+
+        // Auto-notify: send lightweight message to the job creator
+        const reviewSurface = initiator || "unknown";
+        if (job.createdBy && job.createdBy !== reviewSurface) {
+          const msg = {
+            type: "message",
+            from: reviewSurface,
+            to: job.createdBy,
+            subject: `Job "${job.title}" — review`,
+            content: `Job ${jobId} moved to review. ${concerns.length} concern(s) flagged.${job.reviewTier ? ` Review tier: ${job.reviewTier}.` : ""}`,
+            metadata: JSON.stringify({ jobId, reviewTier: job.reviewTier || null }),
+            lifespan: "ephemeral",
+            createdAt: now,
+            status: "pending",
+          };
+          await getDocumentsRef(uid).push(msg);
+        }
+
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
       }
 
@@ -370,6 +393,8 @@ Actions:
           }
         }
         if (externalRefs !== undefined) updates.externalRefs = externalRefs;
+        if (reviewTier !== undefined) updates.reviewTier = reviewTier;
+        if (reviewLenses !== undefined) updates.reviewLenses = reviewLenses;
 
         await ref.update(updates);
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
@@ -387,12 +412,14 @@ Actions:
 
         if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
 
-        const event = {
+        const event: Record<string, any> = {
           timestamp: new Date().toISOString(),
           type: eventType,
           detail,
           refId: refId || null,
+          surface: initiator || null,
         };
+        if (lens) event.lens = lens;
 
         const events = job.events || [];
         events.push(event);
@@ -465,6 +492,23 @@ Actions:
         };
 
         await ref.update(updates);
+
+        // ── Post-completion: auto-notify job creator ──
+        const completeSurface = initiator || "unknown";
+        if (job.createdBy && job.createdBy !== completeSurface) {
+          const notifyMsg = {
+            type: "message",
+            from: completeSurface,
+            to: job.createdBy,
+            subject: `Job "${job.title}" — ${status}`,
+            content: `Job ${jobId} ${status}.${summary ? ` Summary: ${summary.substring(0, 200)}` : ""}`,
+            metadata: JSON.stringify({ jobId, status }),
+            lifespan: "ephemeral",
+            createdAt: now,
+            status: "pending",
+          };
+          await getDocumentsRef(uid).push(notifyMsg);
+        }
 
         // ── Post-completion: auto-transition concepts to "built" ──
         let conceptsBuilt: string[] = [];

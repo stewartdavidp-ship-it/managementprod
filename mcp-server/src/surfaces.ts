@@ -9,6 +9,7 @@
 
 import { z } from "zod";
 import { setInitiator } from "./context.js";
+import { isInRegistryCache } from "./surface-registry.js";
 
 export const SURFACES = [
   "claude-code",
@@ -32,10 +33,22 @@ export const SURFACE_LABELS: Record<Surface, string> = {
   "user": "Human user",
 };
 
-/** Validate a string as a known surface. Returns null if invalid. */
+/**
+ * Check if a value is a recognized surface — checks registry cache first,
+ * falls back to the hardcoded SURFACES list for backward compatibility.
+ * New surfaces added via the registry tool are immediately valid.
+ */
+export function isRegisteredSurface(value: string): boolean {
+  if (SURFACES.includes(value as Surface)) return true;
+  return isInRegistryCache(value);
+}
+
+/** Validate a string as a known surface. Returns null if invalid.
+ *  Checks both hardcoded list and registry cache. */
 export function parseSurface(value: string | undefined): Surface | null {
   if (!value) return null;
-  return SURFACES.includes(value as Surface) ? (value as Surface) : null;
+  if (isRegisteredSurface(value)) return value as Surface;
+  return null;
 }
 
 /**

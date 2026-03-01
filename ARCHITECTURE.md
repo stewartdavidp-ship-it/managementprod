@@ -1,8 +1,8 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-02-28 (v8.79.0)
+> **Last updated:** 2026-03-01 (v8.80.2)
 >
-> **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 29).
+> **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 35).
 
 ---
 
@@ -136,7 +136,7 @@ CC is the data and persistence layer. Claude is the reasoning and decision layer
 │  │ Claude Chat  │◄───────────────►┌──────────┴───────────┐             │
 │  │ (claude.ai)  │  OAuth 2.1      │  CC MCP Server       │             │
 │  └─────────────┘                  │  (Cloud Run)         │             │
-│                                    │  13 tools, 39 skills │             │
+│                                    │  13 tools, 47 skills │             │
 │  ┌─────────────┐    MCP over HTTP │                      │──► GitHub   │
 │  │ Claude Code  │◄───────────────►│  Express + MCP SDK   │    Contents │
 │  │ (CLI)        │  CC API Key     └──────────────────────┘    API      │
@@ -249,7 +249,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
     CC Browser    MCP Server    Cloud Functions
     (listeners)   (reads/writes) (triggers/scheduled)
     5 active      13 tools       domainProxy, documentCleanup
-                  33 skills
+                  41 skills
 ```
 
 ### Browser → Firebase
@@ -261,11 +261,12 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 ### MCP Server → Firebase
 - **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
 - **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes), OAuth tokens
-- **Per-surface context tracking:** Each surface (claude-code, claude-chat, etc.) gets independent `_contextHealth` zone/used via `surfaces.ts` registry
+- **Per-surface context tracking:** Each surface (claude-code, claude-chat, etc.) gets independent `_contextHealth` zone/used via `surfaces.ts` registry. Surface configs are now backed by Firebase at `command-center/system/surfaceRegistry/` with in-memory cache (`surface-registry.ts`)
 - **Context budget tracking:** Surfaces report `contextEstimate` on every tool call. Server compares against its own floor and returns `surfaceEstimate`, `estimatedZone`, `driftDetected`, `serverFloor` in `_contextHealth`
 - **Piggyback notifications:** Pending messages for the calling surface are injected into every tool response as `_pendingMessages`
 - **Idea health computation:** On `session.complete`, computes health for the active idea (staleness, scope creep, empty primary, completion candidates). Full-app scan via `idea(triage)`. See [Idea Health System](#idea-health-system)
 - **External integration refs:** Concepts, ideas, and jobs support optional `externalRefs[]` arrays for linking to Jira, Linear, etc. Ideas also support `externalProjectKey`
+- **Lens-based job review:** Jobs in `review` status can be evaluated through structured review lenses (technical, stress-test, economics, security, operations, integration). Review events carry `surface` and `lens` fields for provenance. Jobs track `reviewTier` (basic/intermediate/full) and `reviewLenses` (which lenses were applied). Auto-notifications inform the originating surface when a job enters review or completes. See SYSTEM-CONTEXT.md Section 7 for details.
 - **Test/Prod split:** Both environments share same Firebase RTDB — same data, different code versions
 - **Express body limit:** 10MB (raised from 1MB to support large document pushes)
 

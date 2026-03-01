@@ -5,7 +5,7 @@
 >
 > **Keep current:** Update this file whenever architecture changes are made.
 >
-> **Last updated:** 2026-02-28 — Revision 33
+> **Last updated:** 2026-03-01 — Revision 35
 
 ---
 
@@ -30,7 +30,7 @@ Both agents share the same Firebase Realtime Database namespace and communicate 
 └──────────────┘
 ```
 
-**Key numbers:** 13 tools, 39 skills, 2 built-in prompts, 1 resource, 474 E2E tests.
+**Key numbers:** 14 tools, 47 skills, 2 built-in prompts, 1 resource, 482 E2E tests.
 
 ---
 
@@ -173,7 +173,11 @@ command-center/
     │   ├── conceptSnapshot: { rules, constraints, decisions, opens }
     │   ├── claimedAt, claimedBy          # Set when Code claims a draft
     │   ├── createdAt, startedAt          # createdAt always set; startedAt on active
-    │   ├── events: [ { type, detail, refId, timestamp } ]
+    │   ├── reviewTier: "basic" | "intermediate" | "full"  # Review depth tier
+    │   ├── reviewLenses: string[]        # Which review lenses were applied
+    │   ├── events: [ { type, detail, refId, surface, lens?, timestamp } ]
+    │   │              surface: string    # Who logged the event (e.g., "claude-chat")
+    │   │              lens: string?      # Which review lens (e.g., "technical", "security")
     │   ├── conceptsCreated, conceptsAddressed, filesChanged
     │   └── outcomes: { testsRun, testsPassed, buildSuccess, ... }
     │
@@ -228,6 +232,29 @@ command-center/
     │   └── action                       # What the signal means for the consumer
     │
     └── apiKeyHash                       # SHA-256 of CC API key
+
+command-center/
+└── system/                              # System-wide (shared across all users)
+    ├── oauth/                           # OAuth clients, token index, audit log
+    └── surfaceRegistry/{surfaceId}/     # Surface configurations (NEW — Phase 1)
+        ├── id: string                   # e.g., "claude-code"
+        ├── displayName: string          # e.g., "Claude Code"
+        ├── engine: string               # e.g., "claude", "gemini", "gpt", "grok"
+        ├── surfaceType: string          # e.g., "ide", "chat", "browser", "office", "admin"
+        ├── status: "production" | "beta" | "planned" | "unsupported"
+        ├── launchUrl: string | null     # For landing page smart-launch
+        ├── mcpConnection: "native" | "extension" | "none"
+        ├── capabilities:
+        │   ├── fileSystem, terminal, browser: boolean
+        │   ├── messaging: boolean       # Can send/receive inter-surface messages
+        │   └── skillRouting: boolean    # Can self-direct skill loading
+        ├── contextWindow:
+        │   ├── ceiling: number          # Estimated max usable chars
+        │   └── toolBudget: number       # How much tool descriptions consume
+        ├── bootstrapSkill: string | null  # Skill name for bootstrap
+        ├── skillGrade: "full" | "basic" | "none"
+        ├── createdAt, updatedAt
+        └── (cached in-memory, lazy-loaded, no Firebase watch)
 ```
 
 ### Firebase RTDB Indexes
@@ -273,6 +300,7 @@ These `.indexOn` rules are required for server-side query filtering. Without the
 | `getSkillRef(uid, name)` | `command-center/{uid}/skills/{name}` |
 | `getSignalsRef(uid)` | `command-center/{uid}/signals` |
 | `getSignalRef(uid, name)` | `command-center/{uid}/signals/{name}` |
+| `getSystemRef()` | `command-center/system` |
 
 ---
 
@@ -300,7 +328,7 @@ Concept statuses: `active`, `superseded`, `resolved`, `transitioned`, `built`
 
 ## 7. Tools Reference
 
-### 13 Registered Tools
+### 14 Registered Tools
 
 | Tool | Actions | Primary User |
 |------|---------|-------------|
@@ -317,12 +345,19 @@ Concept statuses: `active`, `superseded`, `resolved`, `transitioned`, `built`
 | `knowledge_node` | create, update, delete, load, load_batch, move, add_cross_ref, remove_cross_ref, bulk_verify | Both |
 | `repo_file` | _(single read action: repo, path, branch)_ | Both |
 | `skill` | list, get, create, update, delete | Both |
+| `surface_registry` | list, get, create, update, delete | Both |
 
 ### Job Event Types
 
 `open_encountered`, `decision_made`, `file_changed`, `test_result`, `blocker`, `deviation`, `concept_addressed`, `concept_created`, `concept_transitioned`, `note`, `question`, `answer`
 
+Each event includes a `surface` field (string, who logged it) and an optional `lens` field (string, which review lens — e.g., `"technical"`, `"security"`).
+
 Auto-population: `file_changed` events auto-append to `job.filesChanged[]`; `concept_addressed` events auto-append to `job.conceptsAddressed[]`.
+
+### Job Auto-Notifications
+
+When a job transitions to `review` or `completed`/`failed`/`abandoned` status, an ephemeral message is automatically sent to the `createdBy` surface via the document queue. This ensures the originating agent (typically Chat) is notified of job progress without requiring manual polling.
 
 ### Job State Machine
 
@@ -350,11 +385,27 @@ Jobs serve as the universal handoff between Claude Chat and Claude Code:
 
 **Job types:** `build` (default), `maintenance`, `test`, `skill-update`, `cleanup`. One active `build` per app enforced at claim time.
 
+### Lens-Based Job Review Protocol
+
+When a job enters `review` status, Chat can apply structured review lenses to evaluate Code's work from multiple perspectives. The protocol is orchestrated by the `cc-review-protocol` skill and uses tiered review depth:
+
+| Tier | Lenses Applied | When |
+|------|---------------|------|
+| `basic` | Technical only | Small changes, maintenance, cleanup jobs |
+| `intermediate` | Technical + 1-2 relevant lenses | Standard feature builds |
+| `full` | Technical + all applicable lenses | Critical changes, security-sensitive, new architecture |
+
+**Six review lenses** provide focused evaluation: `technical`, `stress-test`, `economics`, `security`, `operations`, `integration`. Each lens produces ODRC-typed findings (OPENs, DECISIONs, RULEs, CONSTRAINTs) logged as job events with the `lens` field set.
+
+**Job fields:** `reviewTier` records which tier was applied; `reviewLenses` tracks which lenses were actually run. Both are set during the review process and persisted on the job record.
+
+**Presentation:** The `cc-review-presentation` skill governs how review findings are delivered to the user — structured by lens, severity-sorted, with actionable recommendations.
+
 ---
 
 ## 8. Skills Reference
 
-### 33 Registered Skills
+### 41 Registered Skills
 
 | # | Skill Name | Agent | Purpose |
 |---|-----------|-------|---------|
@@ -391,6 +442,14 @@ Jobs serve as the universal handoff between Claude Chat and Claude Code:
 | 31 | `cc-acc-video` | Chat | ACC video production guidelines |
 | 32 | `cc-skill-creation` | Chat | Protocol for creating new skills |
 | 33 | `cc-cowork-startup-checklist` | Code | Cowork agent startup checklist |
+| 34 | `cc-review-protocol` | Chat | Orchestration protocol for lens-based job review — tier selection, lens sequencing |
+| 35 | `cc-review-presentation` | Chat | Presentation format for review findings — how to deliver results to the user |
+| 36 | `cc-review-lens-technical` | Chat | Code review lens: architecture, patterns, performance, maintainability |
+| 37 | `cc-review-lens-stress-test` | Chat | Code review lens: adversarial pressure testing, failure scenarios |
+| 38 | `cc-review-lens-economics` | Chat | Code review lens: cost structure, build effort, resource efficiency |
+| 39 | `cc-review-lens-security` | Chat | Code review lens: attack surfaces, auth, data exposure, Firebase rules |
+| 40 | `cc-review-lens-operations` | Chat | Code review lens: monitoring, incident response, deploy safety |
+| 41 | `cc-review-lens-integration` | Chat | Code review lens: cross-app integration, data coupling, ecosystem impact |
 
 ### Skill Storage
 
@@ -437,6 +496,34 @@ Two new session actions provide single-call startup replacement:
 - `cc-router-cowork` — Bootstrap trigger, signal table, capabilities, messaging
 
 Implementation lives in `session-bootstrap.ts` — extracted from the main session handler to keep the 735-line handler manageable.
+
+### Surface Registry
+
+The surface registry replaces the hardcoded `SURFACES` enum with a Firebase-backed registry at `command-center/system/surfaceRegistry/{surfaceId}`. Phase 1 provides rough plumbing — data model, in-memory cache, and CRUD tool. Future wiring into bootstrap, signals, and context health happens incrementally.
+
+**Architecture:**
+- **Storage:** `command-center/system/surfaceRegistry/{surfaceId}` (system-wide, not per-user)
+- **Cache:** In-memory `Map<string, SurfaceConfig>` in `surface-registry.ts`, lazy-loaded on first access, lives for server lifetime (no Firebase watch — surfaces change rarely)
+- **Validation:** `surfaces.ts` → `isRegisteredSurface()` checks registry cache first, falls back to hardcoded `SURFACES` array. `parseSurface()` recognizes dynamically registered surfaces immediately
+- **Tool:** `surface_registry` — list, get, create, update, delete (follows standard INITIATOR_PARAM pattern)
+
+**7 initial surfaces seeded:**
+
+| Surface | Engine | Type | Status | Key Capabilities |
+|---------|--------|------|--------|-----------------|
+| `claude-chat` | claude | chat | production | messaging, skillRouting |
+| `claude-code` | claude | ide | production | fileSystem, terminal, messaging, skillRouting |
+| `claude-cowork` | claude | automation | beta | fileSystem, terminal, messaging, skillRouting |
+| `claude-chrome` | claude | browser | beta | browser, messaging |
+| `claude-powerpoint` | claude | office | beta | messaging |
+| `claude-excel` | claude | office | beta | messaging |
+| `user` | none | admin | production | none |
+
+**Not yet wired (future tasks):**
+- Bootstrap does not yet read `bootstrapSkill` from registry (uses hardcoded `INSTRUCTION_SKILLS` map)
+- Signal computation does not yet use `capabilities` from registry
+- `_contextHealth` does not yet use `contextWindow.ceiling` from registry
+- Landing page smart-launch does not yet read `launchUrl` from registry
 
 ---
 
@@ -586,6 +673,7 @@ mcp-server/
 │   ├── github.ts                  # GitHub Contents API client (auto-delivery)
 │   ├── skills.ts                  # 33+ skill prompt constants, registerSkillPrompts(), getCompiledSkillRegistry()
 │   ├── skill-cache.ts             # In-memory skill cache (Firebase-backed, 5-min TTL, write-through)
+│   ├── surface-registry.ts        # Firebase-backed surface config cache (lazy-loaded Map, CRUD, system-wide)
 │   ├── signal-computation.ts      # Per-request signal computation. Evaluates 10 signal codes based on context (profile flags, job state, session meta, pending messages).
 │   ├── session-bootstrap.ts       # handleBootstrap() fan-out reads + handleInit() onboarding. Single-call startup replacement.
 │   ├── response-metadata.ts       # Piggybacks metadata onto every MCP tool response: _pendingMessages, _session, _contextHealth, _signals
@@ -603,7 +691,8 @@ mcp-server/
 │       ├── knowledge-tree.ts      # knowledge_tree tool (forest/tree CRUD, index, search, 15 actions)
 │       ├── knowledge-node.ts      # knowledge_node tool (node CRUD, cross-refs, bulk_verify, 9 actions)
 │       ├── repo.ts                # repo_file tool (read files from GitHub repos)
-│       └── skills.ts              # skill tool (list/get/create/update/delete — full CRUD)
+│       ├── skills.ts              # skill tool (list/get/create/update/delete — full CRUD)
+│       └── surface-registry.ts    # surface_registry tool (list/get/create/update/delete — surface config CRUD)
 ├── deploy.sh                      # Build + deploy to Cloud Run + OAuth verification
 ├── e2e-test.sh                    # 482+ E2E tests against live service
 ├── migrate-skills.sh              # Seed Firebase skills from compiled constants (idempotent)
