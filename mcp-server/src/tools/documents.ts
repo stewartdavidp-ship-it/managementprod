@@ -22,6 +22,7 @@ const LIFESPAN_DEFAULTS: Record<string, Lifespan> = {
   "design":        "short",
   "claude-md":          "permanent",
   "project-instructions":    "permanent",
+  "session-story":     "permanent",
 };
 
 const TTL_MS: Record<string, number> = {
@@ -175,6 +176,48 @@ Actions:
             }
           } catch {
             // Non-critical — dirty flag failure doesn't block push
+          }
+        }
+
+        // Session-story: write directly to public path in Firebase (not GitHub)
+        if (type === "session-story") {
+          try {
+            const storyData = JSON.parse(content);
+            const storyRef = getDb().ref(`command-center/public/session-stories/${docId_push}`);
+            await storyRef.set({
+              ...storyData,
+              id: docId_push,
+              publishedAt: now,
+              publishedBy: createdBy || "claude-chat",
+            });
+            // Mark the document record as delivered
+            await ref.update({
+              status: "delivered",
+              deliveredAt: now,
+              deliveredBy: "mcp-public",
+            });
+            return withResponseSize({
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                  docId: docId_push,
+                  type: "session-story",
+                  status: "delivered",
+                  publishedTo: `command-center/public/session-stories/${docId_push}`,
+                  storyHeadline: storyData.headline || storyData.eyebrow || "Story published",
+                }, null, 2),
+              }],
+            });
+          } catch (err: any) {
+            // Mark as failed but don't block — caller can retry or show JSON to user
+            await ref.update({ status: "failed", "metadata/error": err.message });
+            return withResponseSize({
+              content: [{
+                type: "text" as const,
+                text: `Session story publish failed: ${err.message}. Document saved as ${docId_push} — content preserved for manual retry.`,
+              }],
+              isError: true,
+            });
           }
         }
 
