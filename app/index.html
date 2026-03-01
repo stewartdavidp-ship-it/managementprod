@@ -6447,6 +6447,10 @@
                     const storedToken = SecretManager.get('token');
                     if (storedToken) setGithubToken(storedToken);
                     setSetupComplete(SecretManager.has('token'));
+                    // v8.80.0: Backfill launch config for landing page smart-launch (existing users)
+                    if (SecretManager.has('token') && !localStorage.getItem('cc_launch_config')) {
+                        try { localStorage.setItem('cc_launch_config', JSON.stringify({ url: 'https://claude.ai', updatedAt: new Date().toISOString() })); } catch(e) {}
+                    }
 
                     // --- ESSENTIAL LISTENERS ---
                     unsubscribeSessions = SessionService.listen(u.uid, setGlobalSessions);
@@ -6780,6 +6784,8 @@
                     if (extras.tokenExpires) SecretManager.set('token_expires', extras.tokenExpires);
                     if (extras.anthropicKey) SecretManager.set('anthropic_api_key', extras.anthropicKey);
                     setGithubToken(token);
+                    // v8.80.0: Write launch config for landing page smart-launch bridge
+                    try { localStorage.setItem('cc_launch_config', JSON.stringify({ url: 'https://claude.ai', updatedAt: new Date().toISOString() })); } catch(e) {}
                     // v8.75.0: In wizard-only mode, redirect to full app after setup
                     if (wizardOnlyMode) {
                         window.location.replace(window.location.pathname);
