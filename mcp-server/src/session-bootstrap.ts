@@ -8,7 +8,7 @@
 // flag, returns memory boot loader lines.
 // ═══════════════════════════════════════════════════════════════
 
-import { getCurrentUid } from "./context.js";
+import { getCurrentUid, setServerSentTotal, setInteractionTotal } from "./context.js";
 import {
   getProfileRef,
   getSessionsRef,
@@ -95,8 +95,13 @@ export async function handleBootstrap(
 
   // Bootstrap = new conversation for this surface. Reset per-surface context counters
   // so _contextHealth starts fresh for this context window.
+  // Also reset in-memory cached values — the middleware already loaded the OLD counters
+  // from Firebase before the tool handler runs, so withResponseSize() would report
+  // inflated _contextHealth without this.
   if (sessionMeta) {
     resetSurfaceContext(uid, sessionMeta.id, surface).catch(() => {});
+    setServerSentTotal(0);
+    setInteractionTotal(0);
   }
 
   // Build session info from ensureSession result
