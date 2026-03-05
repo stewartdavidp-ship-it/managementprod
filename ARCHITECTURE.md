@@ -1,6 +1,6 @@
 # Command Center — Architecture
 
-> **Last updated:** 2026-03-01 (v8.80.2)
+> **Last updated:** 2026-03-05 (v8.80.2)
 >
 > **Companion document:** For MCP server architecture, see `mcp-server/architecture/SYSTEM-CONTEXT.md` (Rev 35).
 
@@ -262,7 +262,9 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 - **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
 - **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes), OAuth tokens
 - **Surface registry:** Each surface (claude-code, claude-chat, etc.) has a config backed by Firebase at `command-center/system/surfaceRegistry/` with in-memory cache (`surface-registry.ts`)
-- **Context budget tracking (per-surface):** Context consumption is tracked independently per surface on each session at `contextBySurface/{surface}/serverSent` and `contextBySurface/{surface}/interaction`. Sessions are shared across conversations, but each surface = one context window. `serverSent` is auto-incremented from `_responseSize` of each tool response. `interaction` is accumulated from the surface-reported `turnDelta` param (chars consumed since last MCP call, also accepts legacy `contextEstimate`). Debounced writes flush to Firebase every 30s (keyed by `uid:surface`). `_contextHealth` returns `compactionEstimate` (serverSentTotal + interactionTotal), `serverSentTotal`, `interactionTotal`, `ceiling` (624K), and `zone` (green <60%, yellow 60-75%, red 75-90%, imminent >90%). On `session(bootstrap)`, the calling surface's counters reset to 0 (new conversation = fresh context window). Signal `context-estimate-missing` fires for production surfaces (claude-chat, claude-code) that don't provide `turnDelta`.
+- **Context budget tracking (per-surface):** Context consumption is tracked independently per surface on each session at `contextBySurface/{surface}/serverSent` and `contextBySurface/{surface}/interaction`. Sessions are shared across conversations, but each surface = one context window. `serverSent` is auto-incremented from `_responseSize` of each tool response. `interaction` is accumulated from the surface-reported `turnDelta` param (chars consumed since last MCP call, also accepts legacy `contextEstimate`). Debounced writes flush to Firebase every 30s (keyed by `uid:surface`). `_contextHealth` returns `compactionEstimate` (serverSentTotal + interactionTotal), `serverSentTotal`, `interactionTotal`, `ceiling` (624K), and `zone` (green <60%, yellow 60-75%, red 75-90%, imminent >90%). On `session(bootstrap)`, the calling surface's counters reset to 0 in both Firebase and in-memory cache (new conversation = fresh context window). The in-memory reset is critical because the middleware loads counters BEFORE the tool handler runs — without it, bootstrap's own response would report inflated counters from the previous conversation. Signal `context-estimate-missing` fires for production surfaces (claude-chat, claude-code) that don't provide `turnDelta`.
+- **turnDelta compliance warning:** When `claude-chat` or `claude-cowork` sends `turnDelta=0` or omits it (and `initiator` is explicitly provided, not inferred from `createdBy`), the server prepends a warning message to the response as the first content block. The `session` tool is exempt (bootstrap/init are first calls). This structurally reinforces behavioral rules that LLMs tend to forget — especially after compaction events. Implemented in `response-metadata.ts` using `isInitiatorExplicit()` from `context.ts`.
+- **Fuzzy matching (`did_you_mean`):** All 6 get actions (app, idea, concept, job, session, skill) return structured error responses with `did_you_mean` candidates on not-found errors. Uses `fuzzy-match.ts` — phase 1 (substring match on ID and label) + phase 2 (Levenshtein distance fallback, threshold = max(2, floor(query.length * 0.4))). Max 3 candidates per error.
 - **Piggyback notifications:** Pending messages for the calling surface are injected into every tool response as `_pendingMessages`
 - **Idea health computation:** On `session.complete`, computes health for the active idea (staleness, scope creep, empty primary, completion candidates). Full-app scan via `idea(triage)`. See [Idea Health System](#idea-health-system)
 - **External integration refs:** Concepts, ideas, and jobs support optional `externalRefs[]` arrays for linking to Jira, Linear, etc. Ideas also support `externalProjectKey`
@@ -454,8 +456,11 @@ Firebase RTDB charges ~$1/GB for bandwidth. The primary cost driver is listener 
 1. **Listener limits:** All `.on('value')` listeners use `limitToLast(N)` to bound per-trigger download size
 2. **Server-side query filtering:** MCP server uses `orderByChild().equalTo()` — no full-collection reads
 3. **Firebase indexes:** `.indexOn` rules on all queried fields. Without indexes, Firebase downloads the entire collection and filters client-side.
-4. **Write debouncing:** `contextEstimate` batched over 30-second windows
+4. **Write debouncing:** `turnDelta` batched over 30-second windows (keyed by `uid:surface`)
 5. **No background polling:** Claude Code must never create persistent scripts to poll `document(receive)`
+6. **`did_you_mean` suggestions:** All get actions return fuzzy-match candidates on not-found errors (Levenshtein + substring matching via `fuzzy-match.ts`), preventing wasteful retry cycles
+7. **Default pagination:** `app(list)` defaults to `limit=20` to avoid unbounded response sizes
+8. **turnDelta compliance warning:** When Chat sends `turnDelta=0` or omits it, a warning is prepended to the response reminding it to track context consumption. Only fires for explicit `initiator` param (not inferred from `createdBy`). Exempt: `session` tool (bootstrap/init are first calls)
 
 ### Historical Incident (Feb 2026)
 
