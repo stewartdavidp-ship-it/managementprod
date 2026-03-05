@@ -10,8 +10,8 @@
 // tool handler.
 // ═══════════════════════════════════════════════════════════════
 
-import { getServerSentTotal, getInteractionTotal, getTurnDelta, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator, isInitiatorExplicit, getSignals, getToolName } from "./context.js";
-import { incrementServerSentTotal } from "./tools/sessions.js";
+import { getServerSentTotal, getInteractionTotal, setServerSentTotal, setInteractionTotal, getTurnDelta, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator, isInitiatorExplicit, getSignals, getToolName } from "./context.js";
+import { incrementServerSentTotal, resetSurfaceContext } from "./tools/sessions.js";
 
 // Tools exempt from turnDelta compliance warning (first-call or setup tools)
 const TURNDELTA_EXEMPT_TOOLS = new Set(["session"]);
@@ -93,12 +93,41 @@ export function withResponseSize(
 
   // Include _contextHealth if we have context tracking for this request.
   // compactionEstimate = serverSentTotal + interactionTotal
-  const serverSentTotal = getServerSentTotal();
-  const interactionTotal = getInteractionTotal();
+  let serverSentTotal = getServerSentTotal();
+  let interactionTotal = getInteractionTotal();
   if (serverSentTotal !== undefined || interactionTotal !== undefined) {
-    const sst = (serverSentTotal || 0) + chars; // Include this response's chars
-    const it = interactionTotal || 0;
-    const compactionEstimate = sst + it;
+    let sst = (serverSentTotal || 0) + chars; // Include this response's chars
+    let it = interactionTotal || 0;
+    let compactionEstimate = sst + it;
+
+    // ── Overflow auto-reset ──
+    // serverSentTotal is a monotonically increasing accumulator — it counts TOTAL
+    // bytes sent across all tool calls, but context doesn't hold all of them.
+    // When the estimate exceeds ceiling, it's drifted past reality. Reset to just
+    // the current response size (the only thing we know is actually in context).
+    // This prevents the "climbing into millions" problem reported in sessions where
+    // Chat makes many tool calls.
+    if (compactionEstimate > CONTEXT_CEILING) {
+      sst = chars; // Only this response is guaranteed to be in context
+      it = 0;
+      compactionEstimate = sst;
+
+      // Update in-memory cache so subsequent calls in this request see the reset
+      setServerSentTotal(sst);
+      setInteractionTotal(0);
+
+      // Reset in Firebase (fire-and-forget)
+      try {
+        const uid = getCurrentUid();
+        const surface = getInitiator();
+        const sm = getSessionMeta();
+        if (sm?.id && surface) {
+          resetSurfaceContext(uid, sm.id, surface).catch(() => {});
+        }
+      } catch {
+        // Best-effort — don't block the response
+      }
+    }
 
     const healthObj: Record<string, any> = {
       compactionEstimate,
