@@ -57,15 +57,15 @@ export function parseSurface(value: string | undefined): Surface | null {
  *
  * Includes:
  *   - initiator: calling surface identifier
- *   - contextEstimate: optional context window usage reported by the surface
+ *   - turnDelta: total characters consumed since last MCP call
  *     (extracted at middleware level in index.ts, not per-tool)
  */
 export const INITIATOR_PARAM = {
   initiator: z.enum(SURFACES).optional().describe(
     "Calling surface identifier. Helps the server tailor responses and track provenance."
   ),
-  contextEstimate: z.number().int().optional().describe(
-    "Surface-reported context window usage in characters. Server compares against its own floor to detect drift."
+  turnDelta: z.number().int().default(0).describe(
+    "Total characters consumed since last MCP call (assistant responses, user messages, tool results). Pass 0 if unknown. Required on every call."
   ),
 } as const;
 

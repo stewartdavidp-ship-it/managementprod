@@ -5,6 +5,7 @@ import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
 import { SURFACES, INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
+import { findCandidates, formatDidYouMean } from "../fuzzy-match.js";
 
 const JOB_STATUSES = ["draft", "active", "review", "approved", "completed", "failed", "abandoned"] as const;
 const TERMINAL_STATUSES = ["completed", "failed", "abandoned"];
@@ -610,7 +611,20 @@ Actions:
         const snapshot = await ref.once("value");
         const job = snapshot.val();
 
-        if (!job) return withResponseSize({ content: [{ type: "text", text: `Job not found: ${jobId}` }], isError: true });
+        if (!job) {
+          // Fuzzy match against recent jobs
+          const allSnap = await getJobsRef(uid).orderByKey().limitToLast(50).once("value");
+          const allJobs = allSnap.val() || {};
+          const entries = Object.entries(allJobs).map(([id, j]: [string, any]) => ({
+            id,
+            label: (j as any).title || undefined,
+          }));
+          const candidates = findCandidates(jobId!, entries);
+          const did_you_mean = formatDidYouMean(candidates);
+          const errorObj: any = { error: `Job not found: ${jobId}` };
+          if (did_you_mean) errorObj.did_you_mean = did_you_mean;
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify(errorObj, null, 2) }], isError: true });
+        }
 
         // Strip large claudeMdSnapshot by default to save context window
         if (!includeSnapshot && job.claudeMdSnapshot) {

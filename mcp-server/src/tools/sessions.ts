@@ -8,6 +8,7 @@ import { ensureSession } from "../session-lifecycle.js";
 import { INITIATOR_PARAM, resolveInitiator, parseSurface } from "../surfaces.js";
 import { computeIdeaHealth, updateAppTriageFlags } from "../idea-health.js";
 import { handleBootstrap, handleInit } from "../session-bootstrap.js";
+import { findCandidates, formatDidYouMean } from "../fuzzy-match.js";
 
 const SESSION_STATUSES = ["active", "completed", "abandoned"] as const;
 
@@ -22,7 +23,7 @@ const SESSION_EVENT_TYPES = [
 const SESSION_MODES = ["base", "ideation", "build-review", "debrief"] as const;
 const PRESENTATION_MODES = ["interactive", "cli"] as const;
 
-// In-memory cache of active session per user (for contextEstimate auto-increment)
+// In-memory cache of active session per user (for serverSentTotal/interactionTotal auto-increment)
 const activeSessionCache = new Map<string, string>();
 
 export function getActiveSessionId(uid: string): string | undefined {
@@ -40,7 +41,7 @@ export function registerSessionTools(server: McpServer): void {
     "session",
     `Ideation session lifecycle tool. Actions:
   - "start": Create a new session. Requires ideaId, title. Optional: appId, mode, sessionGoal, presentationMode, configSnapshot, targetOpens.
-  - "update": Update session fields. Requires sessionId. Optional: title, summary, mode, activeIdeaId, activeAppId, activeLens, targetOpens, sessionGoal, conceptBlockCount, contextEstimate, presentationMode, configSnapshot, closingSummary, nextSessionRecommendation, conceptsResolved.
+  - "update": Update session fields. Requires sessionId. Optional: title, summary, mode, activeIdeaId, activeAppId, activeLens, targetOpens, sessionGoal, conceptBlockCount, presentationMode, configSnapshot, closingSummary, nextSessionRecommendation, conceptsResolved.
   - "add_event": Append an event to the session log. Requires sessionId, eventType, detail. Optional: refId.
   - "complete": Complete a session with final summary. Requires sessionId, summary. Optional: closingSummary, nextSessionRecommendation, conceptsResolved.
   - "get": Get a session record by ID. Requires sessionId.
@@ -70,7 +71,7 @@ export function registerSessionTools(server: McpServer): void {
       targetOpens: z.array(z.string()).optional().describe("OPEN concept IDs being addressed this session"),
       sessionGoal: z.string().optional().describe("Declared purpose/focus for this session"),
       conceptBlockCount: z.number().int().optional().describe("Running count of concept blocks"),
-      contextEstimate: z.number().int().optional().describe("Cumulative approximate character count of tool responses"),
+      contextEstimate: z.number().int().optional().describe("[Deprecated — use turnDelta on every tool call instead] Legacy field, writes to interactionTotal if provided."),
       presentationMode: z.enum(PRESENTATION_MODES).optional().describe("Presentation mode: interactive or cli"),
       configSnapshot: z.string().optional().describe("JSON string snapshot of session config at start"),
       closingSummary: z.string().optional().describe("Mini-brief written on session close"),
@@ -233,8 +234,7 @@ export function registerSessionTools(server: McpServer): void {
           targetOpens: targetOpens || [],
           sessionGoal: sessionGoal || null,
           conceptBlockCount: 0,
-          contextEstimate: 0,
-          contextPerSurface: {},
+          contextBySurface: {},
           presentationMode: presentationMode || "interactive",
           configSnapshot: configSnapshot ? JSON.parse(configSnapshot) : null,
           closingSummary: null,
@@ -245,7 +245,7 @@ export function registerSessionTools(server: McpServer): void {
 
         await ref.set(session);
 
-        // Cache active session for contextEstimate auto-increment
+        // Cache active session for serverSentTotal/interactionTotal auto-increment
         activeSessionCache.set(uid, ref.key!);
 
         const result: any = session;
@@ -283,7 +283,7 @@ export function registerSessionTools(server: McpServer): void {
         if (targetOpens !== undefined) updates.targetOpens = targetOpens;
         if (sessionGoal !== undefined) updates.sessionGoal = sessionGoal;
         if (conceptBlockCount !== undefined) updates.conceptBlockCount = conceptBlockCount;
-        if (contextEstimate !== undefined) updates.contextEstimate = contextEstimate;
+        // Legacy: contextEstimate param accepted but ignored — context now tracked per-surface via turnDelta
         if (presentationMode !== undefined) updates.presentationMode = presentationMode;
         if (configSnapshot !== undefined) updates.configSnapshot = JSON.parse(configSnapshot);
         if (closingSummary !== undefined) updates.closingSummary = closingSummary;
@@ -336,11 +336,12 @@ export function registerSessionTools(server: McpServer): void {
         if (!sessionId) return withResponseSize({ content: [{ type: "text" as const, text: "action 'complete' requires sessionId" }], isError: true });
         if (!summary) return withResponseSize({ content: [{ type: "text" as const, text: "action 'complete' requires summary" }], isError: true });
 
-        // Flush any pending context estimate before completing
-        const pending = pendingContextIncrements.get(uid);
-        if (pending && pending.sessionId === sessionId) {
-          clearTimeout(pending.timer);
-          await flushContextEstimate(uid);
+        // Flush any pending context totals before completing (all surfaces)
+        for (const [key, pending] of pendingContextIncrements.entries()) {
+          if (pending.sessionId === sessionId) {
+            clearTimeout(pending.timer);
+            await flushContextTotals(uid, pending.surface);
+          }
         }
 
         const ref = getSessionRef(uid, sessionId);
@@ -512,7 +513,20 @@ export function registerSessionTools(server: McpServer): void {
         const snapshot = await ref.once("value");
         const session = snapshot.val();
 
-        if (!session) return withResponseSize({ content: [{ type: "text" as const, text: `Session not found: ${sessionId}` }], isError: true });
+        if (!session) {
+          // Fuzzy match against recent sessions
+          const allSnap = await getSessionsRef(uid).orderByKey().limitToLast(50).once("value");
+          const allSessions = allSnap.val() || {};
+          const entries = Object.entries(allSessions).map(([id, s]: [string, any]) => ({
+            id,
+            label: (s as any).title || undefined,
+          }));
+          const candidates = findCandidates(sessionId!, entries);
+          const did_you_mean = formatDidYouMean(candidates);
+          const errorObj: any = { error: `Session not found: ${sessionId}` };
+          if (did_you_mean) errorObj.did_you_mean = did_you_mean;
+          return withResponseSize({ content: [{ type: "text" as const, text: JSON.stringify(errorObj, null, 2) }], isError: true });
+        }
 
         // Cap events to last 15 to save context window
         if (session.events && Array.isArray(session.events)) {
@@ -533,11 +547,12 @@ export function registerSessionTools(server: McpServer): void {
       if (action === "delete") {
         if (!sessionId) return withResponseSize({ content: [{ type: "text" as const, text: "action 'delete' requires sessionId" }], isError: true });
 
-        // Flush any pending context estimate before deleting
-        const pendingDel = pendingContextIncrements.get(uid);
-        if (pendingDel && pendingDel.sessionId === sessionId) {
-          clearTimeout(pendingDel.timer);
-          pendingContextIncrements.delete(uid); // Don't flush — session is being deleted
+        // Clear any pending context totals before deleting (all surfaces)
+        for (const [key, pendingDel] of pendingContextIncrements.entries()) {
+          if (pendingDel.sessionId === sessionId) {
+            clearTimeout(pendingDel.timer);
+            pendingContextIncrements.delete(key); // Don't flush — session is being deleted
+          }
         }
 
         const ref = getSessionRef(uid, sessionId);
@@ -596,7 +611,7 @@ export function registerSessionTools(server: McpServer): void {
           startedAt: s.startedAt,
           completedAt: s.completedAt,
           conceptBlockCount: s.conceptBlockCount || 0,
-          contextEstimate: s.contextEstimate || 0,
+          contextBySurface: s.contextBySurface || {},
         }));
 
         const avgItemSize = lean.length > 0
@@ -614,61 +629,68 @@ export function registerSessionTools(server: McpServer): void {
   );
 }
 
-// ─── CONTEXT ESTIMATE AUTO-INCREMENT (DEBOUNCED) ───
-// Accumulates response sizes in memory and flushes to Firebase every 30s.
-// This avoids a read+write on every single tool call, which was the #1
-// source of Firebase bandwidth (each write triggered a full sessions
-// collection re-sync to all open browser tabs via realtime listeners).
+// ─── CONTEXT TRACKING AUTO-INCREMENT (DEBOUNCED) ───
+// Accumulates serverSent and interaction totals per surface in memory,
+// flushes to Firebase every 30s at contextBySurface/{surface}/.
+// Per-surface scoping ensures each context window (Chat, Code, etc.)
+// gets its own accurate tracking — sessions span multiple conversations.
 
 const CONTEXT_FLUSH_INTERVAL_MS = 30_000; // 30 seconds
 
-// Pending increments per uid: { sessionId, accumulated, perSurface, timer }
+// Pending increments keyed by "uid:surface"
 const pendingContextIncrements = new Map<string, {
   sessionId: string;
-  accumulated: number;
-  perSurface: Record<string, number>;
+  surface: string;
+  serverSentAccum: number;
+  interactionAccum: number;
   timer: ReturnType<typeof setTimeout>;
 }>();
 
-// Get pending (unflushed) context estimate accumulation for a user
-export function getPendingContextAccumulation(uid: string): number {
-  const pending = pendingContextIncrements.get(uid);
-  return pending ? pending.accumulated : 0;
+function pendingKey(uid: string, surface: string): string {
+  return `${uid}:${surface}`;
 }
 
-// Get pending (unflushed) per-surface context accumulations for a user
-export function getPendingContextPerSurface(uid: string): Record<string, number> {
-  const pending = pendingContextIncrements.get(uid);
-  return pending ? { ...pending.perSurface } : {};
+// Get pending (unflushed) serverSent accumulation for a user+surface
+export function getPendingServerSentAccumulation(uid: string, surface?: string): number {
+  if (!surface) return 0;
+  const pending = pendingContextIncrements.get(pendingKey(uid, surface));
+  return pending ? pending.serverSentAccum : 0;
 }
 
-async function flushContextEstimate(uid: string): Promise<void> {
-  const pending = pendingContextIncrements.get(uid);
-  if (!pending || pending.accumulated === 0) return;
+// Get pending (unflushed) interaction accumulation for a user+surface
+export function getPendingInteractionAccumulation(uid: string, surface?: string): number {
+  if (!surface) return 0;
+  const pending = pendingContextIncrements.get(pendingKey(uid, surface));
+  return pending ? pending.interactionAccum : 0;
+}
 
-  const { sessionId, accumulated, perSurface } = pending;
-  pendingContextIncrements.delete(uid);
+async function flushContextTotals(uid: string, surface: string): Promise<void> {
+  const key = pendingKey(uid, surface);
+  const pending = pendingContextIncrements.get(key);
+  if (!pending || (pending.serverSentAccum === 0 && pending.interactionAccum === 0)) return;
+
+  const { sessionId, serverSentAccum, interactionAccum } = pending;
+  pendingContextIncrements.delete(key);
 
   try {
+    const surfacePath = `contextBySurface/${surface}`;
     const ref = getSessionRef(uid, sessionId);
-    // Read global + per-surface in parallel (no latency increase)
-    const [globalSnap, perSurfaceSnap] = await Promise.all([
-      ref.child("contextEstimate").once("value"),
-      ref.child("contextPerSurface").once("value"),
+    // Read both totals in parallel (no latency increase)
+    const [serverSentSnap, interactionSnap] = await Promise.all([
+      ref.child(`${surfacePath}/serverSent`).once("value"),
+      ref.child(`${surfacePath}/interaction`).once("value"),
     ]);
-    const currentGlobal = globalSnap.val() || 0;
-    const currentPerSurface: Record<string, number> = perSurfaceSnap.val() || {};
+    const currentServerSent = serverSentSnap.val() || 0;
+    const currentInteraction = interactionSnap.val() || 0;
 
     const updates: Record<string, any> = {
-      contextEstimate: currentGlobal + accumulated,
       lastActivityAt: new Date().toISOString(),
     };
-
-    // Write per-surface increments
-    for (const [surface, increment] of Object.entries(perSurface)) {
-      if (increment > 0) {
-        updates[`contextPerSurface/${surface}`] = (currentPerSurface[surface] || 0) + increment;
-      }
+    if (serverSentAccum > 0) {
+      updates[`${surfacePath}/serverSent`] = currentServerSent + serverSentAccum;
+    }
+    if (interactionAccum > 0) {
+      updates[`${surfacePath}/interaction`] = currentInteraction + interactionAccum;
     }
 
     await ref.update(updates);
@@ -677,35 +699,87 @@ async function flushContextEstimate(uid: string): Promise<void> {
   }
 }
 
-export async function incrementContextEstimate(uid: string, responseLength: number, surface?: string): Promise<void> {
+// Called by withResponseSize() in response-metadata.ts — tracks server-sent content
+export async function incrementServerSentTotal(uid: string, responseLength: number, surface?: string): Promise<void> {
   try {
     const sessionId = activeSessionCache.get(uid);
-    if (!sessionId) return;
+    if (!sessionId || !surface) return;
 
-    const surfaceKey = surface || "unknown";
-    const existing = pendingContextIncrements.get(uid);
+    const key = pendingKey(uid, surface);
+    const existing = pendingContextIncrements.get(key);
 
     if (existing && existing.sessionId === sessionId) {
-      // Accumulate into existing pending flush
-      existing.accumulated += responseLength;
-      existing.perSurface[surfaceKey] = (existing.perSurface[surfaceKey] || 0) + responseLength;
+      existing.serverSentAccum += responseLength;
     } else {
-      // New session or first call — flush any stale pending and start fresh
       if (existing) {
         clearTimeout(existing.timer);
-        await flushContextEstimate(uid);
+        await flushContextTotals(uid, surface);
       }
 
       const entry = {
         sessionId,
-        accumulated: responseLength,
-        perSurface: { [surfaceKey]: responseLength },
-        timer: setTimeout(() => flushContextEstimate(uid), CONTEXT_FLUSH_INTERVAL_MS),
+        surface,
+        serverSentAccum: responseLength,
+        interactionAccum: 0,
+        timer: setTimeout(() => flushContextTotals(uid, surface), CONTEXT_FLUSH_INTERVAL_MS),
       };
-      pendingContextIncrements.set(uid, entry);
+      pendingContextIncrements.set(key, entry);
     }
   } catch {
     // Fire-and-forget — never block or throw
+  }
+}
+
+// Called by index.ts middleware — tracks surface-reported turnDelta
+export async function incrementInteractionTotal(uid: string, turnDelta: number, surface?: string): Promise<void> {
+  try {
+    const sessionId = activeSessionCache.get(uid);
+    if (!sessionId || !surface) return;
+
+    const key = pendingKey(uid, surface);
+    const existing = pendingContextIncrements.get(key);
+
+    if (existing && existing.sessionId === sessionId) {
+      existing.interactionAccum += turnDelta;
+    } else {
+      if (existing) {
+        clearTimeout(existing.timer);
+        await flushContextTotals(uid, surface);
+      }
+
+      const entry = {
+        sessionId,
+        surface,
+        serverSentAccum: 0,
+        interactionAccum: turnDelta,
+        timer: setTimeout(() => flushContextTotals(uid, surface), CONTEXT_FLUSH_INTERVAL_MS),
+      };
+      pendingContextIncrements.set(key, entry);
+    }
+  } catch {
+    // Fire-and-forget — never block or throw
+  }
+}
+
+// Reset a surface's context counters (called on bootstrap = new conversation)
+export async function resetSurfaceContext(uid: string, sessionId: string, surface: string): Promise<void> {
+  try {
+    // Clear any pending in-memory accumulation for this surface
+    const key = pendingKey(uid, surface);
+    const existing = pendingContextIncrements.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      pendingContextIncrements.delete(key);
+    }
+
+    // Reset in Firebase
+    const ref = getSessionRef(uid, sessionId);
+    await ref.child(`contextBySurface/${surface}`).set({
+      serverSent: 0,
+      interaction: 0,
+    });
+  } catch {
+    // Fire-and-forget
   }
 }
 

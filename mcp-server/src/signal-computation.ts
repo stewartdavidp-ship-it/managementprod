@@ -31,6 +31,7 @@ export interface SignalContext {
   surface: Surface | undefined;
   sessionMeta: SessionMetadata | undefined;
   pendingMessages: PendingMessagesInfo | null | undefined;
+  turnDeltaProvided: boolean;
   // Profile and job data loaded on-demand below
 }
 
@@ -124,7 +125,13 @@ export async function computeSignals(ctx: SignalContext): Promise<string[]> {
     signals.push("bootstrap-required");
   }
 
-  // ─── 11. load:{skill-name} — server-determined skill triggers ───
+  // ─── 11. context-estimate-missing (production surfaces only) ───
+  // Fires when turnDelta is not provided by claude-chat or claude-code
+  if (!ctx.turnDeltaProvided && (surface === "claude-chat" || surface === "claude-code")) {
+    signals.push("context-estimate-missing");
+  }
+
+  // ─── 12. load:{skill-name} — server-determined skill triggers ───
   // Future: add context-aware skill loading signals here.
   // For now, this is a placeholder for the load: parameterized code pattern.
   // Example: signals.push("load:cc-job-creation-protocol");

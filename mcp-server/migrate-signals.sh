@@ -128,6 +128,13 @@ SIGNALS='[
     "surfaces": ["claude-chat", "claude-code", "claude-cowork", "claude-chrome", "claude-powerpoint", "claude-excel"],
     "computation": "No initiator parameter on request OR server detects cold surface",
     "action": "Call session(bootstrap) to get orientation, active context, and signal definitions."
+  },
+  {
+    "name": "context-estimate-missing",
+    "description": "Surface did not provide contextEstimate on this tool call",
+    "surfaces": ["claude-chat", "claude-code", "claude-cowork", "claude-chrome", "claude-powerpoint", "claude-excel"],
+    "computation": "contextEstimate parameter is undefined/null/missing from request arguments",
+    "action": "Include contextEstimate parameter on every MCP tool call. Estimate your total context window usage in characters and pass it so the server can detect budget drift."
   }
 ]'
 

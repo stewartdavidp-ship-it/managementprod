@@ -51,14 +51,16 @@ call_tool() {
 }
 
 # Helper: extract text content from MCP response
+# Returns '{}' on failure so downstream json.loads() won't crash
 get_text() {
   echo "$1" | python3 -c "
 import json,sys
 try:
     d=json.load(sys.stdin)
-    print(d.get('result',{}).get('content',[{}])[0].get('text',''))
+    txt = d.get('result',{}).get('content',[{}])[0].get('text','')
+    print(txt if txt else '{}')
 except:
-    print('')
+    print('{}')
 "
 }
 
@@ -151,11 +153,16 @@ echo ""
 echo "── Phase 1: App Discovery ────────────────────────────────"
 # ═══════════════════════════════════════════════════════════════
 
-# Test 1: app list
-RAW=$(call_tool "app" '{"action":"list"}')
+# Test 1: app list (with limit to ensure all apps returned)
+RAW=$(call_tool "app" '{"action":"list","limit":100}')
 TEXT=$(get_text "$RAW")
 APP_COUNT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(len(d.get('apps',[])))")
 assert "app(list) returns apps" "true" "$([ "$APP_COUNT" -gt 0 ] && echo true || echo false)"
+# Verify pagination fields present
+APP_LIST_TOTAL=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('total',0))")
+APP_LIST_LIMIT=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('limit',0))")
+assert "app(list) has total field" "true" "$([ "$APP_LIST_TOTAL" -gt 0 ] && echo true || echo false)"
+assert "app(list) has limit field" "100" "$APP_LIST_LIMIT"
 
 # Test 2: app get (exact ID)
 RAW=$(call_tool "app" '{"action":"get","appId":"command-center"}')
@@ -173,6 +180,15 @@ assert "app(get) fuzzy match not error" "false" "$ERR"
 RAW=$(call_tool "app" '{"action":"get","appId":"nonexistent-app-xyz"}')
 ERR=$(is_error "$RAW")
 assert "app(get) nonexistent returns isError" "true" "$ERR"
+
+# Test 4b: app get (near-miss) — did_you_mean
+RAW=$(call_tool "app" '{"action":"get","appId":"comand-center"}')
+TEXT=$(get_text "$RAW")
+ERR=$(is_error "$RAW")
+assert "app(get) near-miss returns isError" "true" "$ERR"
+HAS_DYM=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('true' if d.get('did_you_mean') else 'false')")
+assert "app(get) near-miss has did_you_mean" "true" "$HAS_DYM"
+assert_contains "app(get) near-miss suggests command-center" "command-center" "$TEXT"
 
 # Test 5: app get (missing appId)
 RAW=$(call_tool "app" '{"action":"get"}')
@@ -1636,12 +1652,18 @@ RAW=$(call_tool "job" "{\"action\":\"list\",\"status\":\"active\",\"appId\":\"co
 TEXT=$(get_text "$RAW")
 echo "$TEXT" | python3 -c "
 import json,sys
-d = json.loads(sys.stdin.read())
-jobs = d['items']
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.exit(0)
+jobs = d.get('items', [])
 for j in jobs:
     if 'E2E' in j.get('title',''):
         print(j['id'])
-" | while read -r orphan_id; do
+" 2>/dev/null | while read -r orphan_id; do
   call_tool "job" "{\"action\":\"complete\",\"jobId\":\"$orphan_id\",\"status\":\"abandoned\",\"summary\":\"E2E cleanup of orphaned test job\"}" > /dev/null
   echo "  Cleaned up orphaned active job: $orphan_id"
 done
@@ -1872,7 +1894,9 @@ assert_not_empty "session(start+sm) returns id" "$SM_SESSION_ID"
 assert "session(start+sm) mode=ideation" "ideation" "$(jq_field "$TEXT" "['mode']")"
 assert "session(start+sm) sessionGoal" "Test state machine fields" "$(jq_field "$TEXT" "['sessionGoal']")"
 assert "session(start+sm) presentationMode=cli" "cli" "$(jq_field "$TEXT" "['presentationMode']")"
-assert "session(start+sm) contextEstimate=0" "0" "$(jq_field "$TEXT" "['contextEstimate']")"
+# contextBySurface starts empty (Firebase may drop empty objects — absence is OK)
+SM_NO_OLD_FIELD=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('true' if 'serverSentTotal' not in d else 'false')")
+assert "session(start+sm) no legacy serverSentTotal" "true" "$SM_NO_OLD_FIELD"
 assert "session(start+sm) conceptBlockCount=0" "0" "$(jq_field "$TEXT" "['conceptBlockCount']")"
 assert_not_empty "session(start+sm) has lastActivityAt" "$(jq_field "$TEXT" "['lastActivityAt']")"
 # Verify targetOpens is an array with 2 items
@@ -1890,10 +1914,10 @@ assert "session(update+sm) activeLens=technical" "technical" "$(jq_field "$TEXT"
 assert "session(update+sm) conceptBlockCount=5" "5" "$(jq_field "$TEXT" "['conceptBlockCount']")"
 assert_not_empty "session(update+sm) lastActivityAt updated" "$(jq_field "$TEXT" "['lastActivityAt']")"
 
-# Test: session update contextEstimate manually
+# Test: session update contextEstimate (legacy param — now ignored, context tracked per-surface via turnDelta)
 RAW=$(call_tool "session" "{\"action\":\"update\",\"sessionId\":\"$SM_SESSION_ID\",\"contextEstimate\":15000}")
 TEXT=$(get_text "$RAW")
-assert "session(update+sm) contextEstimate=15000" "15000" "$(jq_field "$TEXT" "['contextEstimate']")"
+assert "session(update+sm) legacy contextEstimate accepted" "build-review" "$(jq_field "$TEXT" "['mode']")"
 
 # Test: session get verifies all state machine fields persisted
 RAW=$(call_tool "session" "{\"action\":\"get\",\"sessionId\":\"$SM_SESSION_ID\"}")
@@ -1901,10 +1925,9 @@ TEXT=$(get_text "$RAW")
 assert "session(get+sm) mode persisted" "build-review" "$(jq_field "$TEXT" "['mode']")"
 assert "session(get+sm) activeLens persisted" "technical" "$(jq_field "$TEXT" "['activeLens']")"
 assert "session(get+sm) conceptBlockCount persisted" "5" "$(jq_field "$TEXT" "['conceptBlockCount']")"
-# contextEstimate may be > 15000 due to auto-increment from tool responses
-CTX_EST_VAL=$(jq_field "$TEXT" "['contextEstimate']")
-CTX_GTE=$(python3 -c "print('true' if int('${CTX_EST_VAL}' or '0') >= 15000 else 'false')")
-assert "session(get+sm) contextEstimate >= 15000" "true" "$CTX_GTE"
+# No legacy serverSentTotal/interactionTotal fields — context is per-surface now
+GET_NO_OLD=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('true' if 'serverSentTotal' not in d and 'interactionTotal' not in d else 'false')")
+assert "session(get+sm) no legacy context fields" "true" "$GET_NO_OLD"
 assert "session(get+sm) presentationMode persisted" "cli" "$(jq_field "$TEXT" "['presentationMode']")"
 assert "session(get+sm) sessionGoal persisted" "Test state machine fields" "$(jq_field "$TEXT" "['sessionGoal']")"
 
@@ -1922,7 +1945,8 @@ TEXT=$(get_text "$RAW")
 DEFAULT_SESSION_ID=$(jq_field "$TEXT" "['id']")
 assert "session(start defaults) mode=base" "base" "$(jq_field "$TEXT" "['mode']")"
 assert "session(start defaults) presentationMode=interactive" "interactive" "$(jq_field "$TEXT" "['presentationMode']")"
-assert "session(start defaults) contextEstimate=0" "0" "$(jq_field "$TEXT" "['contextEstimate']")"
+DEFAULT_NO_OLD=$(echo "$TEXT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('true' if 'serverSentTotal' not in d else 'false')")
+assert "session(start defaults) no legacy serverSentTotal" "true" "$DEFAULT_NO_OLD"
 # Cleanup
 call_tool "session" "{\"action\":\"complete\",\"sessionId\":\"$DEFAULT_SESSION_ID\",\"summary\":\"defaults test done\"}" > /dev/null
 
@@ -1952,29 +1976,40 @@ assert "preferences(restore) presentationMode=interactive" "interactive" "$(jq_f
 
 # ─── CONTEXT ESTIMATE AUTO-INCREMENT ───
 echo ""
-echo "────────── Context Estimate Auto-Increment Tests ──────────"
+echo "────────── Context Tracking Auto-Increment Tests ──────────"
 
-# Start a session to activate the cache
-RAW=$(call_tool "session" "{\"action\":\"start\",\"ideaId\":\"$IDEA2_ID\",\"title\":\"E2E Context Estimate Session\"}")
+# Start a session to activate the cache (use initiator for per-surface tracking)
+RAW=$(call_tool "session" "{\"action\":\"start\",\"ideaId\":\"$IDEA2_ID\",\"title\":\"E2E Context Tracking Session\",\"initiator\":\"claude-code\"}")
 TEXT=$(get_text "$RAW")
 CTX_SESSION_ID=$(jq_field "$TEXT" "['id']")
 assert_not_empty "ctx session started" "$CTX_SESSION_ID"
 
-# Make some tool calls — each should increment contextEstimate
-call_tool "session" "{\"action\":\"get\",\"sessionId\":\"$CTX_SESSION_ID\"}" > /dev/null
-sleep 1
-call_tool "session" "{\"action\":\"get\",\"sessionId\":\"$CTX_SESSION_ID\"}" > /dev/null
+# Make some tool calls with initiator — each should increment per-surface context via _responseSize
+call_tool "session" "{\"action\":\"get\",\"sessionId\":\"$CTX_SESSION_ID\",\"initiator\":\"claude-code\"}" > /dev/null
 sleep 1
 
-# Check that contextEstimate increased from 0
-RAW=$(call_tool "session" "{\"action\":\"get\",\"sessionId\":\"$CTX_SESSION_ID\"}")
-TEXT=$(get_text "$RAW")
-CTX_EST=$(jq_field "$TEXT" "['contextEstimate']")
-CTX_INCREASED=$(python3 -c "print('true' if int('${CTX_EST}' or '0') > 0 else 'false')")
-assert "contextEstimate auto-incremented > 0" "true" "$CTX_INCREASED"
+# Check _contextHealth in response metadata — includes pending (unflushed) values
+RAW=$(call_tool "session" "{\"action\":\"get\",\"sessionId\":\"$CTX_SESSION_ID\",\"initiator\":\"claude-code\"}")
+CTX_INCREASED=$(echo "$RAW" | python3 -c "
+import json,sys
+data = json.loads(sys.stdin.read())
+found = False
+for block in data.get('result',{}).get('content',[]):
+    if block.get('type') == 'text':
+        try:
+            parsed = json.loads(block['text'])
+            if '_contextHealth' in parsed:
+                sst = parsed['_contextHealth'].get('serverSentTotal', 0)
+                sys.stdout.write('true' if sst > 0 else 'false')
+                found = True
+                break
+        except Exception: pass
+if not found: sys.stdout.write('false')
+")
+assert "per-surface _contextHealth.serverSentTotal > 0" "true" "$CTX_INCREASED"
 
 # Cleanup
-call_tool "session" "{\"action\":\"complete\",\"sessionId\":\"$CTX_SESSION_ID\",\"summary\":\"context estimate test done\"}" > /dev/null
+call_tool "session" "{\"action\":\"complete\",\"sessionId\":\"$CTX_SESSION_ID\",\"summary\":\"context tracking test done\"}" > /dev/null
 
 # Cleanup: complete remaining active jobs
 call_tool "job" "{\"action\":\"complete\",\"jobId\":\"$MAINT_JOB_ID\",\"status\":\"completed\",\"summary\":\"E2E cleanup\"}" > /dev/null

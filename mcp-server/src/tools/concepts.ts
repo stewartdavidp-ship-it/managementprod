@@ -6,6 +6,7 @@ import { withResponseSize } from "../response-metadata.js";
 import { ensureSession } from "../session-lifecycle.js";
 import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 import { writeAttentionEntry } from "./sessions.js";
+import { findCandidates, formatDidYouMean } from "../fuzzy-match.js";
 
 // Mirrors CC's ODRC_TYPES (index.html:4772)
 const ODRC_TYPES = ["OPEN", "DECISION", "RULE", "CONSTRAINT"] as const;
@@ -274,7 +275,17 @@ Set grouped=true to return concepts organized by type (rules, constraints, decis
         const ref = getConceptRef(uid, conceptId);
         const snapshot = await ref.once("value");
         const concept = snapshot.val();
-        if (!concept) return withResponseSize({ content: [{ type: "text", text: `Concept not found: ${conceptId}` }], isError: true });
+        if (!concept) {
+          // Fuzzy match against recent concepts
+          const allSnap = await getConceptsRef(uid).orderByKey().limitToLast(50).once("value");
+          const allConcepts = allSnap.val() || {};
+          const entries = Object.keys(allConcepts).map(id => ({ id }));
+          const candidates = findCandidates(conceptId!, entries);
+          const did_you_mean = formatDidYouMean(candidates);
+          const errorObj: any = { error: `Concept not found: ${conceptId}` };
+          if (did_you_mean) errorObj.did_you_mean = did_you_mean;
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify(errorObj, null, 2) }], isError: true });
+        }
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify(concept, null, 2) }] });
       }

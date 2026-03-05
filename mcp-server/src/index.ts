@@ -5,10 +5,10 @@ import { createServer } from "./server.js";
 import { initSkillCache } from "./skill-cache.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
-import { requestContext, setContextEstimate, setContextPerSurface, setSurfaceContextEstimate, setPendingMessages, setSignals, setInitiator, getSessionMeta, getPendingMessages as getCtxPendingMessages, type PendingMessagesInfo } from "./context.js";
+import { requestContext, setServerSentTotal, setInteractionTotal, setTurnDelta, getTurnDelta, setPendingMessages, setSignals, setInitiator, setInitiatorExplicit, setToolName, getSessionMeta, getPendingMessages as getCtxPendingMessages, type PendingMessagesInfo } from "./context.js";
 import { computeSignals } from "./signal-computation.js";
 import { parseSurface } from "./surfaces.js";
-import { getActiveSessionId, getPendingContextAccumulation, getPendingContextPerSurface } from "./tools/sessions.js";
+import { getActiveSessionId, getPendingServerSentAccumulation, getPendingInteractionAccumulation, incrementInteractionTotal } from "./tools/sessions.js";
 import { getSessionRef, getDocumentsRef, getDb } from "./firebase.js";
 import { ensureSession } from "./session-lifecycle.js";
 
@@ -197,7 +197,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
 
 // MCP endpoint — Streamable HTTP (stateless)
 // Wraps the handler in AsyncLocalStorage so tools can access the UID
-// Also intercepts response to auto-increment contextEstimate on active sessions
+// Tracks serverSentTotal and interactionTotal for compaction prediction
 app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
   const firebaseUid = (req as any).firebaseUid;
 
@@ -220,37 +220,58 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
       }
     }
 
-    // Load contextEstimate from Firebase once per request for _contextHealth
-    // Uses active session cache + pending accumulation for accurate reading
-    if (firebaseUid) {
-      try {
-        const activeSessionId = getActiveSessionId(firebaseUid);
-        if (activeSessionId) {
-          // Load global + per-surface context estimates in parallel (no latency increase)
-          const [globalSnap, perSurfaceSnap] = await Promise.all([
-            getSessionRef(firebaseUid, activeSessionId).child("contextEstimate").once("value"),
-            getSessionRef(firebaseUid, activeSessionId).child("contextPerSurface").once("value"),
-          ]);
-          const firebaseGlobal = globalSnap.val() || 0;
-          const firebasePerSurface: Record<string, number> = perSurfaceSnap.val() || {};
-
-          const pendingAccum = getPendingContextAccumulation(firebaseUid);
-          setContextEstimate(firebaseGlobal + pendingAccum);
-
-          // Merge Firebase per-surface with pending per-surface accumulations
-          const pendingPerSurface = getPendingContextPerSurface(firebaseUid);
-          const mergedPerSurface: Record<string, number> = { ...firebasePerSurface };
-          for (const [surface, pending] of Object.entries(pendingPerSurface)) {
-            mergedPerSurface[surface] = (mergedPerSurface[surface] || 0) + pending;
-          }
-          setContextPerSurface(mergedPerSurface);
-        }
-      } catch {
-        // Non-critical — _contextHealth will be omitted if this fails
+    // Extract initiator + turnDelta FIRST — needed for per-surface context loading below.
+    // This is the "base handler" approach — parsed at middleware level, not per-tool.
+    // The parameter is accepted by Zod via INITIATOR_PARAM on every tool.
+    let surface: ReturnType<typeof parseSurface> = null;
+    if (firebaseUid && !Array.isArray(req.body) && req.body?.method === "tools/call") {
+      // Track tool name for context-aware warnings (e.g., turnDelta compliance)
+      const toolNameRaw = req.body.params?.name;
+      if (typeof toolNameRaw === "string") {
+        setToolName(toolNameRaw);
       }
 
-      // Resolve active session once per request (heartbeat model)
-      // Caches in AsyncLocalStorage — all tool calls in this batch reuse the result
+      const initiatorArg = req.body.params?.arguments?.initiator;
+      surface = parseSurface(initiatorArg);
+      if (surface) {
+        setInitiator(surface);
+        setInitiatorExplicit(true); // Explicitly provided — not inferred from createdBy
+
+        // Track connected surfaces — fire-and-forget write for wizard real-time status.
+        // Excludes "user" (admin surface, not a Claude connector).
+        if (surface !== "user") {
+          const now = new Date().toISOString();
+          const updates: Record<string, unknown> = {
+            [`command-center/${firebaseUid}/connectedSurfaces/${surface}/lastSeen`]: now,
+          };
+          // Chat and Cowork share the same Claude.ai connector —
+          // if one works, the other does too.
+          if (surface === "claude-chat") {
+            updates[`command-center/${firebaseUid}/connectedSurfaces/claude-cowork/lastSeen`] = now;
+          } else if (surface === "claude-cowork") {
+            updates[`command-center/${firebaseUid}/connectedSurfaces/claude-chat/lastSeen`] = now;
+          }
+          getDb().ref().update(updates).catch(() => {});
+        }
+      }
+
+      // Extract turnDelta — total characters consumed since last MCP call.
+      // Also check legacy `contextEstimate` for surfaces with cached old schema.
+      const rawArgs = req.body.params?.arguments;
+      const td = rawArgs?.turnDelta ?? rawArgs?.contextEstimate;
+      if (typeof td === "number" && td >= 0) {
+        setTurnDelta(td);
+
+        // Accumulate into interactionTotal (fire-and-forget, debounced per surface)
+        if (td > 0 && surface) {
+          incrementInteractionTotal(firebaseUid, td, surface).catch(() => {});
+        }
+      }
+    }
+
+    // Resolve active session once per request (heartbeat model)
+    // Caches in AsyncLocalStorage — all tool calls in this batch reuse the result
+    if (firebaseUid) {
       try {
         await ensureSession();  // No toolContext — mismatch detection handled by opt-in tools
       } catch (err) {
@@ -258,48 +279,28 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         console.error("Session lifecycle error:", err);
       }
 
-      // Extract initiator + surface-reported contextEstimate from tool call arguments.
-      // This is the "base handler" approach — parsed at middleware level, not per-tool.
-      // The parameter is accepted by Zod via INITIATOR_PARAM on every tool.
-      if (!Array.isArray(req.body) && req.body?.method === "tools/call") {
-        // Extract initiator at middleware level for signal computation.
-        // resolveInitiator() in tool handlers still runs but is effectively a no-op
-        // when we've already set it here (setInitiator is idempotent).
-        const initiatorArg = req.body.params?.arguments?.initiator;
-        const surface = parseSurface(initiatorArg);
-        if (surface) {
-          setInitiator(surface);
+      // Load per-surface context totals from Firebase for _contextHealth.
+      // Each surface (Chat, Code) gets independent tracking since each is a separate context window.
+      // Data stored at session.contextBySurface/{surface}/{serverSent, interaction}.
+      try {
+        const activeSessionId = getActiveSessionId(firebaseUid);
+        if (activeSessionId && surface) {
+          const surfacePath = `contextBySurface/${surface}`;
+          const [serverSentSnap, interactionSnap] = await Promise.all([
+            getSessionRef(firebaseUid, activeSessionId).child(`${surfacePath}/serverSent`).once("value"),
+            getSessionRef(firebaseUid, activeSessionId).child(`${surfacePath}/interaction`).once("value"),
+          ]);
+          const firebaseServerSent = serverSentSnap.val() || 0;
+          const firebaseInteraction = interactionSnap.val() || 0;
 
-          // Track connected surfaces — fire-and-forget write for wizard real-time status.
-          // Excludes "user" (admin surface, not a Claude connector).
-          if (surface !== "user") {
-            const now = new Date().toISOString();
-            const updates: Record<string, unknown> = {
-              [`command-center/${firebaseUid}/connectedSurfaces/${surface}/lastSeen`]: now,
-            };
-            // Chat and Cowork share the same Claude.ai connector —
-            // if one works, the other does too.
-            if (surface === "claude-chat") {
-              updates[`command-center/${firebaseUid}/connectedSurfaces/claude-cowork/lastSeen`] = now;
-            } else if (surface === "claude-cowork") {
-              updates[`command-center/${firebaseUid}/connectedSurfaces/claude-chat/lastSeen`] = now;
-            }
-            getDb().ref().update(updates).catch(() => {});
-          }
+          const pendingServerSent = getPendingServerSentAccumulation(firebaseUid, surface);
+          const pendingInteraction = getPendingInteractionAccumulation(firebaseUid, surface);
+
+          setServerSentTotal(firebaseServerSent + pendingServerSent);
+          setInteractionTotal(firebaseInteraction + pendingInteraction);
         }
-
-        const ce = req.body.params?.arguments?.contextEstimate;
-        if (typeof ce === "number" && ce >= 0) {
-          setSurfaceContextEstimate(ce);
-
-          // Persist to session record (fire-and-forget)
-          const activeSessionId2 = getActiveSessionId(firebaseUid);
-          if (activeSessionId2) {
-            getSessionRef(firebaseUid, activeSessionId2)
-              .update({ lastContextEstimate: ce })
-              .catch(() => {});
-          }
-        }
+      } catch {
+        // Non-critical — _contextHealth will be omitted if this fails
       }
 
       // Piggyback message notifications — check for pending messages once per request.
@@ -322,6 +323,7 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
           ) || undefined,
           sessionMeta: getSessionMeta(),
           pendingMessages: getCtxPendingMessages(),
+          turnDeltaProvided: getTurnDelta() !== undefined,
         });
         setSignals(signals.length > 0 ? signals : null);
       } catch {

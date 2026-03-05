@@ -21,12 +21,14 @@ export interface RequestContext {
   firebaseUid: string;
   initiator?: Surface; // Calling surface, set by resolveInitiator() in tool handlers
   sessionMeta?: SessionMetadata;
-  contextEstimate?: number; // Cached from Firebase per-request for _contextHealth (server's tracked total)
-  contextPerSurface?: Record<string, number>; // Per-surface breakdown from Firebase + pending
-  surfaceContextEstimate?: number; // Surface-reported context usage (from contextEstimate tool param)
+  serverSentTotal?: number; // Server-tracked sum of _responseSize for this session (from Firebase + pending)
+  interactionTotal?: number; // Server-tracked sum of turnDelta for this session (from Firebase + pending)
+  turnDelta?: number; // Surface-reported characters consumed since last MCP call (from turnDelta tool param)
   pendingMessages?: PendingMessagesInfo | null; // Cached per-request for piggyback notifications (null = checked, none found)
   suppressPiggyback?: boolean; // Set by document(receive) to avoid redundant info
   signals?: string[] | null; // Cached per-request computed signal codes (null = computed, none active)
+  toolName?: string; // Tool name being called (e.g., "session", "app", "concept")
+  initiatorExplicit?: boolean; // True when initiator was set via explicit `initiator` param (not inferred from createdBy)
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -58,31 +60,31 @@ export function setSessionMeta(meta: SessionMetadata): void {
   }
 }
 
-// Get the cached context estimate for this request
-export function getContextEstimate(): number | undefined {
+// Get the cached serverSentTotal for this request
+export function getServerSentTotal(): number | undefined {
   const ctx = requestContext.getStore();
-  return ctx?.contextEstimate;
+  return ctx?.serverSentTotal;
 }
 
-// Set the cached context estimate for this request (called once per request)
-export function setContextEstimate(estimate: number): void {
+// Set the cached serverSentTotal for this request (called once per request)
+export function setServerSentTotal(total: number): void {
   const ctx = requestContext.getStore();
   if (ctx) {
-    ctx.contextEstimate = estimate;
+    ctx.serverSentTotal = total;
   }
 }
 
-// Get per-surface context estimate breakdown for this request
-export function getContextPerSurface(): Record<string, number> | undefined {
+// Get the cached interactionTotal for this request
+export function getInteractionTotal(): number | undefined {
   const ctx = requestContext.getStore();
-  return ctx?.contextPerSurface;
+  return ctx?.interactionTotal;
 }
 
-// Set per-surface context estimate breakdown (called once per request in index.ts)
-export function setContextPerSurface(perSurface: Record<string, number>): void {
+// Set the cached interactionTotal for this request (called once per request)
+export function setInteractionTotal(total: number): void {
   const ctx = requestContext.getStore();
   if (ctx) {
-    ctx.contextPerSurface = perSurface;
+    ctx.interactionTotal = total;
   }
 }
 
@@ -126,16 +128,42 @@ export function setInitiator(surface: Surface): void {
   }
 }
 
-// Get the surface-reported context estimate for this request
-export function getSurfaceContextEstimate(): number | undefined {
-  return requestContext.getStore()?.surfaceContextEstimate;
+// Get the surface-reported turnDelta for this request
+export function getTurnDelta(): number | undefined {
+  return requestContext.getStore()?.turnDelta;
 }
 
-// Set the surface-reported context estimate (called from middleware in index.ts)
-export function setSurfaceContextEstimate(estimate: number): void {
+// Set the surface-reported turnDelta (called from middleware in index.ts)
+export function setTurnDelta(delta: number): void {
   const ctx = requestContext.getStore();
   if (ctx) {
-    ctx.surfaceContextEstimate = estimate;
+    ctx.turnDelta = delta;
+  }
+}
+
+// Check if initiator was explicitly set via the `initiator` parameter (not inferred from createdBy)
+export function isInitiatorExplicit(): boolean {
+  return requestContext.getStore()?.initiatorExplicit ?? false;
+}
+
+// Mark that initiator was explicitly provided (called from middleware in index.ts)
+export function setInitiatorExplicit(explicit: boolean): void {
+  const ctx = requestContext.getStore();
+  if (ctx) {
+    ctx.initiatorExplicit = explicit;
+  }
+}
+
+// Get the tool name for this request
+export function getToolName(): string | undefined {
+  return requestContext.getStore()?.toolName;
+}
+
+// Set the tool name for this request (called from middleware in index.ts)
+export function setToolName(name: string): void {
+  const ctx = requestContext.getStore();
+  if (ctx) {
+    ctx.toolName = name;
   }
 }
 

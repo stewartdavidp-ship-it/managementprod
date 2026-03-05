@@ -4,6 +4,7 @@ import { getConfigRef } from "../firebase.js";
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
+import { findCandidates, formatDidYouMean } from "../fuzzy-match.js";
 
 // Summarize an app config into the fields useful for chat-first discovery
 function summarizeApp(id: string, app: any, project?: any): any {
@@ -42,7 +43,7 @@ export function registerAppTools(server: McpServer): void {
   server.tool(
     "app",
     `App discovery and management tool. Actions:
-  - "list": List all apps with name, icon, project, description, repos, versions, lifecycle. No extra params needed.
+  - "list": List apps with name, icon, project, description, repos, versions, lifecycle. No extra params needed.
   - "get": Get detailed info about a specific app. Requires appId (exact ID or partial name for fuzzy match).
   - "create": Create a new app. Requires appId and name. Optional: icon, project, projectName (creates project if new), description, appType, repos (JSON string), subPath, targetPath, lifecycleFields (JSON string).
   - "update": Update app metadata. Requires appId. Optional: description, appType, repos (JSON string e.g. {"prod":"owner/repo","test":"owner/testrepo"}), subPath (string), lifecycleFields (JSON string with currentMaturity, maturityTarget, problemStatement, targetAudience, userGoal, successMetric, category).
@@ -61,8 +62,10 @@ export function registerAppTools(server: McpServer): void {
       subPath: z.string().optional().describe("For 'create'/'update': subPath within the repo"),
       targetPath: z.string().optional().describe("For 'create': target file path (default: 'index.html')"),
       lifecycleFields: z.string().optional().describe("For 'create'/'update': JSON string of lifecycle fields (currentMaturity, maturityTarget, problemStatement, targetAudience, userGoal, successMetric, category)"),
+      limit: z.number().optional().describe("Max results to return for list action (default: 20)"),
+      offset: z.number().optional().describe("Number of items to skip for pagination (default: 0)"),
     },
-    async ({ initiator, action, appId, name: appName, icon, project, projectName, description, appType, repos, subPath, targetPath, lifecycleFields }) => {
+    async ({ initiator, action, appId, name: appName, icon, project, projectName, description, appType, repos, subPath, targetPath, lifecycleFields, limit, offset }) => {
       resolveInitiator({ initiator });
       const uid = getCurrentUid();
       const snapshot = await getConfigRef(uid).once("value");
@@ -76,17 +79,22 @@ export function registerAppTools(server: McpServer): void {
         }
 
         const projects = config.projects || {};
-        const apps = Object.entries(config.apps)
+        const allApps = Object.entries(config.apps)
           .filter(([, app]: [string, any]) => (app.status || "active") !== "archived")
           .map(([id, app]: [string, any]) => {
             const project = app.project ? projects[app.project] : null;
             return summarizeApp(id, app, project);
           });
 
+        const total = allApps.length;
+        const skip = offset && offset > 0 ? offset : 0;
+        const take = limit && limit > 0 ? limit : 20;
+        const apps = allApps.slice(skip, skip + take);
+
         const projectList = Object.entries(projects).map(([id, p]: [string, any]) => ({
           id,
           name: p.name || id,
-          appCount: apps.filter((a) => a.project === id).length,
+          appCount: allApps.filter((a) => a.project === id).length,
         }));
 
         const avgItemSize = apps.length > 0
@@ -98,7 +106,7 @@ export function registerAppTools(server: McpServer): void {
             content: [
               {
                 type: "text",
-                text: JSON.stringify({ apps, projects: projectList }, null, 2),
+                text: JSON.stringify({ apps, projects: projectList, total, offset: skip, limit: take }, null, 2),
               },
             ],
           },
@@ -305,8 +313,17 @@ export function registerAppTools(server: McpServer): void {
         });
 
       if (matches.length === 0) {
+        // Levenshtein fallback for typos (substring already failed above)
+        const entries = Object.entries(config.apps).map(([id, app]: [string, any]) => ({
+          id,
+          label: app.name || undefined,
+        }));
+        const candidates = findCandidates(appId, entries);
+        const did_you_mean = formatDidYouMean(candidates);
+        const errorObj: any = { error: `No app found matching "${appId}".` };
+        if (did_you_mean) errorObj.did_you_mean = did_you_mean;
         return withResponseSize({
-          content: [{ type: "text", text: `No app found matching "${appId}". Use app with action "list" to see all available apps.` }],
+          content: [{ type: "text", text: JSON.stringify(errorObj, null, 2) }],
           isError: true,
         });
       }

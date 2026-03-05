@@ -726,7 +726,8 @@ The session state machine also tracks:
 - \`targetOpens\` — OPEN concept IDs being addressed this session
 - \`sessionGoal\` — declared purpose/focus
 - \`conceptBlockCount\` — running count of concept blocks
-- \`contextEstimate\` — auto-incremented by MCP server based on response sizes
+- \`serverSentTotal\` — auto-incremented by MCP server based on response sizes
+- \`interactionTotal\` — accumulated from turnDelta reported by surfaces
 - \`presentationMode\` — interactive or cli
 - \`configSnapshot\` — snapshot of session config at start
 - \`lastActivityAt\` — timestamp of most recent mutation
@@ -792,14 +793,20 @@ When a session begins:
 
 ## Session Pacing
 
-### Context Estimate as Pacing Input
+### Compaction Estimate as Pacing Input
 
-The \`contextEstimate\` field auto-increments with every tool response. Use it as a pacing signal:
+Every MCP response includes \`_contextHealth.compactionEstimate\` — the server's best approximation of total context window usage. Use it as a pacing signal:
 
-- **< 50K chars** — Early session. Full depth exploration appropriate.
-- **50K–100K chars** — Mid session. Consider check-in on progress.
-- **100K–150K chars** — Late session. Start narrowing focus, prioritize remaining OPENs.
-- **> 150K chars** — Consider closing. Context quality may degrade.
+- **Green (< 60%)** — Early/mid session. Full depth exploration appropriate.
+- **Yellow (60-75%)** — Mid-late session. Start summarizing, reduce tool call verbosity.
+- **Red (75-90%)** — Late session. Minimize tool calls, compress outputs, prioritize remaining OPENs.
+- **Imminent (> 90%)** — Write memory snapshot, prepare for compaction, close session.
+
+### turnDelta — Per-Turn Context Tracking
+
+Every MCP tool call includes a required \`turnDelta\` parameter — the total characters consumed since the last MCP call (assistant responses, user messages, tool results). Pass 0 if unknown.
+
+**Per-turn habit:** Append \`*(~N chars)*\` to every response. N = rough character count of the full turn. When making an MCP call, sum annotations since the last call and pass as \`turnDelta\`.
 
 Read it via:
 \`\`\`
@@ -1578,7 +1585,7 @@ You should suspect a compaction occurred if:
 - You have no sessionId in your context but the conversation suggests a session was active
 - The CC MCP tools are available but you don't remember starting a session
 
-Context-triggered recovery: if the \`contextEstimate\` on a session is high (>100K chars), compaction is likely. The session record tells you how much work was done.
+Context-triggered recovery: if the \`serverSentTotal + interactionTotal\` on a session is high (>100K chars), compaction is likely. The session record tells you how much work was done.
 
 ## Recovery Sequence
 
@@ -1612,7 +1619,8 @@ The session record contains everything needed for recovery:
 - **conceptsModified[]** — IDs of every concept transitioned/superseded/resolved
 - **events[]** — Chronological log of session activity
 - **metadata.conceptCount** — Running tally by ODRC type
-- **contextEstimate** — How much context was consumed before compaction
+- **serverSentTotal** — Server-sent content chars before compaction
+- **interactionTotal** — Surface-reported interaction chars before compaction
 - **configSnapshot** — Original session configuration
 - **lastActivityAt** — When the session was last active
 
@@ -1659,7 +1667,7 @@ This gives you the full active concept landscape — rules, decisions, constrain
 - **Mode:** [mode] | **Goal:** [sessionGoal]
 - **Idea:** [idea name from idea record]
 - **Concepts created this session:** [count] — [breakdown by type]
-- **Context consumed:** ~[contextEstimate] chars
+- **Context consumed:** ~[serverSentTotal + interactionTotal] chars
 - **Pending documents:** [N] documents awaiting GitHub delivery (if any)
 - **Key items created:**
   [list 3-5 most important concepts with content]
@@ -1674,7 +1682,7 @@ Would you like to:
 **CLI recovery:**
 
 \`\`\`
-RECOVERED: [title] | mode=[mode] | concepts=[count] | ctx=[contextEstimate]
+RECOVERED: [title] | mode=[mode] | concepts=[count] | ctx=[serverSentTotal+interactionTotal]
 ⚠️ PENDING FLUSH: [N] documents awaiting delivery
 Goal: [sessionGoal]
 Created: [N] OPENs, [N] DECISIONs, [N] RULEs, [N] CONSTRAINTs
@@ -2064,7 +2072,7 @@ IDEATE ──→ SPECIFY ──→ DELIVER ──→ BUILD ──→ COMPLETE �
 2. **Check preferences**: \`session\` action="preferences" — get presentationMode
 3. **React to server-created session**: Check \`_session\` metadata in first tool response. If \`autoCreated: true\`, enrich with \`session/update\` (title, mode, sessionGoal, activeIdeaId, activeAppId, presentationMode). If \`mismatch: true\`, present user with existing session details and options.
 4. ODRC loop: discuss, identify concepts, write to Firebase immediately
-5. **Monitor context**: contextEstimate auto-increments — use for pacing decisions
+5. **Monitor context**: check \`_contextHealth.compactionEstimate\` in every tool response — use zone (green/yellow/red/imminent) for pacing decisions. Pass \`turnDelta\` on every tool call.
 6. **Mode transitions**: switch between ideation/build-review/debrief as needed
 7. **Document pushes**: when pushing documents, pass sessionId for atomic pendingFlush tracking
 8. Session completes with closing data: closingSummary, nextSessionRecommendation, conceptsResolved. Server auto-flushes pendingFlush. Check \`_flushResults\` for delivery outcomes.
@@ -2190,10 +2198,10 @@ Failed deliveries → attention queue entry created → user notified via \`_flu
 All state lives in Firebase. If either Claude Chat or Claude Code loses context:
 
 - **Claude Code mid-build:** Use cc-build-resume — find job via job/list, reconstruct from events
-- **Claude Chat mid-session:** Use cc-session-resume — find session via session/list, reconstruct from session record (mode, goal, concepts, context estimate). cc-session-resume now checks pendingFlush state and presents document-aware recovery options (Resume, Flush Now, Abandon with document handling, Start Fresh).
+- **Claude Chat mid-session:** Use cc-session-resume — find session via session/list, reconstruct from session record (mode, goal, concepts, serverSentTotal + interactionTotal). cc-session-resume now checks pendingFlush state and presents document-aware recovery options (Resume, Flush Now, Abandon with document handling, Start Fresh).
 - **Claude Chat new conversation:** The server auto-creates a new session on any tool call. Load prior sessions for the idea, read closingSummary and nextSessionRecommendation for session inheritance.
 
-The session record is the complete recovery document: it has configSnapshot, mode, goal, context estimate, concept lists, pendingFlush map, and event history.
+The session record is the complete recovery document: it has configSnapshot, mode, goal, serverSentTotal + interactionTotal, concept lists, pendingFlush map, and event history.
 
 The Firebase records ARE the state. The conversation is ephemeral — Firebase is the truth.
 

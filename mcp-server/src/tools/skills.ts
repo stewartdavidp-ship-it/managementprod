@@ -4,6 +4,7 @@ import { getCachedSkill, getAllCachedSkillsMeta, writeSkillToCache, deleteSkillF
 import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
+import { findCandidates, formatDidYouMean } from "../fuzzy-match.js";
 
 const CONTENT_MAX_CHARS = 50_000;
 
@@ -71,9 +72,14 @@ Actions:
 
         const skill = getCachedSkill(skillName);
         if (!skill) {
-          const available = getAllCachedSkillsMeta().map(s => s.name).join(", ");
+          const allSkills = getAllCachedSkillsMeta();
+          const entries = allSkills.map(s => ({ id: s.name, label: s.description || undefined }));
+          const candidates = findCandidates(skillName!, entries);
+          const did_you_mean = formatDidYouMean(candidates);
+          const errorObj: any = { error: `Unknown skill: ${skillName}` };
+          if (did_you_mean) errorObj.did_you_mean = did_you_mean;
           return withResponseSize({
-            content: [{ type: "text" as const, text: `Error: Unknown skill '${skillName}'. Available skills: ${available}` }],
+            content: [{ type: "text" as const, text: JSON.stringify(errorObj, null, 2) }],
             isError: true,
           });
         }

@@ -21,6 +21,7 @@ import { getCachedSkill } from "./skill-cache.js";
 import { ensureSession, type SessionMetadata } from "./session-lifecycle.js";
 import { loadSignalRegistry, type SignalDefinition } from "./signal-computation.js";
 import { withResponseSize } from "./response-metadata.js";
+import { resetSurfaceContext } from "./tools/sessions.js";
 import type { Surface } from "./surfaces.js";
 
 // ─── Types ───
@@ -91,6 +92,12 @@ export async function handleBootstrap(
     loadSignalRegistryLean(uid, surface),
     loadInstructions(surface),
   ]);
+
+  // Bootstrap = new conversation for this surface. Reset per-surface context counters
+  // so _contextHealth starts fresh for this context window.
+  if (sessionMeta) {
+    resetSurfaceContext(uid, sessionMeta.id, surface).catch(() => {});
+  }
 
   // Build session info from ensureSession result
   let activeSession: Record<string, any> | null = null;

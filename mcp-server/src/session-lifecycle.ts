@@ -98,7 +98,7 @@ export async function resolveSession(
   }
 
   // ─── Branch 3: Context matches (or no context to compare) ───
-  // Update cache so contextEstimate auto-increment knows the active session
+  // Update cache so serverSentTotal/interactionTotal auto-increment knows the active session
   setActiveSessionId(uid, sessionId);
   // Include session data for tool-level mismatch checks (not serialized to responses)
   return { id: sessionId, _sessionData: session };
@@ -131,8 +131,7 @@ async function autoCreateSession(uid: string): Promise<SessionMetadata> {
     targetOpens: [],
     sessionGoal: null,
     conceptBlockCount: 0,
-    contextEstimate: 0,
-    contextPerSurface: {},
+    contextBySurface: {},
     presentationMode: "interactive",
     configSnapshot: null,
     closingSummary: null,
@@ -143,7 +142,7 @@ async function autoCreateSession(uid: string): Promise<SessionMetadata> {
 
   await ref.set(session);
 
-  // Update the active session cache for contextEstimate auto-increment
+  // Update the active session cache for serverSentTotal/interactionTotal auto-increment
   setActiveSessionId(uid, ref.key!);
 
   return {

@@ -5,6 +5,7 @@ import { getCurrentUid } from "../context.js";
 import { withResponseSize } from "../response-metadata.js";
 import { INITIATOR_PARAM, resolveInitiator } from "../surfaces.js";
 import { computeIdeaHealth, updateAppTriageFlags } from "../idea-health.js";
+import { findCandidates, formatDidYouMean } from "../fuzzy-match.js";
 
 const IDEA_TYPES = ["base", "addon"] as const;
 const IDEA_STATUSES = ["active", "graduated", "archived", "completed"] as const;
@@ -143,7 +144,20 @@ export function registerIdeaTools(server: McpServer): void {
         const ref = getIdeaRef(uid, ideaId);
         const snapshot = await ref.once("value");
         const idea = snapshot.val();
-        if (!idea) return withResponseSize({ content: [{ type: "text", text: `Idea not found: ${ideaId}` }], isError: true });
+        if (!idea) {
+          // Fuzzy match against recent ideas
+          const allSnap = await getIdeasRef(uid).orderByKey().limitToLast(50).once("value");
+          const allIdeas = allSnap.val() || {};
+          const entries = Object.entries(allIdeas).map(([id, i]: [string, any]) => ({
+            id,
+            label: (i as any).name || undefined,
+          }));
+          const candidates = findCandidates(ideaId!, entries);
+          const did_you_mean = formatDidYouMean(candidates);
+          const errorObj: any = { error: `Idea not found: ${ideaId}` };
+          if (did_you_mean) errorObj.did_you_mean = did_you_mean;
+          return withResponseSize({ content: [{ type: "text", text: JSON.stringify(errorObj, null, 2) }], isError: true });
+        }
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify(idea, null, 2) }] });
       }
