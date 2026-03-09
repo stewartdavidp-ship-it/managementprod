@@ -4,6 +4,10 @@ import { readFileSync } from "fs";
 let app: admin.app.App;
 let db: admin.database.Database;
 
+// Secondary Firebase app for Shir Glassworks project
+let sgApp: admin.app.App | null = null;
+let sgDb: admin.database.Database | null = null;
+
 export function initFirebase(): void {
   if (app) return;
 
@@ -190,4 +194,49 @@ export function getUserTokenRef(uid: string, tokenHash: string) {
 
 export function getDb(): admin.database.Database {
   return db;
+}
+
+// ─── Shir Glassworks Firebase (secondary project) ───
+
+function initSgFirebase(): void {
+  if (sgApp) return;
+
+  const sgDatabaseURL =
+    process.env.SG_FIREBASE_DATABASE_URL ||
+    "https://shir-glassworks-default-rtdb.firebaseio.com";
+
+  const keyPath = process.env.SG_SERVICE_ACCOUNT_KEY_PATH || process.env.SERVICE_ACCOUNT_KEY_PATH;
+  if (keyPath) {
+    const serviceAccount = JSON.parse(readFileSync(keyPath, "utf8"));
+    sgApp = admin.initializeApp(
+      {
+        credential: admin.credential.cert(serviceAccount),
+        databaseURL: sgDatabaseURL,
+      },
+      "shir-glassworks"
+    );
+  } else {
+    sgApp = admin.initializeApp(
+      {
+        projectId: "shir-glassworks",
+        databaseURL: sgDatabaseURL,
+      },
+      "shir-glassworks"
+    );
+  }
+
+  sgDb = sgApp.database();
+}
+
+export function getSgDb(): admin.database.Database {
+  if (!sgDb) initSgFirebase();
+  return sgDb!;
+}
+
+export function getFeedbackReportsRef() {
+  return getSgDb().ref("shirglassworks/feedbackReports");
+}
+
+export function getFeedbackReportRef(reportId: string) {
+  return getSgDb().ref(`shirglassworks/feedbackReports/${reportId}`);
 }
