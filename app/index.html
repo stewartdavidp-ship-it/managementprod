@@ -15682,13 +15682,13 @@ The developer uses Claude for iterative development — each session should:
                                         </span>
                                     )}
                                     {!isGitHubPagesWired(dnsRecords) && (
-                                        <button onClick={() => { setWiringDomain(selectedDomain); setWiringMode('github'); }}
+                                        <button onClick={() => { setWiringDomain(selectedDomain); setWiringMode('github'); setTimeout(() => document.querySelector('[data-wire-modal]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100); }}
                                             className="text-xs px-3 py-1.5 bg-green-600 rounded hover:bg-green-500 font-medium">
                                             Wire for GitHub Pages
                                         </button>
                                     )}
                                     {!isFirebaseHostingWired(dnsRecords) && (
-                                        <button onClick={() => { setWiringDomain(selectedDomain); setWiringMode('firebase'); }}
+                                        <button onClick={() => { setWiringDomain(selectedDomain); setWiringMode('firebase'); setTimeout(() => document.querySelector('[data-wire-modal]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100); }}
                                             className="text-xs px-3 py-1.5 bg-amber-600 rounded hover:bg-amber-500 font-medium">
                                             Wire for Firebase Hosting
                                         </button>
@@ -15784,7 +15784,7 @@ The developer uses Claude for iterative development — each session should:
                         
                         {/* Wire Domain Modal — GitHub Pages or Firebase Hosting */}
                         {wiringDomain && (
-                            <div className={`bg-slate-800 rounded-xl border p-5 ${wiringMode === 'firebase' ? 'border-amber-700/50' : 'border-indigo-700/50'}`}>
+                            <div data-wire-modal className={`bg-slate-800 rounded-xl border p-5 ${wiringMode === 'firebase' ? 'border-amber-700/50' : 'border-indigo-700/50'}`}>
                                 <h3 className="font-semibold mb-3 flex items-center gap-2">
                                     {wiringMode === 'firebase' ? `Wire ${wiringDomain} for Firebase Hosting` : `Wire ${wiringDomain} for GitHub Pages`}
                                 </h3>
