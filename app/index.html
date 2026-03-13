@@ -649,16 +649,70 @@
             throw new Error('Failed to fetch TLD pricing');
         },
         
-        // ─── GitHub Pages DNS Configuration ───
-        
-        async configureForGitHubPages(domain, githubUsername) {
+        // ─── Firebase Hosting IP ───
+        FIREBASE_HOSTING_IP: '199.36.158.100',
+
+        // ─── Firebase Hosting DNS Configuration ───
+
+        async configureForFirebaseHosting(domain, siteId) {
             const results = [];
             const log = [];
-            
+
             // Step 1: Get existing records and remove conflicting ones
             log.push('Fetching existing DNS records...');
             const existing = await this.listDNSRecords(domain);
-            
+
+            // Delete existing A, AAAA, root CNAME/ALIAS records, and hosting-site TXT records
+            for (const record of existing) {
+                const isRoot = record.name === domain || record.name === '';
+                const isWww = record.name === `www.${domain}` || record.name === 'www';
+                const isHostingSiteTxt = record.type === 'TXT' && isRoot && record.content && record.content.includes('hosting-site=');
+                if ((isRoot && (record.type === 'A' || record.type === 'AAAA' || record.type === 'CNAME' || record.type === 'ALIAS')) ||
+                    (isWww && record.type === 'CNAME') ||
+                    isHostingSiteTxt) {
+                    log.push(`Deleting conflicting ${record.type} record: ${record.content}`);
+                    await this.deleteDNSRecord(domain, record.id);
+                    await this._rateLimit(1100);
+                }
+            }
+
+            // Step 2: Create A record for apex domain → Firebase Hosting IP
+            log.push(`Creating A record → ${this.FIREBASE_HOSTING_IP}`);
+            const aResult = await this.createDNSRecord(domain, 'A', '', this.FIREBASE_HOSTING_IP, 600);
+            results.push(aResult);
+            await this._rateLimit(1100);
+
+            // Step 3: Create TXT record for Firebase Hosting ownership verification
+            const txtContent = `hosting-site=${siteId}`;
+            log.push(`Creating TXT record → ${txtContent}`);
+            const txtResult = await this.createDNSRecord(domain, 'TXT', '', txtContent, 600);
+            results.push(txtResult);
+            await this._rateLimit(1100);
+
+            // Step 4: Create CNAME for www → siteId.web.app
+            const cnameTarget = `${siteId}.web.app`;
+            log.push(`Creating CNAME www → ${cnameTarget}`);
+            const cnameResult = await this.createDNSRecord(domain, 'CNAME', 'www', cnameTarget, 600);
+            results.push(cnameResult);
+
+            return {
+                success: true,
+                recordsCreated: results.length,
+                records: results,
+                log
+            };
+        },
+
+        // ─── GitHub Pages DNS Configuration ───
+
+        async configureForGitHubPages(domain, githubUsername) {
+            const results = [];
+            const log = [];
+
+            // Step 1: Get existing records and remove conflicting ones
+            log.push('Fetching existing DNS records...');
+            const existing = await this.listDNSRecords(domain);
+
             // Delete existing A, AAAA, and root CNAME records that would conflict
             for (const record of existing) {
                 const isRoot = record.name === domain || record.name === '';
@@ -670,7 +724,7 @@
                     await this._rateLimit(1100);
                 }
             }
-            
+
             // Step 2: Create 4 A records for apex domain
             for (const ip of this.GITHUB_PAGES_IPS) {
                 log.push(`Creating A record → ${ip}`);
@@ -678,22 +732,22 @@
                 results.push(result);
                 await this._rateLimit(1100);
             }
-            
+
             // Step 3: Create CNAME for www → username.github.io
             log.push(`Creating CNAME www → ${githubUsername}.github.io`);
             const cnameResult = await this.createDNSRecord(
                 domain, 'CNAME', 'www', `${githubUsername}.github.io`, 600
             );
             results.push(cnameResult);
-            
-            return { 
-                success: true, 
-                recordsCreated: results.length, 
+
+            return {
+                success: true,
+                recordsCreated: results.length,
                 records: results,
                 log
             };
         },
-        
+
         // ─── Domain Health Caching ───
         
         getHealthCache() {
@@ -882,15 +936,81 @@
             return { status: 'SUCCESS' };
         },
         
-        // ─── GitHub Pages DNS Configuration ───
-        
-        async configureForGitHubPages(domain, githubUsername) {
+        // ─── Firebase Hosting IP ───
+        FIREBASE_HOSTING_IP: '199.36.158.100',
+
+        // ─── Firebase Hosting DNS Configuration ───
+
+        async configureForFirebaseHosting(domain, siteId) {
             const log = [];
-            
+
             // Step 1: Get existing records
             log.push('Fetching existing DNS records...');
             const existing = await this.listDNSRecords(domain);
-            
+
+            // Step 2: Build new record set — keep non-conflicting, replace A/CNAME/hosting-site TXT
+            const keepRecords = existing
+                .filter(r => !['NS', 'SOA'].includes(r.type))
+                .filter(r => {
+                    const isRoot = r._gdName === '@' || r.name === domain;
+                    const isWww = r._gdName === 'www';
+                    const isHostingSiteTxt = r.type === 'TXT' && isRoot && r.content && r.content.includes('hosting-site=');
+                    if (isRoot && (r.type === 'A' || r.type === 'AAAA' || r.type === 'CNAME' || r.type === 'ALIAS')) {
+                        log.push(`Removing conflicting ${r.type} record: ${r.content}`);
+                        return false;
+                    }
+                    if (isWww && r.type === 'CNAME') {
+                        log.push(`Removing conflicting CNAME www record: ${r.content}`);
+                        return false;
+                    }
+                    if (isHostingSiteTxt) {
+                        log.push(`Removing old hosting-site TXT record: ${r.content}`);
+                        return false;
+                    }
+                    return true;
+                })
+                .map(r => ({
+                    type: r.type,
+                    name: r._gdName || '@',
+                    data: r._gdData || r.content,
+                    ttl: parseInt(r.ttl) || 600,
+                    ...(r.prio && r.prio !== '0' ? { priority: parseInt(r.prio) } : {})
+                }));
+
+            // Step 3: Add Firebase Hosting records
+            const fbRecords = [];
+            log.push(`Adding A record → ${this.FIREBASE_HOSTING_IP}`);
+            fbRecords.push({ type: 'A', name: '@', data: this.FIREBASE_HOSTING_IP, ttl: 600 });
+
+            const txtContent = `hosting-site=${siteId}`;
+            log.push(`Adding TXT record → ${txtContent}`);
+            fbRecords.push({ type: 'TXT', name: '@', data: txtContent, ttl: 600 });
+
+            const cnameTarget = `${siteId}.web.app`;
+            log.push(`Adding CNAME www → ${cnameTarget}`);
+            fbRecords.push({ type: 'CNAME', name: 'www', data: cnameTarget, ttl: 600 });
+
+            // Step 4: Replace all records at once (GoDaddy's approach)
+            const allRecords = [...keepRecords, ...fbRecords];
+            await this._call(`/domains/${domain}/records`, 'PUT', allRecords);
+
+            return {
+                success: true,
+                recordsCreated: fbRecords.length,
+                records: fbRecords.map(r => ({ type: r.type, name: r.name, content: r.data })),
+                log
+            };
+        },
+
+        // ─── GitHub Pages DNS Configuration ───
+
+        async configureForGitHubPages(domain, githubUsername) {
+            const log = [];
+
+            // Step 1: Get existing records
+            log.push('Fetching existing DNS records...');
+            const existing = await this.listDNSRecords(domain);
+
             // Step 2: Build new record set — keep non-conflicting, replace A/CNAME
             const keepRecords = existing
                 .filter(r => !['NS', 'SOA'].includes(r.type))
@@ -914,20 +1034,20 @@
                     ttl: parseInt(r.ttl) || 600,
                     ...(r.prio && r.prio !== '0' ? { priority: parseInt(r.prio) } : {})
                 }));
-            
+
             // Step 3: Add GitHub Pages records
             const ghRecords = this.GITHUB_PAGES_IPS.map(ip => {
                 log.push(`Adding A record → ${ip}`);
                 return { type: 'A', name: '@', data: ip, ttl: 600 };
             });
-            
+
             log.push(`Adding CNAME www → ${githubUsername}.github.io`);
             ghRecords.push({ type: 'CNAME', name: 'www', data: `${githubUsername}.github.io`, ttl: 600 });
-            
+
             // Step 4: Replace all records at once (GoDaddy's approach)
             const allRecords = [...keepRecords, ...ghRecords];
             await this._call(`/domains/${domain}/records`, 'PUT', allRecords);
-            
+
             return {
                 success: true,
                 recordsCreated: ghRecords.length,
@@ -935,7 +1055,7 @@
                 log
             };
         },
-        
+
         // ─── Utility ───
         formatPrice(price) {
             const num = typeof price === 'string' ? parseFloat(price) : price;
@@ -15256,6 +15376,8 @@ The developer uses Claude for iterative development — each session should:
         const [addingRecord, setAddingRecord] = React.useState(false);
         const [newRecord, setNewRecord] = React.useState({ type: 'A', name: '', content: '', ttl: '600' });
         const [wiringDomain, setWiringDomain] = React.useState(null);
+        const [wiringMode, setWiringMode] = React.useState(null); // 'github' or 'firebase'
+        const [firebaseSiteId, setFirebaseSiteId] = React.useState('');
         const [wireLog, setWireLog] = React.useState([]);
         const [wireProgress, setWireProgress] = React.useState(false);
         const [providerErrors, setProviderErrors] = React.useState([]);
@@ -15426,7 +15548,56 @@ The developer uses Claude for iterative development — each session should:
             const hasCNAME = records.some(r => r.type === 'CNAME' && r.content.includes('.github.io'));
             return hasGHIPs && hasCNAME;
         };
-        
+
+        // Check if domain is already wired for Firebase Hosting
+        const isFirebaseHostingWired = (records) => {
+            if (!records) return false;
+            const fbIP = PorkbunService.FIREBASE_HOSTING_IP;
+            const hasA = records.some(r => r.type === 'A' && r.content === fbIP);
+            const hasTXT = records.some(r => r.type === 'TXT' && r.content && r.content.includes('hosting-site='));
+            const hasCNAME = records.some(r => r.type === 'CNAME' && r.content && r.content.endsWith('.web.app'));
+            return hasA && hasTXT && hasCNAME;
+        };
+
+        // Get the Firebase site ID from existing TXT records (if wired)
+        const getFirebaseSiteFromRecords = (records) => {
+            if (!records) return null;
+            const txt = records.find(r => r.type === 'TXT' && r.content && r.content.includes('hosting-site='));
+            if (!txt) return null;
+            const match = txt.content.match(/hosting-site=([a-z0-9-]+)/);
+            return match ? match[1] : null;
+        };
+
+        // Wire domain for Firebase Hosting
+        const handleWireForFirebaseHosting = async (domain, siteId) => {
+            setWireProgress(true);
+            setWireLog(['Starting Firebase Hosting configuration...']);
+
+            try {
+                const service = getServiceForDomain(domain);
+                if (!service) throw new Error('No provider found for this domain');
+                const domainEntry = (domains || []).find(d => d.domain === domain);
+                const providerName = domainEntry?.providerName || 'registrar';
+
+                // Configure DNS at registrar
+                setWireLog(prev => [...prev, `Configuring DNS records at ${providerName}...`]);
+                const dnsResult = await service.configureForFirebaseHosting(domain, siteId);
+                dnsResult.log.forEach(l => setWireLog(prev => [...prev, `  ${l}`]));
+                setWireLog(prev => [...prev, `${dnsResult.recordsCreated} DNS records created (A + TXT + CNAME)`]);
+
+                setWireLog(prev => [...prev, '', 'Domain configuration complete!', `${domain} will be live once DNS propagates (5-30 minutes)`, `Firebase site: ${siteId}.web.app`, 'HTTPS will auto-enable after DNS propagation']);
+
+                showAlert(`${domain} configured for Firebase Hosting (${siteId})! DNS may take 5-30 minutes to propagate.`, 'success');
+
+                // Refresh DNS records view
+                await fetchDNS(domain);
+            } catch (e) {
+                setWireLog(prev => [...prev, `Error: ${e.message}`]);
+                showAlert(`Wiring failed: ${e.message}`, 'error');
+            }
+            setWireProgress(false);
+        };
+
         // Find which apps could use this domain (have repos assigned)
         const getAppsWithRepos = () => {
             return Object.entries(apps)
@@ -15441,7 +15612,7 @@ The developer uses Claude for iterative development — each session should:
                         <span className="text-2xl">🌐</span>
                         <div>
                             <h1 className="text-2xl font-bold">Domains</h1>
-                            <p className="text-slate-400 text-sm">DNS management and GitHub Pages domain wiring</p>
+                            <p className="text-slate-400 text-sm">DNS management and domain wiring</p>
                         </div>
                     </div>
                     <button onClick={fetchDomains} disabled={loading}
@@ -15499,17 +15670,28 @@ The developer uses Claude for iterative development — each session should:
                                 <h3 className="font-semibold flex items-center gap-2">
                                     📡 DNS Records — <span className="font-mono text-indigo-300">{selectedDomain}</span>
                                 </h3>
-                                <div className="flex gap-2">
-                                    {!isGitHubPagesWired(dnsRecords) && (
-                                        <button onClick={() => setWiringDomain(selectedDomain)}
-                                            className="text-xs px-3 py-1.5 bg-green-600 rounded hover:bg-green-500 font-medium">
-                                            ⚡ Wire for GitHub Pages
-                                        </button>
-                                    )}
+                                <div className="flex gap-2 flex-wrap">
                                     {isGitHubPagesWired(dnsRecords) && (
                                         <span className="text-xs px-3 py-1.5 bg-green-900/30 text-green-400 rounded border border-green-700/30">
-                                            ✅ GitHub Pages configured
+                                            GitHub Pages configured
                                         </span>
+                                    )}
+                                    {isFirebaseHostingWired(dnsRecords) && (
+                                        <span className="text-xs px-3 py-1.5 bg-amber-900/30 text-amber-400 rounded border border-amber-700/30">
+                                            Firebase Hosting ({getFirebaseSiteFromRecords(dnsRecords)})
+                                        </span>
+                                    )}
+                                    {!isGitHubPagesWired(dnsRecords) && (
+                                        <button onClick={() => { setWiringDomain(selectedDomain); setWiringMode('github'); }}
+                                            className="text-xs px-3 py-1.5 bg-green-600 rounded hover:bg-green-500 font-medium">
+                                            Wire for GitHub Pages
+                                        </button>
+                                    )}
+                                    {!isFirebaseHostingWired(dnsRecords) && (
+                                        <button onClick={() => { setWiringDomain(selectedDomain); setWiringMode('firebase'); }}
+                                            className="text-xs px-3 py-1.5 bg-amber-600 rounded hover:bg-amber-500 font-medium">
+                                            Wire for Firebase Hosting
+                                        </button>
                                     )}
                                     <button onClick={() => fetchDNS(selectedDomain)} disabled={loadingDNS}
                                         className="text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-40">
@@ -15600,15 +15782,17 @@ The developer uses Claude for iterative development — each session should:
                             </div>
                         </div>
                         
-                        {/* Wire for GitHub Pages Modal */}
+                        {/* Wire Domain Modal — GitHub Pages or Firebase Hosting */}
                         {wiringDomain && (
-                            <div className="bg-slate-800 rounded-xl border border-indigo-700/50 p-5">
-                                <h3 className="font-semibold mb-3 flex items-center gap-2">⚡ Wire {wiringDomain} for GitHub Pages</h3>
-                                
-                                {!wireProgress && wireLog.length === 0 && (
+                            <div className={`bg-slate-800 rounded-xl border p-5 ${wiringMode === 'firebase' ? 'border-amber-700/50' : 'border-indigo-700/50'}`}>
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">
+                                    {wiringMode === 'firebase' ? `Wire ${wiringDomain} for Firebase Hosting` : `Wire ${wiringDomain} for GitHub Pages`}
+                                </h3>
+
+                                {!wireProgress && wireLog.length === 0 && wiringMode === 'github' && (
                                     <div>
                                         <p className="text-sm text-slate-400 mb-4">
-                                            This will configure DNS records and GitHub Pages to serve your app from <strong className="text-white">{wiringDomain}</strong>. 
+                                            This will configure DNS records and GitHub Pages to serve your app from <strong className="text-white">{wiringDomain}</strong>.
                                             It creates 4 A records + 1 CNAME record, commits a CNAME file, and updates the GitHub Pages settings.
                                         </p>
                                         <div className="mb-4">
@@ -15629,26 +15813,51 @@ The developer uses Claude for iterative development — each session should:
                                                 ))}
                                             </div>
                                         </div>
-                                        <button onClick={() => { setWiringDomain(null); setWireLog([]); }}
+                                        <button onClick={() => { setWiringDomain(null); setWiringMode(null); setWireLog([]); }}
                                             className="text-xs text-slate-400 hover:text-white">Cancel</button>
                                     </div>
                                 )}
-                                
+
+                                {!wireProgress && wireLog.length === 0 && wiringMode === 'firebase' && (
+                                    <div>
+                                        <p className="text-sm text-slate-400 mb-4">
+                                            This will configure DNS records for Firebase Hosting to serve your app from <strong className="text-white">{wiringDomain}</strong>.
+                                            It creates 1 A record (199.36.158.100) + 1 TXT record (hosting-site verification) + 1 CNAME (www).
+                                        </p>
+                                        <div className="mb-4">
+                                            <label className="text-xs text-slate-400 block mb-1.5">Firebase Hosting Site ID</label>
+                                            <input value={firebaseSiteId} onChange={e => setFirebaseSiteId(e.target.value)}
+                                                placeholder="e.g. mast-platform-prod or mastevents"
+                                                className="w-full p-2.5 bg-slate-900 border border-slate-600 rounded text-sm font-mono focus:border-amber-500 focus:outline-none" />
+                                            <p className="text-xs text-slate-500 mt-1">This is the site ID from Firebase Console, not the full URL. It becomes <span className="font-mono text-slate-400">{firebaseSiteId || 'site-id'}.web.app</span></p>
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <button onClick={() => { if (firebaseSiteId.trim()) handleWireForFirebaseHosting(wiringDomain, firebaseSiteId.trim()); }}
+                                                disabled={!firebaseSiteId.trim()}
+                                                className="text-sm px-4 py-2 bg-amber-600 rounded hover:bg-amber-500 font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+                                                Wire Domain
+                                            </button>
+                                            <button onClick={() => { setWiringDomain(null); setWiringMode(null); setWireLog([]); setFirebaseSiteId(''); }}
+                                                className="text-xs text-slate-400 hover:text-white py-2">Cancel</button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Wire Progress Log */}
                                 {wireLog.length > 0 && (
                                     <div>
                                         <div className="bg-slate-900 rounded-lg p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
                                             {wireLog.map((line, i) => (
-                                                <div key={i} className={`${line.startsWith('❌') ? 'text-red-400' : line.startsWith('✅') ? 'text-green-400' : line.startsWith('🎉') ? 'text-yellow-400 font-bold' : 'text-slate-300'}`}>
+                                                <div key={i} className={`${line.includes('Error') ? 'text-red-400' : line.includes('created') || line.includes('committed') || line.includes('configured') || line.includes('complete') ? 'text-green-400' : line.includes('Domain configuration') ? 'text-yellow-400 font-bold' : 'text-slate-300'}`}>
                                                     {line}
                                                 </div>
                                             ))}
-                                            {wireProgress && <div className="text-indigo-400 animate-pulse">⏳ Working...</div>}
+                                            {wireProgress && <div className="text-indigo-400 animate-pulse">Working...</div>}
                                         </div>
                                         {!wireProgress && (
-                                            <button onClick={() => { setWiringDomain(null); setWireLog([]); }}
+                                            <button onClick={() => { setWiringDomain(null); setWiringMode(null); setWireLog([]); setFirebaseSiteId(''); }}
                                                 className="mt-3 text-xs px-3 py-1.5 bg-slate-700 rounded hover:bg-slate-600">
-                                                ✓ Done
+                                                Done
                                             </button>
                                         )}
                                     </div>
