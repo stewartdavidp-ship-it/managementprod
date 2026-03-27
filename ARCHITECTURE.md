@@ -262,7 +262,7 @@ These are persistent `.on('value')` subscriptions set up once at auth time. Each
 - **Read:** Per-tool `.once()` reads with query filters (no full collection reads)
 - **Write:** ODRC concepts, ideas, sessions, jobs, documents, claudeMd, preferences, knowledge (forests/trees/nodes), OAuth tokens
 - **Surface registry:** Each surface (claude-code, claude-chat, etc.) has a config backed by Firebase at `command-center/system/surfaceRegistry/` with in-memory cache (`surface-registry.ts`)
-- **Context budget tracking (per-surface):** Context consumption is tracked independently per surface on each session at `contextBySurface/{surface}/serverSent` and `contextBySurface/{surface}/interaction`. Sessions are shared across conversations, but each surface = one context window. `serverSent` is auto-incremented from `_responseSize` of each tool response. `interaction` is accumulated from the surface-reported `turnDelta` param (chars consumed since last MCP call, also accepts legacy `contextEstimate`). Debounced writes flush to Firebase every 30s (keyed by `uid:surface`). `_contextHealth` returns `compactionEstimate` (serverSentTotal + interactionTotal), `serverSentTotal`, `interactionTotal`, `ceiling` (624K), and `zone` (green <60%, yellow 60-75%, red 75-90%, imminent >90%). On `session(bootstrap)`, the calling surface's counters reset to 0 in both Firebase and in-memory cache (new conversation = fresh context window). The in-memory reset is critical because the middleware loads counters BEFORE the tool handler runs — without it, bootstrap's own response would report inflated counters from the previous conversation. Signal `context-estimate-missing` fires for production surfaces (claude-chat, claude-code) that don't provide `turnDelta`.
+- **Context budget tracking (per-surface):** Context consumption is tracked independently per surface on each session at `contextBySurface/{surface}/serverSent` and `contextBySurface/{surface}/interaction`. Sessions are shared across conversations, but each surface = one context window. `serverSent` is auto-incremented from `_responseSize` of each tool response. `interaction` is set from the surface-reported context parameter — two semantics are supported: `turnDelta` (delta — chars consumed since last call, accumulated into interactionTotal) and `contextEstimate` (absolute — total context window usage, replaces interactionTotal directly). `turnDelta` takes precedence when both are provided. Debounced writes flush to Firebase every 30s for `turnDelta`; `contextEstimate` writes directly via `setInteractionAbsolute()`. `_contextHealth` returns `compactionEstimate` (serverSentTotal + interactionTotal), `serverSentTotal`, `interactionTotal`, `ceiling` (624K), and `zone` (green <60%, yellow 60-75%, red 75-90%, imminent >90%). On `session(bootstrap)`, the calling surface's counters reset to 0 in both Firebase and in-memory cache (new conversation = fresh context window). The in-memory reset is awaited (not fire-and-forget) because the middleware loads counters BEFORE the tool handler runs — without it, the next request would read stale Firebase values. Signal `context-estimate-missing` fires for production surfaces (claude-chat, claude-code) that don't provide `turnDelta` or `contextEstimate`.
 - **turnDelta compliance warning:** When `claude-chat` or `claude-cowork` sends `turnDelta=0` or omits it (and `initiator` is explicitly provided, not inferred from `createdBy`), the server prepends a warning message to the response as the first content block. The `session` tool is exempt (bootstrap/init are first calls). This structurally reinforces behavioral rules that LLMs tend to forget — especially after compaction events. Implemented in `response-metadata.ts` using `isInitiatorExplicit()` from `context.ts`.
 - **Fuzzy matching (`did_you_mean`):** All 6 get actions (app, idea, concept, job, session, skill) return structured error responses with `did_you_mean` candidates on not-found errors. Uses `fuzzy-match.ts` — phase 1 (substring match on ID and label) + phase 2 (Levenshtein distance fallback, threshold = max(2, floor(query.length * 0.4))). Max 3 candidates per error.
 - **Piggyback notifications:** Pending messages for the calling surface are injected into every tool response as `_pendingMessages`
@@ -344,6 +344,17 @@ When a concept is superseded or transitioned, the original retains pointers to i
 | `concept` | create, update, transition, supersede, resolve, mark_built, migrate, add/remove_knowledge_ref, check_evidence_drift |
 | `list_concepts` | Filter by idea, app, type, status. `grouped=true` returns by-type breakdown |
 | `get_active_concepts` | Current truth: all active concepts across all ideas for an app |
+
+### Rule Ceiling Convention
+
+Active RULEs per app are capped at **40**. When the count exceeds this ceiling, `session(bootstrap)` includes a `_ruleAlert` field warning that a concept curation session is recommended. This prevents rule bloat from degrading CLAUDE.md quality and session context efficiency.
+
+### `guidance-only` Scope Tag
+
+Rules tagged with `guidance-only` in their `scopeTags` are valid principles but not hard constraints Code must enforce. They are:
+- **Excluded** from generated CLAUDE.md output (only hard rules appear)
+- Still visible via `list_concepts` and `get_active_concepts` for reference
+- Counted toward the active rule total for ceiling checks
 
 ---
 
@@ -456,7 +467,7 @@ Firebase RTDB charges ~$1/GB for bandwidth. The primary cost driver is listener 
 1. **Listener limits:** All `.on('value')` listeners use `limitToLast(N)` to bound per-trigger download size
 2. **Server-side query filtering:** MCP server uses `orderByChild().equalTo()` — no full-collection reads
 3. **Firebase indexes:** `.indexOn` rules on all queried fields. Without indexes, Firebase downloads the entire collection and filters client-side.
-4. **Write debouncing:** `turnDelta` batched over 30-second windows (keyed by `uid:surface`)
+4. **Write debouncing:** `turnDelta` batched over 30-second windows (keyed by `uid:surface`). `contextEstimate` writes directly (absolute value, not batched)
 5. **No background polling:** Claude Code must never create persistent scripts to poll `document(receive)`
 6. **`did_you_mean` suggestions:** All get actions return fuzzy-match candidates on not-found errors (Levenshtein + substring matching via `fuzzy-match.ts`), preventing wasteful retry cycles
 7. **Default pagination:** `app(list)` defaults to `limit=20` to avoid unbounded response sizes

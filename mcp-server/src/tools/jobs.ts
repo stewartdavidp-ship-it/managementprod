@@ -314,18 +314,28 @@ Actions:
         // Auto-notify: send lightweight message to the job creator
         const reviewSurface = initiator || "unknown";
         if (job.createdBy && job.createdBy !== reviewSurface) {
+          const notifyRef = getDocumentsRef(uid).push();
           const msg = {
+            id: notifyRef.key,
             type: "message",
-            from: reviewSurface,
-            to: job.createdBy,
+            appId: null,
             subject: `Job "${job.title}" — review`,
             content: `Job ${jobId} moved to review. ${concerns.length} concern(s) flagged.${job.reviewTier ? ` Review tier: ${job.reviewTier}.` : ""}`,
-            metadata: JSON.stringify({ jobId, reviewTier: job.reviewTier || null }),
+            metadata: {
+              from: reviewSurface,
+              to: job.createdBy,
+              jobId,
+              reviewTier: job.reviewTier || null,
+            },
+            routing: { targetPath: null, action: "message" },
             lifespan: "ephemeral",
-            createdAt: now,
             status: "pending",
+            createdAt: now,
+            createdBy: reviewSurface,
+            deliveredAt: null,
+            deliveredBy: null,
           };
-          await getDocumentsRef(uid).push(msg);
+          await notifyRef.set(msg);
         }
 
         return withResponseSize({ content: [{ type: "text", text: JSON.stringify({ ...job, ...updates }, null, 2) }] });
@@ -497,18 +507,28 @@ Actions:
         // ── Post-completion: auto-notify job creator ──
         const completeSurface = initiator || "unknown";
         if (job.createdBy && job.createdBy !== completeSurface) {
+          const notifyRef = getDocumentsRef(uid).push();
           const notifyMsg = {
+            id: notifyRef.key,
             type: "message",
-            from: completeSurface,
-            to: job.createdBy,
+            appId: null,
             subject: `Job "${job.title}" — ${status}`,
             content: `Job ${jobId} ${status}.${summary ? ` Summary: ${summary.substring(0, 200)}` : ""}`,
-            metadata: JSON.stringify({ jobId, status }),
+            metadata: {
+              from: completeSurface,
+              to: job.createdBy,
+              jobId,
+              status,
+            },
+            routing: { targetPath: null, action: "message" },
             lifespan: "ephemeral",
-            createdAt: now,
             status: "pending",
+            createdAt: now,
+            createdBy: completeSurface,
+            deliveredAt: null,
+            deliveredBy: null,
           };
-          await getDocumentsRef(uid).push(notifyMsg);
+          await notifyRef.set(notifyMsg);
         }
 
         // ── Post-completion: auto-transition concepts to "built" ──

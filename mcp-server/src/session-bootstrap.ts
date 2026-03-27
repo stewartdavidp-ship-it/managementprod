@@ -16,6 +16,8 @@ import {
   getJobsRef,
   getIdeasRef,
   getConceptsRef,
+  getAppIdeasRef,
+  getConfigRef,
 } from "./firebase.js";
 import { getCachedSkill } from "./skill-cache.js";
 import { ensureSession, type SessionMetadata } from "./session-lifecycle.js";
@@ -36,6 +38,7 @@ interface ActiveIdeaInfo {
   id: string;
   name: string;
   description: string;
+  appId: string | null;
   conceptCounts: {
     rules: number;
     constraints: number;
@@ -95,11 +98,11 @@ export async function handleBootstrap(
 
   // Bootstrap = new conversation for this surface. Reset per-surface context counters
   // so _contextHealth starts fresh for this context window.
-  // Also reset in-memory cached values — the middleware already loaded the OLD counters
-  // from Firebase before the tool handler runs, so withResponseSize() would report
-  // inflated _contextHealth without this.
+  // MUST await the Firebase write — fire-and-forget caused a race where the next
+  // tool call's middleware loaded stale counters before the reset completed,
+  // producing inflated _contextHealth (e.g., 577K at conversation start).
   if (sessionMeta) {
-    resetSurfaceContext(uid, sessionMeta.id, surface).catch(() => {});
+    await resetSurfaceContext(uid, sessionMeta.id, surface);
     setServerSentTotal(0);
     setInteractionTotal(0);
   }
@@ -122,7 +125,43 @@ export async function handleBootstrap(
     }
   }
 
-  const payload = {
+  // Rule ceiling check — alert if active RULE count exceeds 40 for the active app
+  const RULE_CEILING = 40;
+  let ruleAlert: { ceiling: number; current: number; message: string } | null = null;
+  const appId = activeIdeaData?.appId
+    || activeSession?.appId
+    || null;
+  if (appId) {
+    try {
+      const appIdeasSnap = await getAppIdeasRef(uid, appId).once("value");
+      const ideaIds: string[] = appIdeasSnap.val() || [];
+      if (ideaIds.length > 0) {
+        const conceptsSnap = await getConceptsRef(uid).once("value");
+        const conceptsData = conceptsSnap.val() || {};
+        let ruleCount = 0;
+        for (const c of Object.values(conceptsData as Record<string, any>)) {
+          if (c.status === "active" && c.type === "RULE" && ideaIds.includes(c.ideaOrigin)) {
+            ruleCount++;
+          }
+        }
+        if (ruleCount > RULE_CEILING) {
+          // Look up app name for the alert message
+          let appName = appId;
+          try {
+            const appSnap = await getConfigRef(uid).child("apps").child(appId).child("name").once("value");
+            appName = appSnap.val() || appId;
+          } catch { /* use appId as fallback */ }
+          ruleAlert = {
+            ceiling: RULE_CEILING,
+            current: ruleCount,
+            message: `⚠️ ${appName} has ${ruleCount} active RULEs — ceiling is ${RULE_CEILING}. A concept curation session is recommended before proceeding.`,
+          };
+        }
+      }
+    } catch { /* non-critical — skip alert on error */ }
+  }
+
+  const payload: Record<string, any> = {
     instructions,
     profile: {
       initialized: profileData.initialized || false,
@@ -137,6 +176,9 @@ export async function handleBootstrap(
     jobs: jobsData,
     signalDefinitions: signalDefs,
   };
+  if (ruleAlert) {
+    payload._ruleAlert = ruleAlert;
+  }
 
   return withResponseSize({
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
@@ -271,6 +313,7 @@ async function loadActiveIdea(uid: string): Promise<ActiveIdeaInfo | null> {
       id: ideaId,
       name: idea.name || "Untitled",
       description: idea.description || "",
+      appId: idea.appId || null,
       conceptCounts: counts,
     };
   } catch {

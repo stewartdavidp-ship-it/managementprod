@@ -5,10 +5,10 @@ import { createServer } from "./server.js";
 import { initSkillCache } from "./skill-cache.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
-import { requestContext, setServerSentTotal, setInteractionTotal, setTurnDelta, getTurnDelta, setPendingMessages, setSignals, setInitiator, setInitiatorExplicit, setToolName, getSessionMeta, getPendingMessages as getCtxPendingMessages, type PendingMessagesInfo } from "./context.js";
+import { requestContext, setServerSentTotal, setInteractionTotal, setTurnDelta, getTurnDelta, setPendingMessages, setSignals, setInitiator, setInitiatorExplicit, setToolName, getSessionMeta, getPendingMessages as getCtxPendingMessages, setContextEstimateAbsolute, getContextEstimateAbsolute, type PendingMessagesInfo } from "./context.js";
 import { computeSignals } from "./signal-computation.js";
 import { parseSurface } from "./surfaces.js";
-import { getActiveSessionId, getPendingServerSentAccumulation, getPendingInteractionAccumulation, incrementInteractionTotal } from "./tools/sessions.js";
+import { getActiveSessionId, getPendingServerSentAccumulation, getPendingInteractionAccumulation, incrementInteractionTotal, setInteractionAbsolute } from "./tools/sessions.js";
 import { getSessionRef, getDocumentsRef, getDb } from "./firebase.js";
 import { ensureSession } from "./session-lifecycle.js";
 
@@ -69,9 +69,10 @@ async function checkPendingMessages(uid: string): Promise<void> {
   // Sort oldest first for consistent ordering
   msgs.sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
+  // Check both metadata.to (document(send) format) and top-level to (legacy job notifications)
   const messages = msgs.map((m: any) => ({
-    to: m.metadata?.to || "unknown",
-    from: m.metadata?.from || "unknown",
+    to: m.metadata?.to || m.to || "unknown",
+    from: m.metadata?.from || m.from || "unknown",
     subject: m.subject || (m.content ? m.content.split("\n")[0].slice(0, 80) : "(no subject)"),
   }));
 
@@ -255,17 +256,24 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         }
       }
 
-      // Extract turnDelta — total characters consumed since last MCP call.
-      // Also check legacy `contextEstimate` for surfaces with cached old schema.
+      // Extract turnDelta or contextEstimate for context tracking.
+      // turnDelta = delta (chars consumed since last call) → accumulate
+      // contextEstimate = absolute (total context window usage) → replace, don't accumulate
       const rawArgs = req.body.params?.arguments;
-      const td = rawArgs?.turnDelta ?? rawArgs?.contextEstimate;
-      if (typeof td === "number" && td >= 0) {
-        setTurnDelta(td);
+      const turnDelta = rawArgs?.turnDelta;
+      const contextEstimate = rawArgs?.contextEstimate;
 
-        // Accumulate into interactionTotal (fire-and-forget, debounced per surface)
-        if (td > 0 && surface) {
-          incrementInteractionTotal(firebaseUid, td, surface).catch(() => {});
+      if (typeof turnDelta === "number" && turnDelta >= 0) {
+        // Delta semantics: accumulate into interactionTotal
+        setTurnDelta(turnDelta);
+        if (turnDelta > 0 && surface) {
+          incrementInteractionTotal(firebaseUid, turnDelta, surface).catch(() => {});
         }
+      } else if (typeof contextEstimate === "number" && contextEstimate >= 0) {
+        // Absolute semantics: store for override after Firebase load (step 2 below)
+        setTurnDelta(contextEstimate); // For turnDelta compliance warning check
+        setContextEstimateAbsolute(contextEstimate);
+        // Do NOT call incrementInteractionTotal — contextEstimate is NOT a delta
       }
     }
 
@@ -286,18 +294,28 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
         const activeSessionId = getActiveSessionId(firebaseUid);
         if (activeSessionId && surface) {
           const surfacePath = `contextBySurface/${surface}`;
-          const [serverSentSnap, interactionSnap] = await Promise.all([
-            getSessionRef(firebaseUid, activeSessionId).child(`${surfacePath}/serverSent`).once("value"),
-            getSessionRef(firebaseUid, activeSessionId).child(`${surfacePath}/interaction`).once("value"),
-          ]);
+          const serverSentSnap = await getSessionRef(firebaseUid, activeSessionId)
+            .child(`${surfacePath}/serverSent`).once("value");
           const firebaseServerSent = serverSentSnap.val() || 0;
-          const firebaseInteraction = interactionSnap.val() || 0;
-
           const pendingServerSent = getPendingServerSentAccumulation(firebaseUid, surface);
-          const pendingInteraction = getPendingInteractionAccumulation(firebaseUid, surface);
-
           setServerSentTotal(firebaseServerSent + pendingServerSent);
-          setInteractionTotal(firebaseInteraction + pendingInteraction);
+
+          // For interactionTotal: contextEstimate (absolute) overrides accumulated value.
+          // turnDelta (delta) uses the standard accumulated path.
+          const absoluteEstimate = getContextEstimateAbsolute();
+          if (absoluteEstimate !== undefined) {
+            // contextEstimate is absolute — use it directly as interactionTotal.
+            // Sync to Firebase so subsequent requests read the correct baseline.
+            setInteractionTotal(absoluteEstimate);
+            setInteractionAbsolute(firebaseUid, absoluteEstimate, surface).catch(() => {});
+          } else {
+            // turnDelta path — use accumulated total from Firebase + pending
+            const interactionSnap = await getSessionRef(firebaseUid, activeSessionId)
+              .child(`${surfacePath}/interaction`).once("value");
+            const firebaseInteraction = interactionSnap.val() || 0;
+            const pendingInteraction = getPendingInteractionAccumulation(firebaseUid, surface);
+            setInteractionTotal(firebaseInteraction + pendingInteraction);
+          }
         }
       } catch {
         // Non-critical — _contextHealth will be omitted if this fails

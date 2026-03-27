@@ -8,6 +8,10 @@ import {
   createAuthCode,
   consumeAuthCode,
   createAccessToken,
+  createRefreshToken,
+  validateRefreshToken,
+  rotateRefreshToken,
+  revokeRefreshToken,
   validateApiKey,
   revokeToken,
   revokeAllUserTokens,
@@ -26,7 +30,7 @@ export function createOAuthRouter(baseUrl: string): Router {
       registration_endpoint: `${baseUrl}/register`,
       revocation_endpoint: `${baseUrl}/revoke`,
       response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256", "plain"],
       token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
     });
@@ -378,80 +382,141 @@ export function createOAuthRouter(baseUrl: string): Router {
     }
   });
 
-  // Token Endpoint
+  // Token Endpoint — supports authorization_code and refresh_token grants
   router.post("/token", async (req: Request, res: Response) => {
-    const { grant_type, code, redirect_uri, client_id, client_secret, code_verifier } = req.body;
+    const { grant_type, code, redirect_uri, client_id, client_secret, code_verifier, refresh_token } = req.body;
 
-    if (grant_type !== "authorization_code") {
-      res.status(400).json({ error: "unsupported_grant_type" });
-      return;
-    }
-
-    // Validate auth code
-    const authCode = consumeAuthCode(code);
-    if (!authCode) {
-      res.status(400).json({ error: "invalid_grant" });
-      return;
-    }
-
-    // Validate client
-    const resolvedClientId = client_id || authCode.client_id;
-    const client = await getClient(resolvedClientId);
-    if (!client) {
-      res.status(401).json({ error: "invalid_client" });
-      return;
-    }
-
-    // Validate client_secret
     const ip = req.ip || (req.headers["x-forwarded-for"] as string) || null;
-    if (client_secret) {
-      const secretValid = await validateClientSecret(resolvedClientId, client_secret, ip);
-      if (!secretValid) {
-        res.status(401).json({ error: "invalid_client", error_description: "Client secret mismatch" });
+
+    // ── Grant Type: authorization_code ──
+    if (grant_type === "authorization_code") {
+      // Validate auth code
+      const authCode = consumeAuthCode(code);
+      if (!authCode) {
+        res.status(400).json({ error: "invalid_grant" });
         return;
       }
-    }
 
-    // Validate redirect_uri matches
-    if (redirect_uri && redirect_uri !== authCode.redirect_uri) {
-      res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+      // Validate client
+      const resolvedClientId = client_id || authCode.client_id;
+      const client = await getClient(resolvedClientId);
+      if (!client) {
+        res.status(401).json({ error: "invalid_client" });
+        return;
+      }
+
+      // Validate client_secret
+      if (client_secret) {
+        const secretValid = await validateClientSecret(resolvedClientId, client_secret, ip);
+        if (!secretValid) {
+          res.status(401).json({ error: "invalid_client", error_description: "Client secret mismatch" });
+          return;
+        }
+      }
+
+      // Validate redirect_uri matches
+      if (redirect_uri && redirect_uri !== authCode.redirect_uri) {
+        res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+        return;
+      }
+
+      // Validate PKCE code_verifier if code_challenge was used
+      if (authCode.code_challenge) {
+        if (!code_verifier) {
+          res.status(400).json({ error: "invalid_grant", error_description: "code_verifier required" });
+          return;
+        }
+
+        let computedChallenge: string;
+        if (authCode.code_challenge_method === "S256") {
+          computedChallenge = crypto
+            .createHash("sha256")
+            .update(code_verifier)
+            .digest("base64url");
+        } else {
+          computedChallenge = code_verifier; // plain method
+        }
+
+        if (computedChallenge !== authCode.code_challenge) {
+          res.status(400).json({ error: "invalid_grant", error_description: "code_verifier mismatch" });
+          return;
+        }
+      }
+
+      // Issue access token + refresh token
+      try {
+        const accessToken = await createAccessToken(resolvedClientId, authCode.firebase_uid, ip);
+        const refreshToken = await createRefreshToken(resolvedClientId, authCode.firebase_uid, ip);
+        res.json({
+          access_token: accessToken.access_token,
+          token_type: accessToken.token_type,
+          expires_in: accessToken.expires_in,
+          refresh_token: refreshToken.refresh_token,
+        });
+      } catch (err: any) {
+        console.error("Token creation error:", err);
+        res.status(500).json({ error: "server_error", error_description: "Token creation failed" });
+      }
       return;
     }
 
-    // Validate PKCE code_verifier if code_challenge was used
-    if (authCode.code_challenge) {
-      if (!code_verifier) {
-        res.status(400).json({ error: "invalid_grant", error_description: "code_verifier required" });
+    // ── Grant Type: refresh_token ──
+    if (grant_type === "refresh_token") {
+      if (!refresh_token) {
+        res.status(400).json({ error: "invalid_request", error_description: "refresh_token required" });
         return;
       }
 
-      let computedChallenge: string;
-      if (authCode.code_challenge_method === "S256") {
-        computedChallenge = crypto
-          .createHash("sha256")
-          .update(code_verifier)
-          .digest("base64url");
-      } else {
-        computedChallenge = code_verifier; // plain method
-      }
-
-      if (computedChallenge !== authCode.code_challenge) {
-        res.status(400).json({ error: "invalid_grant", error_description: "code_verifier mismatch" });
+      // Validate the refresh token
+      const validated = await validateRefreshToken(refresh_token, ip);
+      if (!validated) {
+        res.status(401).json({ error: "invalid_grant", error_description: "Invalid or expired refresh token" });
         return;
       }
+
+      try {
+        // Issue new access token
+        const newAccessToken = await createAccessToken(validated.clientId, validated.uid, ip);
+
+        if (validated.graceRetry) {
+          // Grace period retry: the old token was already rotated within the last 60s.
+          // Issue a new access token but DON'T re-rotate (the new refresh token was
+          // already issued on the first request). The client will either use the new
+          // refresh token from the first response, or retry again within the grace window.
+          res.json({
+            access_token: newAccessToken.access_token,
+            token_type: newAccessToken.token_type,
+            expires_in: newAccessToken.expires_in,
+            refresh_token: refresh_token, // Return the same (old) refresh token
+          });
+        } else {
+          // Normal flow: rotate the refresh token
+          const newRefreshToken = await rotateRefreshToken(
+            validated.tokenHash,
+            validated.uid,
+            validated.clientId,
+            ip
+          );
+
+          res.json({
+            access_token: newAccessToken.access_token,
+            token_type: newAccessToken.token_type,
+            expires_in: newAccessToken.expires_in,
+            refresh_token: newRefreshToken.refresh_token,
+          });
+        }
+      } catch (err: any) {
+        console.error("Refresh token rotation error:", err);
+        res.status(500).json({ error: "server_error", error_description: "Token refresh failed" });
+      }
+      return;
     }
 
-    // Issue access token — carries the user's Firebase UID from the auth code
-    try {
-      const token = await createAccessToken(resolvedClientId, authCode.firebase_uid, ip);
-      res.json(token);
-    } catch (err: any) {
-      console.error("Token creation error:", err);
-      res.status(500).json({ error: "server_error", error_description: "Token creation failed" });
-    }
+    // Unsupported grant type
+    res.status(400).json({ error: "unsupported_grant_type" });
   });
 
-  // Token Revocation (RFC 7009)
+  // Token Revocation (RFC 7009) — handles both access and refresh tokens
   router.post("/revoke", async (req: Request, res: Response) => {
     const { token } = req.body;
 
@@ -462,14 +527,28 @@ export function createOAuthRouter(baseUrl: string): Router {
 
     try {
       const tokenHash = hashToken(token);
-      // Look up the token to find the UID
-      const { getTokenIndexEntryRef } = await import("../firebase.js");
-      const snapshot = await getTokenIndexEntryRef(tokenHash).once("value");
-      const data = snapshot.val();
 
-      if (data) {
-        await revokeToken(tokenHash, data.uid);
+      // Try access token index first
+      const { getTokenIndexEntryRef, getRefreshTokenIndexEntryRef } = await import("../firebase.js");
+      const accessSnapshot = await getTokenIndexEntryRef(tokenHash).once("value");
+      const accessData = accessSnapshot.val();
+
+      if (accessData) {
+        await revokeToken(tokenHash, accessData.uid);
+        res.sendStatus(200);
+        return;
       }
+
+      // Not an access token — try refresh token index
+      const refreshSnapshot = await getRefreshTokenIndexEntryRef(tokenHash).once("value");
+      const refreshData = refreshSnapshot.val();
+
+      if (refreshData) {
+        await revokeRefreshToken(tokenHash, refreshData.uid);
+        res.sendStatus(200);
+        return;
+      }
+
       // RFC 7009: always return 200 even if token not found
       res.sendStatus(200);
     } catch (err: any) {

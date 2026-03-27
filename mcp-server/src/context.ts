@@ -24,6 +24,7 @@ export interface RequestContext {
   serverSentTotal?: number; // Server-tracked sum of _responseSize for this session (from Firebase + pending)
   interactionTotal?: number; // Server-tracked sum of turnDelta for this session (from Firebase + pending)
   turnDelta?: number; // Surface-reported characters consumed since last MCP call (from turnDelta tool param)
+  contextEstimateAbsolute?: number; // Absolute context window usage (from contextEstimate param — NOT a delta)
   pendingMessages?: PendingMessagesInfo | null; // Cached per-request for piggyback notifications (null = checked, none found)
   suppressPiggyback?: boolean; // Set by document(receive) to avoid redundant info
   signals?: string[] | null; // Cached per-request computed signal codes (null = computed, none active)
@@ -151,6 +152,19 @@ export function setInitiatorExplicit(explicit: boolean): void {
   const ctx = requestContext.getStore();
   if (ctx) {
     ctx.initiatorExplicit = explicit;
+  }
+}
+
+// Get the absolute context estimate (if contextEstimate was used instead of turnDelta)
+export function getContextEstimateAbsolute(): number | undefined {
+  return requestContext.getStore()?.contextEstimateAbsolute;
+}
+
+// Set the absolute context estimate
+export function setContextEstimateAbsolute(estimate: number): void {
+  const ctx = requestContext.getStore();
+  if (ctx) {
+    ctx.contextEstimateAbsolute = estimate;
   }
 }
 

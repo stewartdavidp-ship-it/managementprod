@@ -164,6 +164,7 @@ gcloud run deploy "$SERVICE" \
   --set-env-vars="NODE_ENV=production,BASE_URL=${BASE_URL},FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}" \
   --set-secrets="GITHUB_TOKEN=GITHUB_TOKEN:latest" \
   --memory=256Mi \
+  --cpu-throttling \
   --timeout=60 \
   --min-instances=0 \
   --max-instances=$MAX_INSTANCES

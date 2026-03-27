@@ -874,10 +874,10 @@ All Firebase `.on('value')` listeners in the CC browser app are bounded by `limi
 
 ### Write Debouncing
 
-The `contextEstimate` field on sessions is updated via a debounce pattern:
-- Every MCP response size is accumulated in an in-memory `pendingContextIncrements` Map
-- A timer flushes the accumulated value to Firebase every 30 seconds
-- This replaces per-call read+write that was a significant bandwidth driver
+Context tracking uses two accumulation strategies depending on the parameter:
+- **`turnDelta`** (delta semantics): Accumulated in an in-memory `pendingContextIncrements` Map keyed by `uid:surface`. A timer flushes to Firebase every 30 seconds. This replaces per-call read+write that was a significant bandwidth driver.
+- **`contextEstimate`** (absolute semantics): Written directly to Firebase via `setInteractionAbsolute()`. Not batched — the value IS the interaction total, not a delta to add. This is critical: accumulating absolute values caused a bug where Chat hit "imminent" zone at startup (562K computed from summing 15K+35K+71K+... instead of using 76K).
+- **`serverSent`** always uses the debounce/batch pattern regardless of which client parameter is used.
 
 ### Anti-Polling Rules
 

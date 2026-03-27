@@ -291,7 +291,12 @@ Actions:
         const data = snapshot.val();
         if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
-        let docs: any[] = Object.values(data);
+        // Use Object.entries to preserve Firebase keys as fallback IDs
+        // (job notifications created before v8.x didn't set msg.id)
+        let docs: any[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+          ...(val as Record<string, any>),
+          id: (val as any).id || key,
+        }));
 
         // Lazy-delete: find and remove expired TTL documents
         const expiredIds: string[] = [];
@@ -635,10 +640,14 @@ Actions:
         const data = snapshot.val();
         if (!data) return withResponseSize({ content: [{ type: "text", text: JSON.stringify([], null, 2) }] });
 
-        let msgs: any[] = Object.values(data);
+        // Preserve Firebase keys as fallback IDs for legacy messages
+        let msgs: any[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+          ...(val as Record<string, any>),
+          id: (val as any).id || key,
+        }));
         msgs = msgs.filter((d) =>
           d.type === "message" &&
-          d.metadata?.to === recipient
+          (d.metadata?.to === recipient || d.to === recipient)
         );
 
         // Oldest first (chronological order for reading)

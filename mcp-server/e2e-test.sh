@@ -144,6 +144,47 @@ assert_not_empty() {
   fi
 }
 
+# ── Emergency cleanup on unexpected exit ──────────────────────
+# When tests fail (set -e), sweep for orphaned E2E test artifacts
+TEARDOWN_RAN=false
+emergency_cleanup() {
+  if [ "$TEARDOWN_RAN" = "true" ]; then
+    return
+  fi
+  echo ""
+  echo "⚠️  Test run interrupted — running emergency cleanup..."
+  echo ""
+  # Sweep draft and active E2E jobs
+  for sweep_status in draft active; do
+    RAW=$(call_tool "job" "{\"action\":\"list\",\"status\":\"$sweep_status\",\"limit\":50}" 2>/dev/null) || true
+    TEXT=$(get_text "$RAW" 2>/dev/null) || true
+    echo "$TEXT" | python3 -c "
+import json,sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.exit(0)
+jobs = d.get('items', [])
+for j in jobs:
+    title = j.get('title','')
+    appId = j.get('appId','')
+    if 'E2E' in title or appId.startswith('e2e-test-'):
+        print(j['id'])
+" 2>/dev/null | while read -r orphan_id; do
+      if [ "$sweep_status" = "active" ]; then
+        call_tool "job" "{\"action\":\"complete\",\"jobId\":\"$orphan_id\",\"status\":\"abandoned\",\"summary\":\"E2E emergency cleanup\"}" > /dev/null 2>&1 || true
+      fi
+      call_tool "job" "{\"action\":\"delete\",\"jobId\":\"$orphan_id\"}" > /dev/null 2>&1 || true
+      echo "  🧹 Emergency cleanup: $sweep_status job $orphan_id"
+    done
+  done
+  echo "  Emergency cleanup complete."
+}
+trap emergency_cleanup EXIT
+
 echo "═══════════════════════════════════════════════════════════"
 echo "  CC MCP Server — End-to-End Test Suite"
 echo "═══════════════════════════════════════════════════════════"
@@ -1668,6 +1709,27 @@ for j in jobs:
   echo "  Cleaned up orphaned active job: $orphan_id"
 done
 
+# Cleanup: delete any leftover draft E2E test jobs from previous runs
+RAW=$(call_tool "job" "{\"action\":\"list\",\"status\":\"draft\",\"limit\":50}")
+TEXT=$(get_text "$RAW")
+echo "$TEXT" | python3 -c "
+import json,sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.exit(0)
+jobs = d.get('items', [])
+for j in jobs:
+    if 'E2E' in j.get('title','') or j.get('appId','').startswith('e2e-test-'):
+        print(j['id'])
+" 2>/dev/null | while read -r orphan_id; do
+  call_tool "job" "{\"action\":\"delete\",\"jobId\":\"$orphan_id\"}" > /dev/null
+  echo "  Cleaned up orphaned draft job: $orphan_id"
+done
+
 # Test 1: Create draft job with instructions and attachments (createdBy=claude-chat → draft)
 RAW=$(call_tool "job" "{\"action\":\"start\",\"appId\":\"$P15_APP_ID\",\"title\":\"E2E Draft Job - Work Order\",\"createdBy\":\"claude-chat\",\"jobType\":\"build\",\"instructions\":\"Build the widget feature. See attached CLAUDE.md for details.\",\"attachments\":\"[{\\\"type\\\":\\\"claude-md\\\",\\\"label\\\":\\\"CLAUDE.md\\\",\\\"content\\\":\\\"# Test CLAUDE.md\\\\nBuild the widget.\\\",\\\"targetPath\\\":\\\"CLAUDE.md\\\",\\\"action\\\":\\\"write\\\"},{\\\"type\\\":\\\"context\\\",\\\"label\\\":\\\"Current state\\\",\\\"content\\\":\\\"No widget exists yet.\\\",\\\"action\\\":\\\"reference\\\"}]\",\"conceptSnapshot\":\"{\\\"rules\\\":[\\\"E2E rule 1\\\"],\\\"constraints\\\":[\\\"E2E constraint 1\\\"],\\\"decisions\\\":[\\\"E2E decision 1\\\"],\\\"opens\\\":[\\\"E2E open 1\\\"]}\"}")
 TEXT=$(get_text "$RAW")
@@ -2011,10 +2073,11 @@ assert "per-surface _contextHealth.serverSentTotal > 0" "true" "$CTX_INCREASED"
 # Cleanup
 call_tool "session" "{\"action\":\"complete\",\"sessionId\":\"$CTX_SESSION_ID\",\"summary\":\"context tracking test done\"}" > /dev/null
 
-# Cleanup: complete remaining active jobs
+# Cleanup: complete remaining active jobs and delete remaining drafts
 call_tool "job" "{\"action\":\"complete\",\"jobId\":\"$MAINT_JOB_ID\",\"status\":\"completed\",\"summary\":\"E2E cleanup\"}" > /dev/null
 call_tool "job" "{\"action\":\"complete\",\"jobId\":\"$BC_JOB_ID\",\"status\":\"completed\",\"summary\":\"E2E cleanup\"}" > /dev/null
-# DRAFT2 is still in draft status — just leave it (no cleanup needed for drafts)
+# DRAFT2 is still in draft status — delete it so drafts don't accumulate
+call_tool "job" "{\"action\":\"delete\",\"jobId\":\"$DRAFT2_JOB_ID\"}" > /dev/null
 
 echo ""
 
@@ -2646,6 +2709,9 @@ echo "── Phase 21: Teardown — Delete All Test Data ───────�
 # ═══════════════════════════════════════════════════════════════
 echo ""
 
+# Mark teardown as running so EXIT trap doesn't double-fire
+TEARDOWN_RAN=true
+
 # Collect all IDs created during the test run
 TEARDOWN_PASS=0
 TEARDOWN_FAIL=0
@@ -2711,6 +2777,36 @@ delete_entity "job" "jobId" "$DRAFT2_JOB_ID" "job DRAFT2_JOB"
 delete_entity "job" "jobId" "$MAINT_JOB_ID" "job MAINT_JOB"
 delete_entity "job" "jobId" "$BC_JOB_ID" "job BC_JOB"
 delete_entity "job" "jobId" "$LIFECYCLE_JOB_ID" "job LIFECYCLE_JOB"
+
+# Sweep: catch any remaining E2E test jobs that weren't tracked by variable
+echo "  Sweeping for orphaned E2E jobs..."
+for sweep_status in draft active; do
+  RAW=$(call_tool "job" "{\"action\":\"list\",\"status\":\"$sweep_status\",\"limit\":50}")
+  TEXT=$(get_text "$RAW")
+  echo "$TEXT" | python3 -c "
+import json,sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.exit(0)
+jobs = d.get('items', [])
+for j in jobs:
+    title = j.get('title','')
+    appId = j.get('appId','')
+    if 'E2E' in title or appId.startswith('e2e-test-'):
+        print(j['id'] + ' ' + sweep_status)
+" 2>/dev/null | while read -r sweep_id sweep_st; do
+    if [ "$sweep_st" = "active" ]; then
+      call_tool "job" "{\"action\":\"complete\",\"jobId\":\"$sweep_id\",\"status\":\"abandoned\",\"summary\":\"E2E teardown sweep\"}" > /dev/null
+    fi
+    call_tool "job" "{\"action\":\"delete\",\"jobId\":\"$sweep_id\"}" > /dev/null
+    echo "    🧹 Swept orphan $sweep_st job: $sweep_id"
+    TEARDOWN_PASS=$((TEARDOWN_PASS + 1))
+  done
+done
 
 echo ""
 echo "  Deleting ideas..."

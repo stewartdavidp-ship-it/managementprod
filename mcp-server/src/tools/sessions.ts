@@ -761,6 +761,30 @@ export async function incrementInteractionTotal(uid: string, turnDelta: number, 
   }
 }
 
+// Set interactionTotal to an absolute value (called when contextEstimate is used instead of turnDelta).
+// contextEstimate has absolute semantics — it IS the interaction total, not a delta to add.
+// This replaces any accumulated value in Firebase with the absolute value.
+export async function setInteractionAbsolute(uid: string, absolute: number, surface: string): Promise<void> {
+  try {
+    const sessionId = activeSessionCache.get(uid);
+    if (!sessionId) return;
+
+    // Clear any pending interaction accumulation for this surface
+    const key = pendingKey(uid, surface);
+    const existing = pendingContextIncrements.get(key);
+    if (existing) {
+      existing.interactionAccum = 0;
+      // Don't clear timer — serverSentAccum may still need flushing
+    }
+
+    // Write absolute value directly to Firebase
+    const surfacePath = `contextBySurface/${surface}`;
+    await getSessionRef(uid, sessionId).child(`${surfacePath}/interaction`).set(absolute);
+  } catch {
+    // Fire-and-forget — never block or throw
+  }
+}
+
 // Reset a surface's context counters (called on bootstrap = new conversation)
 export async function resetSurfaceContext(uid: string, sessionId: string, surface: string): Promise<void> {
   try {

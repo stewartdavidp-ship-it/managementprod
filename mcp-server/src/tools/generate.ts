@@ -14,7 +14,9 @@ export function registerGenerateTools(server: McpServer): void {
     `CLAUDE.md generation, storage, and delivery tool. Actions:
   - "generate" (default): Generate a CLAUDE.md from active ODRC concepts, persist to Firebase, and return the markdown. Requires appId, appName. Optional: appDescription.
   - "push": Same as generate, but ALSO queues the document for delivery to Claude Code. Claude Code picks it up and writes it to the local repo. Requires appId, appName. Optional: appDescription.
-  - "get": Retrieve the last stored CLAUDE.md for an app. Requires appId.`,
+  - "get": Retrieve the last stored CLAUDE.md for an app. Requires appId.
+
+Content: app identity, current idea, active RULEs, and active CONSTRAINTs. DECISIONs and OPENs are excluded — available on-demand via list_concepts and get_active_concepts.`,
     {
       ...INITIATOR_PARAM,
       action: z.enum(["generate", "push", "get"]).optional().describe("Action: generate (default), push (generate + queue for Claude Code delivery), or get (retrieve stored)."),
@@ -99,30 +101,34 @@ export function registerGenerateTools(server: McpServer): void {
         ideaNameMap[idea.id] = idea.name;
       }
 
-      // Group by type
-      const rules = appConcepts.filter((c) => c.type === "RULE");
+      // Group by type — CLAUDE.md only includes RULEs and CONSTRAINTs.
+      // DECISIONs and OPENs are available on-demand via MCP tools (list_concepts, get_active_concepts)
+      // and add noise without value in the startup context file.
+      const rules = appConcepts.filter(
+        (c) => c.type === "RULE" && !(c.scopeTags || []).includes("guidance-only")
+      );
       const constraints = appConcepts.filter((c) => c.type === "CONSTRAINT");
-      // DECISIONs: current idea only (per CLAUDE.md spec)
+      // Still count DECISIONs/OPENs for the metadata record (conceptCount)
       const decisions = latestIdea
         ? appConcepts.filter((c) => c.type === "DECISION" && c.ideaOrigin === latestIdea.id)
         : [];
       const opens = appConcepts.filter((c) => c.type === "OPEN");
 
-      // Assemble CLAUDE.md
+      // Assemble CLAUDE.md — stable ambient context: identity, rules, constraints
       const lines: string[] = [];
 
       lines.push(`# CLAUDE.md — ${appName}`);
       lines.push("");
 
-      lines.push("## What This App Is");
-      lines.push(appDescription || "(No description provided)");
-      lines.push("");
+      if (appDescription) {
+        lines.push("## What This App Is");
+        lines.push(appDescription);
+        lines.push("");
+      }
 
       if (latestIdea) {
-        lines.push("## Current Build Objective");
-        lines.push(`**${latestIdea.name}**`);
-        lines.push("");
-        lines.push(latestIdea.description || "");
+        lines.push("## Current Idea");
+        lines.push(`**${latestIdea.name}** — ${latestIdea.description || "(no description)"}`);
         lines.push("");
       }
 
@@ -146,29 +152,6 @@ export function registerGenerateTools(server: McpServer): void {
         for (const c of constraints) {
           const origin = ideaNameMap[c.ideaOrigin] || c.ideaOrigin;
           lines.push(`- ${c.content} _(from: ${origin})_`);
-        }
-      }
-      lines.push("");
-
-      lines.push("## DECISIONs — Current direction for this phase.");
-      lines.push("");
-      if (decisions.length === 0) {
-        lines.push("(No active DECISIONs for current idea)");
-      } else {
-        for (const d of decisions) {
-          lines.push(`- ${d.content}`);
-        }
-      }
-      lines.push("");
-
-      lines.push("## OPENs — Unresolved. Flag if you encounter these during build.");
-      lines.push("");
-      if (opens.length === 0) {
-        lines.push("(No unresolved OPENs)");
-      } else {
-        for (const o of opens) {
-          const origin = ideaNameMap[o.ideaOrigin] || o.ideaOrigin;
-          lines.push(`- ${o.content} _(from: ${origin})_`);
         }
       }
       lines.push("");

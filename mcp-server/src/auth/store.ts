@@ -9,6 +9,10 @@ import {
   getAuditLogRef,
   getUserTokensRef,
   getUserTokenRef,
+  getRefreshTokenIndexRef,
+  getRefreshTokenIndexEntryRef,
+  getUserRefreshTokensRef,
+  getUserRefreshTokenRef,
 } from "../firebase.js";
 
 // ─── Types ────────────────────────────────────────────────────
@@ -64,6 +68,26 @@ export interface StoredAccessToken {
   revokedAt: string | null;
 }
 
+// System-wide refresh token index entry (for O(1) lookup by hash)
+export interface RefreshTokenIndexEntry {
+  uid: string;
+  clientId: string;
+  expiresAt: number;
+  rotatedAt?: string | null; // ISO timestamp — set during rotation, kept for grace period
+}
+
+// Per-user refresh token record (for audit trail and rotation tracking)
+export interface StoredRefreshToken {
+  tokenHash: string;
+  clientId: string;
+  uid: string;
+  expiresAt: number;        // 30 days from creation
+  createdAt: string;
+  revokedAt: string | null;
+  rotatedAt: string | null;  // Set when consumed via rotation
+  replacedBy: string | null; // Hash of replacement token (audit trail)
+}
+
 // Audit log
 export type AuditEvent =
   | "client_registered"
@@ -76,7 +100,15 @@ export type AuditEvent =
   | "tokens_revoked_all"
   | "client_secret_mismatch"
   | "api_key_validated"
-  | "api_key_validation_failed";
+  | "api_key_validation_failed"
+  | "refresh_token_issued"
+  | "refresh_token_validated"
+  | "refresh_token_validation_failed"
+  | "refresh_token_rotated"
+  | "refresh_token_revoked"
+  | "refresh_token_expired"
+  | "refresh_token_reuse_detected"
+  | "refresh_token_grace_period";
 
 export interface AuditLogEntry {
   event: AuditEvent;
@@ -609,6 +641,348 @@ export function triggerCleanup(): void {
   cleanupExpiredTokens().catch((err: Error) =>
     console.error("Cleanup error:", err)
   );
+}
+
+// ─── Refresh Tokens (Firebase-backed, 30-day TTL, rotation on use) ──
+
+const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+export async function createRefreshToken(
+  clientId: string,
+  firebaseUid: string,
+  ip?: string | null
+): Promise<{ refresh_token: string; expires_in: number }> {
+  const plaintextToken = uuidv4();
+  const tokenHash = hashToken(plaintextToken);
+  const expiresAt = Date.now() + REFRESH_TOKEN_TTL;
+  const now = new Date().toISOString();
+
+  // System index entry (for O(1) lookup)
+  const indexEntry: RefreshTokenIndexEntry = {
+    uid: firebaseUid,
+    clientId,
+    expiresAt,
+  };
+
+  // Per-user record (for audit trail)
+  const userRecord: StoredRefreshToken = {
+    tokenHash,
+    clientId,
+    uid: firebaseUid,
+    expiresAt,
+    createdAt: now,
+    revokedAt: null,
+    rotatedAt: null,
+    replacedBy: null,
+  };
+
+  // Atomic multi-path write: system index + per-user record
+  const db = getDb();
+  await db.ref().update({
+    [`command-center/system/oauth/refreshTokenIndex/${tokenHash}`]: indexEntry,
+    [`command-center/${firebaseUid}/oauth/refreshTokens/${tokenHash}`]: userRecord,
+  });
+
+  writeAuditLog({
+    event: "refresh_token_issued",
+    uid: firebaseUid,
+    clientId,
+    tokenHash: auditHash(tokenHash),
+    ip: ip || null,
+    success: true,
+    detail: null,
+  });
+
+  return {
+    refresh_token: plaintextToken, // Plaintext — returned once, never stored
+    expires_in: Math.floor(REFRESH_TOKEN_TTL / 1000), // seconds
+  };
+}
+
+export async function validateRefreshToken(
+  token: string,
+  ip?: string | null
+): Promise<{ uid: string; clientId: string; tokenHash: string; graceRetry?: boolean } | undefined> {
+  const tokenHash = hashToken(token);
+
+  try {
+    const snapshot = await getRefreshTokenIndexEntryRef(tokenHash).once("value");
+    const data = snapshot.val() as RefreshTokenIndexEntry | null;
+
+    if (!data) {
+      // Token not in system index — could be already rotated (reuse attempt)
+      // Check if it exists in the user record as a rotated token
+      // We can't know the UID from just the hash without the index, so log and reject
+      writeAuditLog({
+        event: "refresh_token_validation_failed",
+        uid: null,
+        clientId: null,
+        tokenHash: auditHash(tokenHash),
+        ip: ip || null,
+        success: false,
+        detail: "not_found_in_index",
+      });
+      return undefined;
+    }
+
+    // Check if this token was already rotated (kept in index for grace period)
+    if (data.rotatedAt) {
+      const ROTATION_GRACE_MS = 60_000;
+      const rotatedAtMs = new Date(data.rotatedAt).getTime();
+      const withinGrace = Date.now() - rotatedAtMs < ROTATION_GRACE_MS;
+
+      if (withinGrace) {
+        writeAuditLog({
+          event: "refresh_token_grace_period",
+          uid: data.uid,
+          clientId: data.clientId,
+          tokenHash: auditHash(tokenHash),
+          ip: ip || null,
+          success: true,
+          detail: `rotated_${Math.round((Date.now() - rotatedAtMs) / 1000)}s_ago_grace_allowed`,
+        });
+        return { uid: data.uid, clientId: data.clientId, tokenHash, graceRetry: true };
+      }
+
+      // Outside grace — genuine reuse. Clean up index entry and revoke all.
+      getRefreshTokenIndexEntryRef(tokenHash).remove().catch(() => {});
+      writeAuditLog({
+        event: "refresh_token_reuse_detected",
+        uid: data.uid,
+        clientId: data.clientId,
+        tokenHash: auditHash(tokenHash),
+        ip: ip || null,
+        success: false,
+        detail: `rotated_${Math.round((Date.now() - rotatedAtMs) / 1000)}s_ago_reuse_revoking_all`,
+      });
+      revokeAllUserRefreshTokens(data.uid, data.clientId).catch((err) =>
+        console.error("Failed to revoke refresh tokens after reuse:", err)
+      );
+      return undefined;
+    }
+
+    // Check expiry
+    if (data.expiresAt < Date.now()) {
+      // Lazy-delete expired refresh token
+      lazyDeleteRefreshToken(tokenHash, data.uid).catch(() => {});
+
+      writeAuditLog({
+        event: "refresh_token_expired",
+        uid: data.uid,
+        clientId: data.clientId,
+        tokenHash: auditHash(tokenHash),
+        ip: ip || null,
+        success: false,
+        detail: null,
+      });
+      return undefined;
+    }
+
+    // Check if already rotated (per-user record has rotatedAt set)
+    const userSnapshot = await getUserRefreshTokenRef(data.uid, tokenHash).once("value");
+    const userRecord = userSnapshot.val() as StoredRefreshToken | null;
+
+    if (userRecord?.rotatedAt) {
+      // This shouldn't normally be reached (index-level check catches it first),
+      // but handle as a safety net — check grace period here too.
+      const ROTATION_GRACE_MS = 60_000;
+      const rotatedAtMs = new Date(userRecord.rotatedAt).getTime();
+      const withinGrace = Date.now() - rotatedAtMs < ROTATION_GRACE_MS;
+
+      if (withinGrace) {
+        writeAuditLog({
+          event: "refresh_token_grace_period",
+          uid: data.uid,
+          clientId: data.clientId,
+          tokenHash: auditHash(tokenHash),
+          ip: ip || null,
+          success: true,
+          detail: `user_record_fallback_grace_${Math.round((Date.now() - rotatedAtMs) / 1000)}s`,
+        });
+        return { uid: data.uid, clientId: data.clientId, tokenHash, graceRetry: true };
+      }
+
+      // Outside grace — genuine reuse
+      writeAuditLog({
+        event: "refresh_token_reuse_detected",
+        uid: data.uid,
+        clientId: data.clientId,
+        tokenHash: auditHash(tokenHash),
+        ip: ip || null,
+        success: false,
+        detail: `rotated_${Math.round((Date.now() - rotatedAtMs) / 1000)}s_ago_reuse_revoking_all`,
+      });
+      revokeAllUserRefreshTokens(data.uid, data.clientId).catch((err) =>
+        console.error("Failed to revoke refresh tokens after reuse:", err)
+      );
+      return undefined;
+    }
+
+    if (userRecord?.revokedAt) {
+      writeAuditLog({
+        event: "refresh_token_validation_failed",
+        uid: data.uid,
+        clientId: data.clientId,
+        tokenHash: auditHash(tokenHash),
+        ip: ip || null,
+        success: false,
+        detail: "revoked",
+      });
+      return undefined;
+    }
+
+    writeAuditLog({
+      event: "refresh_token_validated",
+      uid: data.uid,
+      clientId: data.clientId,
+      tokenHash: auditHash(tokenHash),
+      ip: ip || null,
+      success: true,
+      detail: null,
+    });
+
+    return { uid: data.uid, clientId: data.clientId, tokenHash };
+  } catch (err) {
+    console.error("Refresh token validation error:", err);
+    return undefined;
+  }
+}
+
+export async function rotateRefreshToken(
+  oldTokenHash: string,
+  uid: string,
+  clientId: string,
+  ip?: string | null
+): Promise<{ refresh_token: string; expires_in: number }> {
+  // Create the new refresh token first to get its hash
+  const newPlaintextToken = uuidv4();
+  const newTokenHash = hashToken(newPlaintextToken);
+  const expiresAt = Date.now() + REFRESH_TOKEN_TTL;
+  const now = new Date().toISOString();
+
+  const newIndexEntry: RefreshTokenIndexEntry = {
+    uid,
+    clientId,
+    expiresAt,
+  };
+
+  const newUserRecord: StoredRefreshToken = {
+    tokenHash: newTokenHash,
+    clientId,
+    uid,
+    expiresAt,
+    createdAt: now,
+    revokedAt: null,
+    rotatedAt: null,
+    replacedBy: null,
+  };
+
+  // Atomic multi-path write:
+  // 1. Mark old token as rotated in system index (keep for grace period)
+  // 2. Mark old token as rotated in per-user record
+  // 3. Create new token in system index
+  // 4. Create new token in per-user record
+  const db = getDb();
+  await db.ref().update({
+    // Old token: mark rotated in index (NOT deleted — kept for 60s grace period)
+    [`command-center/system/oauth/refreshTokenIndex/${oldTokenHash}/rotatedAt`]: now,
+    [`command-center/${uid}/oauth/refreshTokens/${oldTokenHash}/rotatedAt`]: now,
+    [`command-center/${uid}/oauth/refreshTokens/${oldTokenHash}/replacedBy`]: auditHash(newTokenHash),
+    // New token: create
+    [`command-center/system/oauth/refreshTokenIndex/${newTokenHash}`]: newIndexEntry,
+    [`command-center/${uid}/oauth/refreshTokens/${newTokenHash}`]: newUserRecord,
+  });
+
+  writeAuditLog({
+    event: "refresh_token_rotated",
+    uid,
+    clientId,
+    tokenHash: auditHash(oldTokenHash),
+    ip: ip || null,
+    success: true,
+    detail: `replaced_by:${auditHash(newTokenHash)}`,
+  });
+
+  return {
+    refresh_token: newPlaintextToken,
+    expires_in: Math.floor(REFRESH_TOKEN_TTL / 1000),
+  };
+}
+
+export async function revokeRefreshToken(
+  tokenHash: string,
+  uid: string
+): Promise<void> {
+  const db = getDb();
+
+  // Delete from system index, mark revoked in per-user record
+  await db.ref().update({
+    [`command-center/system/oauth/refreshTokenIndex/${tokenHash}`]: null,
+    [`command-center/${uid}/oauth/refreshTokens/${tokenHash}/revokedAt`]:
+      new Date().toISOString(),
+  });
+
+  writeAuditLog({
+    event: "refresh_token_revoked",
+    uid,
+    clientId: null,
+    tokenHash: auditHash(tokenHash),
+    ip: null,
+    success: true,
+    detail: null,
+  });
+}
+
+async function revokeAllUserRefreshTokens(
+  uid: string,
+  clientId: string
+): Promise<number> {
+  const snapshot = await getUserRefreshTokensRef(uid).once("value");
+  const data = snapshot.val() as Record<string, StoredRefreshToken> | null;
+  if (!data) return 0;
+
+  const now = new Date().toISOString();
+  const updates: Record<string, any> = {};
+  let count = 0;
+
+  for (const [hash, record] of Object.entries(data)) {
+    // Only revoke tokens for the same client that haven't been revoked
+    if (record.clientId !== clientId) continue;
+    if (record.revokedAt) continue;
+
+    // Delete from system index
+    updates[`command-center/system/oauth/refreshTokenIndex/${hash}`] = null;
+    // Mark revoked in per-user record
+    updates[`command-center/${uid}/oauth/refreshTokens/${hash}/revokedAt`] = now;
+    count++;
+  }
+
+  if (count > 0) {
+    await getDb().ref().update(updates);
+  }
+
+  writeAuditLog({
+    event: "refresh_token_revoked",
+    uid,
+    clientId,
+    tokenHash: null,
+    ip: null,
+    success: true,
+    detail: `${count} refresh tokens revoked (reuse detection)`,
+  });
+
+  return count;
+}
+
+async function lazyDeleteRefreshToken(
+  tokenHash: string,
+  uid: string
+): Promise<void> {
+  const db = getDb();
+  await db.ref().update({
+    [`command-center/system/oauth/refreshTokenIndex/${tokenHash}`]: null,
+    [`command-center/${uid}/oauth/refreshTokens/${tokenHash}`]: null,
+  });
 }
 
 // ─── API Key Validation (unchanged logic, added audit) ────────

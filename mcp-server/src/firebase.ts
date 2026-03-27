@@ -192,6 +192,23 @@ export function getUserTokenRef(uid: string, tokenHash: string) {
   return db.ref(`command-center/${uid}/oauth/tokens/${tokenHash}`);
 }
 
+// ─── Refresh Token refs (system-wide + per-user) ───
+export function getRefreshTokenIndexRef() {
+  return db.ref("command-center/system/oauth/refreshTokenIndex");
+}
+
+export function getRefreshTokenIndexEntryRef(tokenHash: string) {
+  return db.ref(`command-center/system/oauth/refreshTokenIndex/${tokenHash}`);
+}
+
+export function getUserRefreshTokensRef(uid: string) {
+  return db.ref(`command-center/${uid}/oauth/refreshTokens`);
+}
+
+export function getUserRefreshTokenRef(uid: string, tokenHash: string) {
+  return db.ref(`command-center/${uid}/oauth/refreshTokens/${tokenHash}`);
+}
+
 export function getDb(): admin.database.Database {
   return db;
 }

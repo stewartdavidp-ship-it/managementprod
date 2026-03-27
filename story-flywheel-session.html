@@ -1,0 +1,152 @@
+<!--
+  STORY: The Flywheel Session
+  Drop this section into landing-page.html between the videos and CTA sections.
+  Also needs the "Stories" nav link and CSS additions below.
+
+  NAV LINK TO ADD:
+  <li><a href="#stories">Stories</a></li>
+
+  CSS TO ADD (append to existing <style> block):
+-->
+
+<!--
+ADDITIONAL CSS — append to landing-page.html <style> block:
+
+.stories{padding-top:4rem;padding-bottom:8rem}
+.story-card{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:20px;overflow:hidden;margin-top:4rem}
+.story-card:hover{border-color:var(--border-medium)}
+.story-header{padding:3rem 3rem 0;border-bottom:1px solid var(--border-subtle);padding-bottom:2.5rem}
+.story-eyebrow{display:inline-flex;align-items:center;gap:.5rem;font-family:var(--font-mono);font-size:.7rem;color:var(--accent-amber);letter-spacing:.06em;text-transform:uppercase;margin-bottom:1.25rem}
+.story-eyebrow::before{content:'';width:8px;height:1px;background:var(--accent-amber)}
+.story-header h3{font-family:var(--font-display);font-size:clamp(1.5rem,3vw,2.25rem);font-weight:400;line-height:1.2;letter-spacing:-.02em;margin-bottom:.75rem}
+.story-header-sub{color:var(--text-secondary);font-size:.95rem;line-height:1.7;max-width:640px}
+.story-timeline{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--border-subtle)}
+.story-phase{padding:2.25rem 2rem;position:relative}
+.story-phase:not(:last-child){border-right:1px solid var(--border-subtle)}
+.story-phase-verb{font-family:var(--font-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.35rem}
+.story-phase:nth-child(1) .story-phase-verb{color:var(--accent-blue)}
+.story-phase:nth-child(2) .story-phase-verb{color:var(--accent-purple)}
+.story-phase:nth-child(3) .story-phase-verb{color:var(--accent-teal)}
+.story-phase:nth-child(4) .story-phase-verb{color:var(--accent-amber)}
+.story-phase-title{font-family:var(--font-display);font-size:1.15rem;font-weight:400;margin-bottom:.65rem}
+.story-phase p{color:var(--text-secondary);font-size:.85rem;line-height:1.65}
+.story-phase-quote{margin-top:1rem;padding:.75rem 1rem;background:rgba(255,255,255,0.03);border-left:2px solid var(--border-medium);border-radius:0 8px 8px 0;font-size:.8rem;color:var(--text-secondary);font-style:italic;line-height:1.6}
+.story-phase:nth-child(1) .story-phase-quote{border-left-color:var(--accent-blue)}
+.story-phase:nth-child(2) .story-phase-quote{border-left-color:var(--accent-purple)}
+.story-phase:nth-child(3) .story-phase-quote{border-left-color:var(--accent-teal)}
+.story-phase:nth-child(4) .story-phase-quote{border-left-color:var(--accent-amber)}
+.story-result{padding:2.25rem 3rem;display:grid;grid-template-columns:1fr auto;gap:3rem;align-items:center}
+.story-result-text h4{font-family:var(--font-display);font-size:1.25rem;font-weight:400;margin-bottom:.5rem}
+.story-result-text p{color:var(--text-secondary);font-size:.9rem;line-height:1.7;max-width:520px}
+.story-scorecard{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem}
+.scorecard-item{background:var(--bg-deep);border:1px solid var(--border-subtle);border-radius:10px;padding:1rem;text-align:center;min-width:80px}
+.scorecard-number{font-family:var(--font-mono);font-size:1.5rem;font-weight:600;margin-bottom:.25rem}
+.story-phase:nth-child(1) .scorecard-number,.scorecard-item:nth-child(1) .scorecard-number{color:var(--accent-blue)}
+.scorecard-item:nth-child(2) .scorecard-number{color:var(--accent-purple)}
+.scorecard-item:nth-child(3) .scorecard-number{color:var(--accent-teal)}
+.scorecard-item:nth-child(4) .scorecard-number{color:var(--accent-amber)}
+.scorecard-label{font-family:var(--font-mono);font-size:.65rem;color:var(--text-tertiary);letter-spacing:.04em;text-transform:uppercase}
+.story-arrow{display:flex;align-items:center;gap:.25rem;margin:0 .15rem}
+.story-arrow-line{width:20px;height:1px;background:var(--border-medium)}
+.story-arrow-head{width:0;height:0;border-top:3px solid transparent;border-bottom:3px solid transparent;border-left:5px solid var(--border-medium)}
+.story-flywheel-visual{display:flex;align-items:center;justify-content:center;gap:.5rem;padding:1.5rem 3rem;border-top:1px solid var(--border-subtle);background:rgba(255,255,255,0.01)}
+.flywheel-step{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.04em;padding:.4rem .8rem;border-radius:6px;border:1px solid var(--border-subtle)}
+.flywheel-step:nth-child(1){color:var(--accent-blue);border-color:rgba(77,124,255,0.2)}
+.flywheel-step:nth-child(3){color:var(--accent-purple);border-color:rgba(139,92,246,0.2)}
+.flywheel-step:nth-child(5){color:var(--accent-teal);border-color:rgba(45,212,191,0.2)}
+.flywheel-step:nth-child(7){color:var(--accent-amber);border-color:rgba(232,168,56,0.2)}
+
+@media(max-width:900px){
+  .story-timeline{grid-template-columns:1fr}
+  .story-phase:not(:last-child){border-right:none;border-bottom:1px solid var(--border-subtle)}
+  .story-result{grid-template-columns:1fr;gap:2rem}
+  .story-scorecard{grid-template-columns:repeat(4,1fr)}
+  .story-header{padding:2rem 1.75rem 1.75rem}
+  .story-result{padding:2rem 1.75rem}
+  .story-flywheel-visual{padding:1.25rem 1.75rem;flex-wrap:wrap}
+}
+-->
+
+<section class="stories" id="stories">
+  <div class="section-inner">
+    <div class="reveal">
+      <div class="section-label">Stories</div>
+      <h2 class="section-heading">Watch an idea take shape<br>in <em>real time.</em></h2>
+      <p class="section-sub">Not theory. A real session. One question became a platform architecture in 30 minutes — and every decision survived to the next session.</p>
+    </div>
+
+    <div class="story-card reveal">
+      <div class="story-header">
+        <div class="story-eyebrow">Session #47 — Surface Expansion</div>
+        <h3>A simple research review turned into a<br>system architecture. Here's how.</h3>
+        <p class="story-header-sub">The developer sat down to review AI platform research. Thirty minutes later, they'd designed a surface intelligence system with task routing, user profiling, and crowd-sourced recommendations. Every insight was captured. Nothing was lost.</p>
+      </div>
+
+      <div class="story-timeline">
+        <div class="story-phase">
+          <div class="story-phase-verb">Shape</div>
+          <div class="story-phase-title">The question behind the question</div>
+          <p>Research showed which AI platforms could connect via MCP. But the developer pushed past compatibility and asked the question nobody had considered.</p>
+          <div class="story-phase-quote">"They may support MCP, but how do they support skills? Would we need to rewrite skills per engine?"</div>
+        </div>
+
+        <div class="story-phase">
+          <div class="story-phase-verb">Challenge</div>
+          <div class="story-phase-title">One observation, two dimensions</div>
+          <p>The proposed solution used separate parameters for surface and engine. The developer saw that the existing naming convention already encoded both — and collapsed two params into one.</p>
+          <div class="story-phase-quote">"Today we do claude-code, claude-chat. Why not just do cursor-claude?"</div>
+        </div>
+
+        <div class="story-phase">
+          <div class="story-phase-verb">Capture</div>
+          <div class="story-phase-title">The architecture emerges</div>
+          <p>That naming decision triggered a bigger need: if tools adapt per surface, where does the configuration live? The answer — a surface registry — became the architectural centerpiece.</p>
+          <div class="story-phase-quote">"Create a surface object that tracks what a surface can and cannot do. Let the tools read it."</div>
+        </div>
+
+        <div class="story-phase">
+          <div class="story-phase-verb">Refine</div>
+          <div class="story-phase-title">Three layers of intelligence</div>
+          <p>Each captured decision enabled the next. The registry enabled task routing. Task routing enabled user profiling. User profiling enabled crowd-sourced recommendations across platforms.</p>
+          <div class="story-phase-quote">"Add user subscriptions and actual usage data. Over time this becomes crowd-sourced."</div>
+        </div>
+      </div>
+
+      <div class="story-result">
+        <div class="story-result-text">
+          <h4>The session ended. The thinking didn't.</h4>
+          <p>Every decision, constraint, and open question was captured as a first-class object. The next session — on any surface, with any AI — picks up exactly where this one left off. No re-explaining. No lost context. No relitigating.</p>
+        </div>
+        <div class="story-scorecard">
+          <div class="scorecard-item">
+            <div class="scorecard-number">9</div>
+            <div class="scorecard-label">Decisions</div>
+          </div>
+          <div class="scorecard-item">
+            <div class="scorecard-number">7</div>
+            <div class="scorecard-label">Constraints</div>
+          </div>
+          <div class="scorecard-item">
+            <div class="scorecard-number">9</div>
+            <div class="scorecard-label">Opens</div>
+          </div>
+          <div class="scorecard-item">
+            <div class="scorecard-number">1</div>
+            <div class="scorecard-label">Rule</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="story-flywheel-visual">
+        <div class="flywheel-step">Shape</div>
+        <div class="story-arrow"><div class="story-arrow-line"></div><div class="story-arrow-head"></div></div>
+        <div class="flywheel-step">Challenge</div>
+        <div class="story-arrow"><div class="story-arrow-line"></div><div class="story-arrow-head"></div></div>
+        <div class="flywheel-step">Capture</div>
+        <div class="story-arrow"><div class="story-arrow-line"></div><div class="story-arrow-head"></div></div>
+        <div class="flywheel-step">Refine</div>
+      </div>
+    </div>
+
+  </div>
+</section>
