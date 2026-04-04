@@ -16352,7 +16352,8 @@ The developer uses Claude for iterative development — each session should:
         };
         
         const handleClearFirebase = async () => {
-            if (!window.confirm('Are you sure you want to clear ALL Command Center data from Firebase?\n\nThis cannot be undone. Your local data will remain intact.')) {
+            const confirmed = await showConfirm('Are you sure you want to clear ALL Command Center data from Firebase?\n\nThis cannot be undone. Your local data will remain intact.', '⚠️ Clear Firebase Data');
+            if (!confirmed) {
                 return;
             }
             setSyncAction('clearing');
@@ -16520,7 +16521,8 @@ The developer uses Claude for iterative development — each session should:
                                                         <option value="viewer">Viewer</option>
                                                     </select>
                                                     <button onClick={async () => {
-                                                        if (window.confirm(`Remove ${member.name || member.email} from team?`)) {
+                                                        const confirmed = await showConfirm(`Remove ${member.name || member.email} from team?`, 'Remove Team Member');
+                                                        if (confirmed) {
                                                             try { await TeamService.remove(firebaseUid, member.uid); }
                                                             catch (err) { console.error('[Team] Remove failed:', err); }
                                                         }
