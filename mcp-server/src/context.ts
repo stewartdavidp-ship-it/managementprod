@@ -30,6 +30,7 @@ export interface RequestContext {
   signals?: string[] | null; // Cached per-request computed signal codes (null = computed, none active)
   toolName?: string; // Tool name being called (e.g., "session", "app", "concept")
   initiatorExplicit?: boolean; // True when initiator was set via explicit `initiator` param (not inferred from createdBy)
+  contextCeiling?: number; // Per-surface context ceiling in CHARS (derived from surface registry tokens × CHARS_PER_TOKEN)
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -191,5 +192,19 @@ export function setSignals(signals: string[] | null): void {
   const ctx = requestContext.getStore();
   if (ctx) {
     ctx.signals = signals;
+  }
+}
+
+// Get the per-surface context ceiling (chars) for this request.
+// Populated per-request from surface-registry in index.ts; falls back to a default if not loaded.
+export function getContextCeiling(): number | undefined {
+  return requestContext.getStore()?.contextCeiling;
+}
+
+// Set the per-surface context ceiling (chars) for this request (called once per request in index.ts).
+export function setContextCeiling(ceiling: number): void {
+  const ctx = requestContext.getStore();
+  if (ctx) {
+    ctx.contextCeiling = ceiling;
   }
 }

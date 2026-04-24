@@ -5,7 +5,8 @@ import { createServer } from "./server.js";
 import { initSkillCache } from "./skill-cache.js";
 import { createOAuthRouter } from "./auth/oauth.js";
 import { validateAccessToken, validateApiKey, triggerCleanup } from "./auth/store.js";
-import { requestContext, setServerSentTotal, setInteractionTotal, setTurnDelta, getTurnDelta, setPendingMessages, setSignals, setInitiator, setInitiatorExplicit, setToolName, getSessionMeta, getPendingMessages as getCtxPendingMessages, setContextEstimateAbsolute, getContextEstimateAbsolute, type PendingMessagesInfo } from "./context.js";
+import { requestContext, setServerSentTotal, setInteractionTotal, setTurnDelta, getTurnDelta, setPendingMessages, setSignals, setInitiator, setInitiatorExplicit, setToolName, getSessionMeta, getPendingMessages as getCtxPendingMessages, setContextEstimateAbsolute, getContextEstimateAbsolute, setContextCeiling, type PendingMessagesInfo } from "./context.js";
+import { getSurfaceConfig } from "./surface-registry.js";
 import { computeSignals } from "./signal-computation.js";
 import { parseSurface } from "./surfaces.js";
 import { getActiveSessionId, getPendingServerSentAccumulation, getPendingInteractionAccumulation, incrementInteractionTotal, setInteractionAbsolute } from "./tools/sessions.js";
@@ -285,6 +286,24 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
       } catch (err) {
         // Non-critical — _session metadata will be omitted if this fails
         console.error("Session lifecycle error:", err);
+      }
+
+      // Load the per-surface context ceiling (CHARS) from the surface registry.
+      // Registry stores ceiling in TOKENS; multiply by CHARS_PER_TOKEN to normalize.
+      // Each surface reports its own ceiling so 200k and 1M context windows coexist.
+      try {
+        if (surface) {
+          const surfaceConfig = await getSurfaceConfig(surface);
+          const tokenCeiling = surfaceConfig?.contextWindow?.ceiling;
+          if (tokenCeiling && tokenCeiling > 0) {
+            // Approximate chars-per-token for English text + JSON tool responses.
+            // 3.12 was chosen to match the historical 624_000 char ceiling for 200_000 tokens.
+            const CHARS_PER_TOKEN = 3.12;
+            setContextCeiling(Math.round(tokenCeiling * CHARS_PER_TOKEN));
+          }
+        }
+      } catch {
+        // Non-critical — response-metadata falls back to DEFAULT_CONTEXT_CEILING if unset
       }
 
       // Load per-surface context totals from Firebase for _contextHealth.

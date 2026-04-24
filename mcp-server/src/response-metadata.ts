@@ -10,7 +10,7 @@
 // tool handler.
 // ═══════════════════════════════════════════════════════════════
 
-import { getServerSentTotal, getInteractionTotal, setServerSentTotal, setInteractionTotal, getTurnDelta, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator, isInitiatorExplicit, getSignals, getToolName } from "./context.js";
+import { getServerSentTotal, getInteractionTotal, setServerSentTotal, setInteractionTotal, getTurnDelta, getCurrentUid, getSessionMeta, getPendingMessages, getSuppressPiggyback, getInitiator, isInitiatorExplicit, getSignals, getToolName, getContextCeiling } from "./context.js";
 import { incrementServerSentTotal, resetSurfaceContext } from "./tools/sessions.js";
 
 // Tools exempt from turnDelta compliance warning (first-call or setup tools)
@@ -28,17 +28,23 @@ interface ToolResult {
   [key: string]: unknown;
 }
 
-// Context health thresholds (based on 624K char context window)
-const CONTEXT_CEILING = 624_000;
-const ZONE_GREEN_MAX = 374_400;   // < 60%
-const ZONE_YELLOW_MAX = 468_000;  // 60-75%
-const ZONE_RED_MAX = 561_600;     // 75-90%
+// Default context ceiling in CHARS (used when surface registry lookup fails).
+// Calibrated for 200k-token context window: 200,000 × ~3.12 chars/token ≈ 624,000.
+// Larger surfaces (e.g., claude-code on Opus 4.7 1M) override this via the surface
+// registry's contextWindow.ceiling (stored in TOKENS) → loaded per-request in index.ts.
+const DEFAULT_CONTEXT_CEILING = 624_000;
+
+// Zone boundaries as proportions of the ceiling — recomputed per-request from the
+// active ceiling so thresholds scale correctly for 200k, 1M, or any future window.
+const ZONE_GREEN_PROPORTION = 0.60;
+const ZONE_YELLOW_PROPORTION = 0.75;
+const ZONE_RED_PROPORTION = 0.90;
 // > 90% = imminent
 
-function computeContextZone(used: number): string {
-  if (used < ZONE_GREEN_MAX) return "green";
-  if (used < ZONE_YELLOW_MAX) return "yellow";
-  if (used < ZONE_RED_MAX) return "red";
+function computeContextZone(used: number, ceiling: number): string {
+  if (used < ceiling * ZONE_GREEN_PROPORTION) return "green";
+  if (used < ceiling * ZONE_YELLOW_PROPORTION) return "yellow";
+  if (used < ceiling * ZONE_RED_PROPORTION) return "red";
   return "imminent";
 }
 
@@ -96,6 +102,12 @@ export function withResponseSize(
   let serverSentTotal = getServerSentTotal();
   let interactionTotal = getInteractionTotal();
   if (serverSentTotal !== undefined || interactionTotal !== undefined) {
+    // Use per-surface ceiling from the registry (loaded in index.ts per request).
+    // Falls back to DEFAULT for surfaces without an entry.
+    const registryCeiling = getContextCeiling();
+    const ceiling = registryCeiling ?? DEFAULT_CONTEXT_CEILING;
+    const ceilingSource = registryCeiling !== undefined ? "surface-registry" : "default";
+
     let sst = (serverSentTotal || 0) + chars; // Include this response's chars
     let it = interactionTotal || 0;
     let compactionEstimate = sst + it;
@@ -107,7 +119,7 @@ export function withResponseSize(
     // the current response size (the only thing we know is actually in context).
     // This prevents the "climbing into millions" problem reported in sessions where
     // Chat makes many tool calls.
-    if (compactionEstimate > CONTEXT_CEILING) {
+    if (compactionEstimate > ceiling) {
       sst = chars; // Only this response is guaranteed to be in context
       it = 0;
       compactionEstimate = sst;
@@ -133,8 +145,9 @@ export function withResponseSize(
       compactionEstimate,
       serverSentTotal: sst,
       interactionTotal: it,
-      ceiling: CONTEXT_CEILING,
-      zone: computeContextZone(compactionEstimate),
+      ceiling,
+      ceilingSource,
+      zone: computeContextZone(compactionEstimate, ceiling),
     };
 
     meta._contextHealth = healthObj;
